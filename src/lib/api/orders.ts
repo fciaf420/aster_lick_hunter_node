@@ -10,10 +10,11 @@ export async function placeOrder(params: {
   symbol: string;
   side: 'BUY' | 'SELL';
   type: 'MARKET' | 'LIMIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
-  quantity: number;
+  quantity?: number;
   price?: number;
   stopPrice?: number;
   reduceOnly?: boolean;
+  closePosition?: boolean;
   positionSide?: 'BOTH' | 'LONG' | 'SHORT';
   timeInForce?: 'GTC' | 'IOC' | 'FOK' | 'GTX';
 }, credentials: ApiCredentials): Promise<Order> {
@@ -33,14 +34,25 @@ export async function placeOrder(params: {
   console.log('[ORDER DEBUG] Form data being sent:', formData.toString());
 
   const axios = getRateLimitedAxios();
-  const response: AxiosResponse = await axios.post(`${BASE_URL}/fapi/v1/order`, formData, {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'X-MBX-APIKEY': credentials.apiKey
-    },
-  });
+  try {
+    const response: AxiosResponse = await axios.post(`${BASE_URL}/fapi/v1/order`, formData, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-MBX-APIKEY': credentials.apiKey
+      },
+    });
 
-  return response.data;
+    return response.data;
+  } catch (error: any) {
+    // Log the detailed error response from the exchange
+    console.error('[ORDER ERROR] Detailed error response:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      headers: error.response?.headers
+    });
+    throw error;
+  }
 }
 
 // Define order params type
@@ -48,16 +60,17 @@ type OrderParams = {
   symbol: string;
   side: 'BUY' | 'SELL';
   type: 'MARKET' | 'LIMIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
-  quantity: number;
+  quantity?: number;
   price?: number;
   stopPrice?: number;
   reduceOnly?: boolean;
+  closePosition?: boolean;
   positionSide?: 'BOTH' | 'LONG' | 'SHORT';
   timeInForce?: 'GTC' | 'IOC' | 'FOK' | 'GTX';
 };
 
 // Place multiple orders (batch)
-export async function placeBatchOrders(orders: Array<Omit<OrderParams, 'positionSide' | 'reduceOnly' | 'stopPrice'>>, credentials: ApiCredentials): Promise<any> {
+export async function placeBatchOrders(orders: Array<Omit<OrderParams, 'positionSide' | 'reduceOnly' | 'stopPrice' | 'closePosition'>>, credentials: ApiCredentials): Promise<any> {
   // For simplicity, loop and place individually for now
   const results = [];
   for (const order of orders) {
