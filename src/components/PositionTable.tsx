@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BarChart3, TrendingUp, TrendingDown, Shield, Target, ChevronDown } from 'lucide-react';
+import ClosePositionButton from '@/components/ClosePositionButton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import websocketService from '@/lib/services/websocketService';
 import { useConfig } from '@/components/ConfigProvider';
@@ -285,6 +286,7 @@ export default function PositionTable({
                   <TableHead className="text-xs text-right">Entry/Mark</TableHead>
                   <TableHead className="text-xs text-right">PnL</TableHead>
                   <TableHead className="text-xs text-center">Protection</TableHead>
+                  <TableHead className="text-xs text-center">Actions</TableHead>
                 </TableRow>
               </TableHeader>
             <TableBody>
@@ -297,6 +299,7 @@ export default function PositionTable({
                     <TableCell className="py-2 text-right"><Skeleton className="h-8 w-20 ml-auto" /></TableCell>
                     <TableCell className="py-2 text-right"><Skeleton className="h-8 w-16 ml-auto" /></TableCell>
                     <TableCell className="py-2 text-center"><Skeleton className="h-5 w-20 mx-auto" /></TableCell>
+                    <TableCell className="py-2 text-center"><Skeleton className="h-6 w-12 mx-auto" /></TableCell>
                   </TableRow>
                 ))
             ) : displayPositions.map((position) => {
@@ -435,12 +438,25 @@ export default function PositionTable({
                       )}
                     </div>
                   </TableCell>
+                  <TableCell className="text-center py-2">
+                    <ClosePositionButton
+                      symbol={position.symbol}
+                      side={position.side}
+                      quantity={position.quantity}
+                      pnl={position.pnl}
+                      pnlPercent={position.pnlPercent}
+                      onCloseSuccess={() => {
+                        // Trigger data refresh or call parent callback
+                        dataStore.fetchPositions();
+                      }}
+                    />
+                  </TableCell>
                 </TableRow>
               );
             })}
               {!isLoading && displayPositions.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-6">
+                  <TableCell colSpan={7} className="text-center py-6">
                     <div className="flex flex-col items-center gap-1">
                       <span className="text-sm text-muted-foreground">No open positions</span>
                       <Badge variant="secondary" className="h-4 text-[10px] px-1.5">

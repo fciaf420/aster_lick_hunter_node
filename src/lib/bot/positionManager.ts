@@ -346,7 +346,8 @@ export class PositionManager extends EventEmitter implements PositionTracker {
 
       // Clear and rebuild our position map
       this.currentPositions.clear();
-      this.positionOrders.clear();
+      // Don't clear positionOrders completely to avoid canceling valid SL/TP orders
+      // Instead, clean up only orders for positions that no longer exist
 
       // Process each position
       console.log(`PositionManager: Processing ${positions.length} positions from exchange...`);
@@ -430,6 +431,20 @@ export class PositionManager extends EventEmitter implements PositionTracker {
           }
         }
       }
+
+      // Clean up positionOrders for positions that no longer exist
+      const currentPositionKeys = new Set(this.currentPositions.keys());
+      const ordersToRemove: string[] = [];
+
+      for (const [orderKey] of this.positionOrders.entries()) {
+        if (!currentPositionKeys.has(orderKey)) {
+          console.log(`PositionManager: Removing orders tracking for closed position: ${orderKey}`);
+          ordersToRemove.push(orderKey);
+        }
+      }
+
+      // Remove orders for positions that no longer exist
+      ordersToRemove.forEach(key => this.positionOrders.delete(key));
 
       console.log(`PositionManager: Sync complete - ${this.currentPositions.size} positions, ${this.positionOrders.size} with orders`);
     } catch (error) {
@@ -706,7 +721,9 @@ export class PositionManager extends EventEmitter implements PositionTracker {
           // Check if position size has changed
           const previousSize = this.previousPositionSizes.get(key);
           const currentSize = Math.abs(positionAmt);
-          const sizeChanged = previousSize !== undefined && Math.abs(previousSize - currentSize) > 0.00000001;
+          // Use a more reasonable threshold to avoid unnecessary adjustments from tiny rounding differences
+          // This prevents SL/TP order cancellation when closing other positions
+          const sizeChanged = previousSize !== undefined && Math.abs(previousSize - currentSize) > 0.001;
 
           if (sizeChanged) {
             console.log(`PositionManager: Position size changed for ${key} from ${previousSize} to ${currentSize}`);
@@ -736,7 +753,9 @@ export class PositionManager extends EventEmitter implements PositionTracker {
 
           // Check if this position has SL/TP orders and if they need adjustment
           if (sizeChanged) {
-            // Position size changed, need to check and adjust orders (async, don't await to avoid blocking)
+            // Position size changed significantly, check if orders need adjustment
+            console.log(`PositionManager: Position ${key} size changed significantly from ${previousSize} to ${currentSize} - checking if order adjustment needed`);
+
             // Add symbol-specific lock to prevent interference
             const adjustLockKey = `adjust_${symbol}`;
             if (!this.orderPlacementLocks.has(adjustLockKey)) {
@@ -747,13 +766,19 @@ export class PositionManager extends EventEmitter implements PositionTracker {
               console.log(`PositionManager: Order adjustment already in progress for ${symbol}, will retry on next check`);
             }
           } else {
-            // Just ensure position is protected (async, don't await to avoid blocking)
-            // Add small delay to reduce race conditions with other protection logic
-            setTimeout(() => {
-              this.ensurePositionProtected(symbol, positionSide, positionAmt).catch(error => {
-                console.error(`PositionManager: Failed to ensure protection for ${symbol}:`, error?.response?.data || error?.message);
-              });
-            }, 100);
+            // Position size unchanged, no need to adjust existing orders
+            console.log(`PositionManager: Position ${key} size unchanged (${currentSize}), skipping order adjustment`);
+
+            // Only ensure protection if we don't have orders tracked yet (for new positions)
+            const existingOrders = this.positionOrders.get(key);
+            if (!existingOrders || (!existingOrders.slOrderId && !existingOrders.tpOrderId)) {
+              // Add small delay to reduce race conditions with other protection logic
+              setTimeout(() => {
+                this.ensurePositionProtected(symbol, positionSide, positionAmt).catch(error => {
+                  console.error(`PositionManager: Failed to ensure protection for ${symbol}:`, error?.response?.data || error?.message);
+                });
+              }, 200);
+            }
           }
 
           // Broadcast to UI

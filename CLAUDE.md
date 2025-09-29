@@ -41,8 +41,15 @@ npm run test:simulation    # Test bot simulation
 npm run test:flow         # Test limit order flow
 npm run test:all          # Run all test suites
 
-# Setup (install + build)
+# Setup (install + build + config migration)
 npm run setup
+
+# Configuration management
+npm run setup:config       # Migrate/create user configuration
+
+# Testing error scenarios
+npm run test:errors        # Generate test errors for development
+npm run test:errors:clear  # Clear test errors
 ```
 
 ## Architecture Overview
@@ -65,6 +72,14 @@ The application has a dual architecture:
 2. When a qualifying liquidation occurs, Hunter analyzes order book depth and places intelligent limit orders
 3. PositionManager monitors user data stream for order fills and automatically places SL/TP orders
 4. Status updates are broadcasted to the web UI via internal WebSocket server on port 8080
+
+### Process Management
+The bot uses a sophisticated process management system:
+- **ProcessManager** (`scripts/process-manager.js`): Orchestrates both web UI and bot service with graceful shutdown
+- **Cross-platform Support**: Handles differences between Windows and Unix-like systems
+- **Graceful Shutdown**: Properly cleans up WebSocket connections and child processes on Ctrl+C
+- **Auto-restart**: Monitors processes and handles failures
+- **Port Management**: Automatically detects and manages port conflicts
 
 ## Project Structure
 
@@ -102,24 +117,31 @@ Run `npm run setup:config` to:
 - Migrate existing `config.json` to `config.user.json` (if it exists)
 - Create `config.user.json` from defaults (if no config exists)
 - Remove `config.json` from git tracking (if applicable)
+- Merge new configuration fields from defaults automatically
 
 ### Configuration Structure
 - **api**: API credentials for Aster Finance exchange
-- **symbols**: Per-symbol trading configuration (volume thresholds, leverage, SL/TP percentages)
-- **global**: Global settings (paper mode, risk percentage)
+- **symbols**: Per-symbol trading configuration (volume thresholds, leverage, SL/TP percentages, VWAP settings)
+- **global**: Global settings (paper mode, risk percentage, max positions)
+- **server**: Dashboard and WebSocket server configuration (ports, passwords, remote access)
+- **rateLimits**: API rate limiting and request batching configuration
 - **version**: Config schema version for automatic migrations
 
 Example symbol configuration:
 ```json
 "BTCUSDT": {
-  "volumeThresholdUSDT": 10000,  // Minimum liquidation volume to trigger
-  "tradeSize": 0.001,            // Base trade size
-  "leverage": 5,                 // Leverage multiplier
-  "tpPercent": 5,                // Take profit percentage
-  "slPercent": 2,                // Stop loss percentage
-  "priceOffsetBps": 2,          // Basis points offset for limit orders
-  "maxSlippageBps": 50,         // Maximum allowed slippage
-  "orderType": "LIMIT"          // Order type (LIMIT or MARKET)
+  "longVolumeThresholdUSDT": 10000,  // Min liquidation volume for long trades (buy on sell liquidations)
+  "shortVolumeThresholdUSDT": 10000, // Min liquidation volume for short trades (sell on buy liquidations)
+  "tradeSize": 100,                  // Base margin amount in USDT
+  "leverage": 5,                     // Leverage multiplier
+  "tpPercent": 5,                    // Take profit percentage
+  "slPercent": 2,                    // Stop loss percentage
+  "priceOffsetBps": 2,              // Basis points offset for limit orders
+  "maxSlippageBps": 50,             // Maximum allowed slippage
+  "orderType": "LIMIT",             // Order type (LIMIT or MARKET)
+  "vwapProtection": true,           // Enable VWAP-based entry filtering
+  "vwapTimeframe": "5m",            // Timeframe for VWAP calculation
+  "vwapLookback": 100               // Number of candles for VWAP
 }
 ```
 
@@ -166,9 +188,21 @@ Connects to Aster Finance exchange API (`https://fapi.asterdex.com`):
 4. Bot logs will show in the terminal with detailed trade information
 5. Use `/config` page to adjust settings without restarting
 
+## Trading Strategy
+
+The bot implements a **momentum-driven contrarian strategy** that exploits price dislocations from forced liquidations:
+- **Long Liquidations** (forced SELL orders) → Price depression → **BUY opportunity**
+- **Short Liquidations** (forced BUY orders) → Price spike → **SELL opportunity**
+
+### Key Features
+- **Volume-based filtering**: Only trades significant liquidations that can move markets
+- **VWAP protection**: Ensures favorable entry prices relative to volume-weighted average
+- **Intelligent execution**: Smart limit order placement using order book analysis
+- **Risk management**: Automatic stop-loss and take-profit on all positions
+
 ## Safety Features
 
-- Paper mode for safe testing
+- Paper mode for safe testing with mock liquidation generation
 - Automatic stop-loss and take-profit orders on all positions
 - Risk management with configurable risk percentage per trade
 - WebSocket auto-reconnection with exponential backoff
@@ -177,6 +211,7 @@ Connects to Aster Finance exchange API (`https://fapi.asterdex.com`):
 - Exchange filter validation (price, quantity, notional limits)
 - VWAP-based entry filtering to avoid adverse price movements
 - SQLite database for liquidation history and pattern analysis
+- API rate limiting and request batching to prevent exchange penalties
 
 ## Web UI Structure
 
@@ -186,8 +221,6 @@ The Next.js application uses App Router with key pages:
 - `/api/*`: REST endpoints for bot communication (balance, positions, trades, config)
 
 ## Important Instructions for Claude Code
-
-**NEVER** start the development server or run `npm run dev` or any server commands. The user manages the server themselves and starting additional servers can cause port conflicts and issues.
 
 **SECURITY NOTE**: User configuration is stored in `config.user.json` which is automatically excluded from git. Never commit API keys or sensitive configuration to version control.
 
@@ -307,3 +340,18 @@ const response = await axios.post('https://fapi.asterdex.com/fapi/v1/leverage', 
 - Always check the API documentation at `docs/aster-finance-futures-api.md` for endpoint details
 - Use paper mode (`"paperMode": true` in config.user.json) when testing to avoid real trades
 - API responses include detailed error information in `error.response?.data` for debugging
+
+## Additional Documentation
+
+For comprehensive understanding of the trading strategy, refer to:
+- **`docs/STRATEGY.md`**: Complete trading strategy documentation with examples and optimization guidelines
+- **`docs/CONFIG_MIGRATION.md`**: Configuration migration and versioning details
+- **`docs/aster-finance-futures-api.md`**: Complete API documentation for the Aster Finance exchange
+
+## Development Tips
+
+- The bot uses TypeScript interfaces in `src/lib/types.ts` for all trading data structures
+- Configuration is validated using Zod schemas for type safety
+- All WebSocket connections include automatic reconnection with exponential backoff
+- Position management includes underwater position handling for volatile market entries
+- The bot supports both one-way and hedge position modes for flexible trading strategies

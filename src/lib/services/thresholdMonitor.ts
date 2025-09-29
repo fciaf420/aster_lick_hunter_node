@@ -124,14 +124,20 @@ export class ThresholdMonitor extends EventEmitter {
 
   public processLiquidation(liquidation: LiquidationEvent): ThresholdStatus | null {
     const status = this.thresholdStatuses.get(liquidation.symbol);
-    if (!status) return null;
+    if (!status) {
+      console.log(`⚠️  ThresholdMonitor: No status found for symbol ${liquidation.symbol}`);
+      return null;
+    }
 
     const now = Date.now();
+    const volumeUSDT = liquidation.qty * liquidation.price;
 
     // Determine which side this liquidation affects
     // SELL liquidation means longs are getting liquidated, we might want to BUY (long)
     // BUY liquidation means shorts are getting liquidated, we might want to SELL (short)
     const isLongOpportunity = liquidation.side === 'SELL';
+
+    console.log(`📈 ThresholdMonitor: Processing ${liquidation.symbol} ${liquidation.side} liquidation - $${volumeUSDT.toFixed(0)} (${isLongOpportunity ? 'LONG' : 'SHORT'} opportunity)`);
 
     if (isLongOpportunity) {
       status.recentLiquidations.long.push(liquidation);
@@ -158,7 +164,7 @@ export class ThresholdMonitor extends EventEmitter {
         status.lastLongTrigger = now;
       }
 
-      this.emit('thresholdUpdate', {
+      const thresholdUpdate = {
         symbol: liquidation.symbol,
         side: 'long',
         currentVolume: status.recentLongVolume,
@@ -167,7 +173,10 @@ export class ThresholdMonitor extends EventEmitter {
         remainingVolume: Math.max(0, status.longThreshold - status.recentLongVolume),
         recentLiquidations: status.recentLiquidations.long.slice(-5), // Last 5 liquidations
         willTrigger
-      } as ThresholdUpdate);
+      } as ThresholdUpdate;
+
+      console.log(`🎯 Emitting LONG threshold update: ${liquidation.symbol} - ${status.longProgress.toFixed(1)}% ($${status.recentLongVolume.toFixed(0)}/$${status.longThreshold})`);
+      this.emit('thresholdUpdate', thresholdUpdate);
     } else if (!isLongOpportunity && status.shortThreshold > 0) {
       const thresholdMet = status.recentShortVolume >= status.shortThreshold;
       const cooledDown = (now - status.lastShortTrigger) >= this.cooldownPeriod;
@@ -178,7 +187,7 @@ export class ThresholdMonitor extends EventEmitter {
         status.lastShortTrigger = now;
       }
 
-      this.emit('thresholdUpdate', {
+      const thresholdUpdate = {
         symbol: liquidation.symbol,
         side: 'short',
         currentVolume: status.recentShortVolume,
@@ -187,7 +196,10 @@ export class ThresholdMonitor extends EventEmitter {
         remainingVolume: Math.max(0, status.shortThreshold - status.recentShortVolume),
         recentLiquidations: status.recentLiquidations.short.slice(-5), // Last 5 liquidations
         willTrigger
-      } as ThresholdUpdate);
+      } as ThresholdUpdate;
+
+      console.log(`🎯 Emitting SHORT threshold update: ${liquidation.symbol} - ${status.shortProgress.toFixed(1)}% ($${status.recentShortVolume.toFixed(0)}/$${status.shortThreshold})`);
+      this.emit('thresholdUpdate', thresholdUpdate);
     }
 
     return { ...status }; // Return copy

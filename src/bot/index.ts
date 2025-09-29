@@ -356,6 +356,7 @@ class AsterBot {
 
       // Listen for threshold updates and broadcast to UI
       thresholdMonitor.on('thresholdUpdate', (thresholdUpdate: any) => {
+        console.log(`📊 Threshold update: ${thresholdUpdate.symbol} ${thresholdUpdate.side} - ${thresholdUpdate.progress.toFixed(1)}% (${thresholdUpdate.currentVolume.toFixed(0)}/${thresholdUpdate.threshold})`);
         this.statusBroadcaster.broadcastThresholdUpdate(thresholdUpdate);
       });
 
