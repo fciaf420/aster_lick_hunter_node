@@ -5,15 +5,15 @@ import { Config } from '../types';
 import { getSignedParams, paramsToQuery } from '../api/auth';
 import { getExchangeInfo } from '../api/market';
 import { placeOrder, cancelOrder } from '../api/orders';
-import { placeStopLossAndTakeProfit } from '../api/batchOrders';
 import { symbolPrecision } from '../utils/symbolPrecision';
 import { getBalanceService } from '../services/balanceService';
 import { errorLogger } from '../services/errorLogger';
 
-// Minimal local state - only track order IDs linked to positions
 interface PositionOrders {
   slOrderId?: number;
+  slOrderIds?: number[];
   tpOrderId?: number;
+  tpOrderIds?: number[];
 }
 
 // Exchange position from API
@@ -369,17 +369,15 @@ export class PositionManager extends EventEmitter implements PositionTracker {
 
           console.log(`PositionManager: Found position ${key}: ${posAmt} @ ${position.entryPrice}`);
 
-          // Find SL/TP orders for this position
-          // Check for stop loss orders (STOP_MARKET or STOP)
-          const slOrder = openOrders.find(o =>
+          // Gather reduce-only SL/TP orders for this position
+          const slOrders = openOrders.filter(o =>
             o.symbol === position.symbol &&
             (o.type === 'STOP_MARKET' || o.type === 'STOP') &&
             o.reduceOnly &&
             ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
           );
 
-          // Check for take profit orders (TAKE_PROFIT_MARKET, TAKE_PROFIT, or LIMIT with reduceOnly)
-          const tpOrder = openOrders.find(o =>
+          const tpOrders = openOrders.filter(o =>
             o.symbol === position.symbol &&
             (o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT' || o.type === 'LIMIT') &&
             o.reduceOnly &&
@@ -388,46 +386,48 @@ export class PositionManager extends EventEmitter implements PositionTracker {
 
           const orders: PositionOrders = {};
           let needsAdjustment = false;
+          const tolerance = 0.00000001;
+          const positionQty = Math.abs(posAmt);
 
-          if (slOrder) {
-            orders.slOrderId = slOrder.orderId;
-            const slOrderQty = parseFloat(slOrder.origQty);
-            const positionQty = Math.abs(posAmt);
+          if (slOrders.length > 0) {
+            const slIds = slOrders.map(order => order.orderId);
+            orders.slOrderIds = slIds;
+            orders.slOrderId = slIds[0];
+            const slTotalQty = slOrders.reduce((sum, order) => sum + Math.abs(parseFloat(order.origQty)), 0);
 
-            // Check if SL order quantity matches position size (with small tolerance for rounding)
-            if (Math.abs(slOrderQty - positionQty) > 0.00000001) {
-              console.log(`PositionManager: SL order ${slOrder.orderId} quantity mismatch - Order: ${slOrderQty}, Position: ${positionQty}`);
+            if (Math.abs(slTotalQty - positionQty) > tolerance) {
+              console.log(`PositionManager: SL orders ${slIds.join(', ')} total quantity ${slTotalQty} mismatches position ${positionQty}`);
               needsAdjustment = true;
             } else {
-              console.log(`PositionManager: Found SL order ${slOrder.orderId} for ${key} (qty: ${slOrderQty})`);
+              console.log(`PositionManager: Found SL orders ${slIds.join(', ')} for ${key} (total qty: ${slTotalQty})`);
             }
           }
 
-          if (tpOrder) {
-            orders.tpOrderId = tpOrder.orderId;
-            const tpOrderQty = parseFloat(tpOrder.origQty);
-            const positionQty = Math.abs(posAmt);
+          if (tpOrders.length > 0) {
+            const tpIds = tpOrders.map(order => order.orderId);
+            orders.tpOrderIds = tpIds;
+            orders.tpOrderId = tpIds[0];
+            const tpTotalQty = tpOrders.reduce((sum, order) => sum + Math.abs(parseFloat(order.origQty)), 0);
 
-            // Check if TP order quantity matches position size (with small tolerance for rounding)
-            if (Math.abs(tpOrderQty - positionQty) > 0.00000001) {
-              console.log(`PositionManager: TP order ${tpOrder.orderId} quantity mismatch - Order: ${tpOrderQty}, Position: ${positionQty}`);
+            if (Math.abs(tpTotalQty - positionQty) > tolerance) {
+              console.log(`PositionManager: TP orders ${tpIds.join(', ')} total quantity ${tpTotalQty} mismatches position ${positionQty}`);
               needsAdjustment = true;
             } else {
-              console.log(`PositionManager: Found TP order ${tpOrder.orderId} for ${key} (qty: ${tpOrderQty})`);
+              console.log(`PositionManager: Found TP orders ${tpIds.join(', ')} for ${key} (total qty: ${tpTotalQty})`);
             }
           }
 
-          if (orders.slOrderId || orders.tpOrderId) {
+          if ((orders.slOrderIds && orders.slOrderIds.length) || (orders.tpOrderIds && orders.tpOrderIds.length)) {
             this.positionOrders.set(key, orders);
           }
 
           // Adjust orders if quantities don't match or place missing orders
           if (needsAdjustment) {
             console.log(`PositionManager: Adjusting protective orders for ${key} due to quantity mismatch`);
-            await this.adjustProtectiveOrders(position, slOrder, tpOrder);
-          } else if (!slOrder || !tpOrder) {
-            console.log(`PositionManager: Position ${key} missing protection (SL: ${!!slOrder}, TP: ${!!tpOrder})`);
-            await this.placeProtectiveOrdersWithLock(key, position, !slOrder, !tpOrder);
+            await this.adjustProtectiveOrders(position, slOrders, tpOrders);
+          } else if (slOrders.length === 0 || tpOrders.length === 0) {
+            console.log(`PositionManager: Position ${key} missing protection (SL: ${slOrders.length > 0}, TP: ${tpOrders.length > 0})`);
+            await this.placeProtectiveOrdersWithLock(key, position, slOrders.length === 0, tpOrders.length === 0);
           }
         }
       }
@@ -511,7 +511,9 @@ export class PositionManager extends EventEmitter implements PositionTracker {
 
     // Check if we already have orders tracked
     const existingOrders = this.positionOrders.get(key);
-    if (existingOrders?.slOrderId && existingOrders?.tpOrderId) {
+    const hasTrackedSL = (existingOrders?.slOrderIds && existingOrders.slOrderIds.length > 0) || !!existingOrders?.slOrderId;
+    const hasTrackedTP = (existingOrders?.tpOrderIds && existingOrders.tpOrderIds.length > 0) || !!existingOrders?.tpOrderId;
+    if (hasTrackedSL && hasTrackedTP) {
       return; // Already protected
     }
 
@@ -523,8 +525,8 @@ export class PositionManager extends EventEmitter implements PositionTracker {
     }
 
     // Place missing orders
-    const needSL = !existingOrders?.slOrderId;
-    const needTP = !existingOrders?.tpOrderId;
+    const needSL = !hasTrackedSL;
+    const needTP = !hasTrackedTP;
 
     if (needSL || needTP) {
       await this.placeProtectiveOrdersWithLock(key, position, needSL, needTP);
@@ -545,17 +547,25 @@ export class PositionManager extends EventEmitter implements PositionTracker {
     this.orderCancellationLocks.add(lockKey);
 
     try {
-      // Validate that orders belong to the correct symbol before cancellation
-      console.log(`PositionManager: Cancelling protective orders for position ${positionKey} - SL: ${orders.slOrderId || 'none'}, TP: ${orders.tpOrderId || 'none'}`);
+      const slOrderIds = orders.slOrderIds && orders.slOrderIds.length > 0
+            ? orders.slOrderIds
+            : (orders.slOrderId ? [orders.slOrderId] : []);
+      const tpOrderIds = orders.tpOrderIds && orders.tpOrderIds.length > 0
+            ? orders.tpOrderIds
+            : (orders.tpOrderId ? [orders.tpOrderId] : []);
 
-      if (orders.slOrderId) {
-        console.log(`PositionManager: Cancelling SL order ${orders.slOrderId} for symbol ${symbol}`);
-        await this.cancelOrderWithRetry(symbol, orders.slOrderId, 'SL');
+      const slLog = slOrderIds.length ? slOrderIds.join(', ') : 'none';
+      const tpLog = tpOrderIds.length ? tpOrderIds.join(', ') : 'none';
+      console.log(`PositionManager: Cancelling protective orders for position ${positionKey} - SL: ${slLog}, TP: ${tpLog}`);
+
+      for (const slId of slOrderIds) {
+        console.log(`PositionManager: Cancelling SL order ${slId} for symbol ${symbol}`);
+        await this.cancelOrderWithRetry(symbol, slId, 'SL');
       }
 
-      if (orders.tpOrderId) {
-        console.log(`PositionManager: Cancelling TP order ${orders.tpOrderId} for symbol ${symbol}`);
-        await this.cancelOrderWithRetry(symbol, orders.tpOrderId, 'TP');
+      for (const tpId of tpOrderIds) {
+        console.log(`PositionManager: Cancelling TP order ${tpId} for symbol ${symbol}`);
+        await this.cancelOrderWithRetry(symbol, tpId, 'TP');
       }
     } finally {
       // Always release the lock
@@ -771,7 +781,9 @@ export class PositionManager extends EventEmitter implements PositionTracker {
 
             // Only ensure protection if we don't have orders tracked yet (for new positions)
             const existingOrders = this.positionOrders.get(key);
-            if (!existingOrders || (!existingOrders.slOrderId && !existingOrders.tpOrderId)) {
+            const hasTrackedSL = existingOrders?.slOrderIds && existingOrders.slOrderIds.length > 0 || !!existingOrders?.slOrderId;
+            const hasTrackedTP = existingOrders?.tpOrderIds && existingOrders.tpOrderIds.length > 0 || !!existingOrders?.tpOrderId;
+            if (!existingOrders || !hasTrackedSL || !hasTrackedTP) {
               // Add small delay to reduce race conditions with other protection logic
               setTimeout(() => {
                 this.ensurePositionProtected(symbol, positionSide, positionAmt).catch(error => {
@@ -877,18 +889,18 @@ export class PositionManager extends EventEmitter implements PositionTracker {
             const orders = this.positionOrders.get(key)!;
 
             if (orderType === 'STOP_MARKET') {
-              // Check if we already have a different SL order tracked
-              if (orders.slOrderId && orders.slOrderId !== orderId) {
-                console.warn(`PositionManager: WARNING - Position ${key} already has SL order ${orders.slOrderId}, replacing with ${orderId}`);
+              orders.slOrderIds = orders.slOrderIds || [];
+              if (!orders.slOrderIds.includes(orderId)) {
+                orders.slOrderIds.push(orderId);
               }
-              orders.slOrderId = orderId;
+              orders.slOrderId = orders.slOrderIds[0];
               console.log(`PositionManager: Tracked NEW SL order ${orderId} for position ${key} (${symbol})`);
             } else if (orderType === 'TAKE_PROFIT_MARKET') {
-              // Check if we already have a different TP order tracked
-              if (orders.tpOrderId && orders.tpOrderId !== orderId) {
-                console.warn(`PositionManager: WARNING - Position ${key} already has TP order ${orders.tpOrderId}, replacing with ${orderId}`);
+              orders.tpOrderIds = orders.tpOrderIds || [];
+              if (!orders.tpOrderIds.includes(orderId)) {
+                orders.tpOrderIds.push(orderId);
               }
-              orders.tpOrderId = orderId;
+              orders.tpOrderId = orders.tpOrderIds[0];
               console.log(`PositionManager: Tracked NEW TP order ${orderId} for position ${key} (${symbol})`);
             }
           }
@@ -926,7 +938,15 @@ export class PositionManager extends EventEmitter implements PositionTracker {
 
         // Clean up our tracking
         for (const [key, orders] of this.positionOrders.entries()) {
-          if (orders.slOrderId === orderId || orders.tpOrderId === orderId) {
+          const slIds = (orders.slOrderIds && orders.slOrderIds.length > 0)
+            ? orders.slOrderIds
+            : (orders.slOrderId ? [orders.slOrderId] : []);
+          const tpIds = (orders.tpOrderIds && orders.tpOrderIds.length > 0)
+            ? orders.tpOrderIds
+            : (orders.tpOrderId ? [orders.tpOrderId] : []);
+          const isSlOrder = slIds.includes(orderId);
+          const isTpOrder = tpIds.includes(orderId);
+          if (isSlOrder || isTpOrder) {
             const [posSymbol] = key.split('_');
 
             // Validate that the filled order is for the correct symbol
@@ -937,22 +957,27 @@ export class PositionManager extends EventEmitter implements PositionTracker {
 
             console.log(`PositionManager: ${orderType} order ${orderId} filled for position ${key}, cancelling opposite order`);
 
-            // Cancel the other order if it exists (async, don't await to avoid blocking)
-            if (orders.slOrderId === orderId && orders.tpOrderId) {
-              console.log(`PositionManager: Cancelling opposite TP order ${orders.tpOrderId} for ${symbol}`);
-              this.cancelOrderById(symbol, orders.tpOrderId).catch(error => {
-                console.error(`PositionManager: Failed to cancel TP order ${orders.tpOrderId}:`, error?.response?.data || error?.message);
-              });
-            } else if (orders.tpOrderId === orderId && orders.slOrderId) {
-              console.log(`PositionManager: Cancelling opposite SL order ${orders.slOrderId} for ${symbol}`);
-              this.cancelOrderById(symbol, orders.slOrderId).catch(error => {
-                console.error(`PositionManager: Failed to cancel SL order ${orders.slOrderId}:`, error?.response?.data || error?.message);
-              });
+            // Cancel the other order(s) if they exist (async, don't await to avoid blocking)
+            if (isSlOrder && tpIds.length > 0) {
+              for (const tpId of tpIds) {
+                console.log(`PositionManager: Cancelling opposite TP order ${tpId} for ${symbol}`);
+                this.cancelOrderById(symbol, tpId).catch(error => {
+                  console.error(`PositionManager: Failed to cancel TP order ${tpId}:`, error?.response?.data || error?.message);
+                });
+              }
+            } else if (isTpOrder && slIds.length > 0) {
+              for (const slId of slIds) {
+                console.log(`PositionManager: Cancelling opposite SL order ${slId} for ${symbol}`);
+                this.cancelOrderById(symbol, slId).catch(error => {
+                  console.error(`PositionManager: Failed to cancel SL order ${slId}:`, error?.response?.data || error?.message);
+                });
+              }
             }
             this.positionOrders.delete(key);
             break;
           }
         }
+
 
         let realizedPnl = parseFloat(order.rp || '0');
 
@@ -963,7 +988,13 @@ export class PositionManager extends EventEmitter implements PositionTracker {
           // Find the position key that matches this order
           let positionKey: string | undefined;
           for (const [key, orders] of this.positionOrders.entries()) {
-            if (orders.slOrderId === orderId || orders.tpOrderId === orderId) {
+          const slIds = (orders.slOrderIds && orders.slOrderIds.length > 0)
+            ? orders.slOrderIds
+            : (orders.slOrderId ? [orders.slOrderId] : []);
+          const tpIds = (orders.tpOrderIds && orders.tpOrderIds.length > 0)
+            ? orders.tpOrderIds
+            : (orders.tpOrderId ? [orders.tpOrderId] : []);
+            if (slIds.includes(orderId) || tpIds.includes(orderId)) {
               positionKey = key;
               break;
             }
@@ -1068,79 +1099,94 @@ export class PositionManager extends EventEmitter implements PositionTracker {
   }
 
   // Adjust protective orders when quantities don't match position size
-  private async adjustProtectiveOrders(position: ExchangePosition, currentSlOrder?: ExchangeOrder, currentTpOrder?: ExchangeOrder): Promise<void> {
+  private async adjustProtectiveOrders(position: ExchangePosition, currentSlOrders: ExchangeOrder[] = [], currentTpOrders: ExchangeOrder[] = []): Promise<void> {
     const symbol = position.symbol;
     const posAmt = parseFloat(position.positionAmt);
     const key = this.getPositionKey(symbol, position.positionSide, posAmt);
 
-    // Check if adjustment is already in progress for this position
     if (this.orderPlacementLocks.has(key)) {
       console.log(`PositionManager: Order adjustment already in progress for ${key}, skipping`);
       return;
     }
 
-    // Set lock to prevent concurrent adjustments
     this.orderPlacementLocks.add(key);
 
     try {
       console.log(`PositionManager: Adjusting protective orders for ${symbol} - Position size: ${Math.abs(posAmt)}`);
 
-      // Cancel existing orders with wrong quantities using retry logic
       const orders = this.positionOrders.get(key) || {};
       const cancelPromises: Promise<void>[] = [];
+      const tolerance = 0.00000001;
+      const positionQty = Math.abs(posAmt);
 
-      let needNewSL = false;
-      let needNewTP = false;
+      const slOrders = currentSlOrders || [];
+      const tpOrders = currentTpOrders || [];
+      const sumQuantities = (list: ExchangeOrder[]) => list.reduce((sum, order) => sum + Math.abs(parseFloat(order.origQty)), 0);
 
-      // Check and cancel SL if quantity doesn't match
-      if (currentSlOrder) {
-        const slOrderQty = parseFloat(currentSlOrder.origQty);
-        if (Math.abs(slOrderQty - Math.abs(posAmt)) > 0.00000001) {
-          console.log(`PositionManager: Cancelling SL order ${currentSlOrder.orderId} (qty: ${slOrderQty}) to replace with correct size`);
-          cancelPromises.push(this.cancelOrderWithRetry(symbol, currentSlOrder.orderId, 'SL'));
+      let needNewSL = slOrders.length === 0;
+      let needNewTP = tpOrders.length === 0;
+
+      if (!needNewSL) {
+        const slTotalQty = sumQuantities(slOrders);
+        if (Math.abs(slTotalQty - positionQty) > tolerance) {
+          console.log(`PositionManager: SL orders ${slOrders.map(o => o.orderId).join(', ')} total quantity ${slTotalQty} mismatches position ${positionQty}`);
+          for (const slOrder of slOrders) {
+            console.log(`PositionManager: Cancelling SL order ${slOrder.orderId}`);
+            cancelPromises.push(this.cancelOrderWithRetry(symbol, slOrder.orderId, 'SL'));
+          }
           needNewSL = true;
+          delete orders.slOrderIds;
           delete orders.slOrderId;
+        } else {
+          orders.slOrderIds = slOrders.map(order => order.orderId);
+          orders.slOrderId = orders.slOrderIds[0];
+          console.log(`PositionManager: Existing SL orders cover ${slTotalQty} for ${symbol}`);
         }
       } else {
-        needNewSL = true;
+        delete orders.slOrderIds;
+        delete orders.slOrderId;
       }
 
-      // Check and cancel TP if quantity doesn't match
-      if (currentTpOrder) {
-        const tpOrderQty = parseFloat(currentTpOrder.origQty);
-        if (Math.abs(tpOrderQty - Math.abs(posAmt)) > 0.00000001) {
-          console.log(`PositionManager: Cancelling TP order ${currentTpOrder.orderId} (qty: ${tpOrderQty}) to replace with correct size`);
-          cancelPromises.push(this.cancelOrderWithRetry(symbol, currentTpOrder.orderId, 'TP'));
+      if (!needNewTP) {
+        const tpTotalQty = sumQuantities(tpOrders);
+        if (Math.abs(tpTotalQty - positionQty) > tolerance) {
+          console.log(`PositionManager: TP orders ${tpOrders.map(o => o.orderId).join(', ')} total quantity ${tpTotalQty} mismatches position ${positionQty}`);
+          for (const tpOrder of tpOrders) {
+            console.log(`PositionManager: Cancelling TP order ${tpOrder.orderId}`);
+            cancelPromises.push(this.cancelOrderWithRetry(symbol, tpOrder.orderId, 'TP'));
+          }
           needNewTP = true;
+          delete orders.tpOrderIds;
           delete orders.tpOrderId;
+        } else {
+          orders.tpOrderIds = tpOrders.map(order => order.orderId);
+          orders.tpOrderId = orders.tpOrderIds[0];
+          console.log(`PositionManager: Existing TP orders cover ${tpTotalQty} for ${symbol}`);
         }
       } else {
-        needNewTP = true;
+        delete orders.tpOrderIds;
+        delete orders.tpOrderId;
       }
 
-      // Wait for cancellations to complete
       if (cancelPromises.length > 0) {
         try {
           await Promise.all(cancelPromises);
           console.log(`PositionManager: Cancelled ${cancelPromises.length} order(s) for adjustment`);
         } catch (error: any) {
           console.error('PositionManager: Error cancelling orders for adjustment:', error?.response?.data || error?.message);
-          // Continue to try placing new orders even if cancellation failed
         }
       }
 
-      // Update our tracking
       this.positionOrders.set(key, orders);
 
-      // Place new orders with correct quantities
       if (needNewSL || needNewTP) {
         await this.placeProtectiveOrders(position, needNewSL, needNewTP);
       }
     } finally {
-      // Always release the lock
       this.orderPlacementLocks.delete(key);
     }
   }
+
 
   // Place protective orders with lock to prevent duplicates
   private async placeProtectiveOrdersWithLock(key: string, position: ExchangePosition, placeSL: boolean, placeTP: boolean): Promise<void> {
@@ -1196,48 +1242,27 @@ export class PositionManager extends EventEmitter implements PositionTracker {
         ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
       );
 
-      // Handle multiple SL orders - keep the first one, cancel the rest
-      if (existingSlOrders.length > 1) {
-        console.log(`PositionManager: Found ${existingSlOrders.length} SL orders for ${key}, cancelling duplicates`);
-        for (let i = 1; i < existingSlOrders.length; i++) {
-          try {
-            await this.cancelOrderById(symbol, existingSlOrders[i].orderId);
-            console.log(`PositionManager: Cancelled duplicate SL order ${existingSlOrders[i].orderId}`);
-          } catch (error: any) {
-            console.error(`PositionManager: Failed to cancel duplicate SL order ${existingSlOrders[i].orderId}:`, error?.response?.data || error?.message);
-            // Non-critical error - duplicate cancellation failure
-          }
-        }
+      // Track existing protective orders so we do not place duplicates
+      if (existingSlOrders.length > 0) {
+        const slIds = existingSlOrders.map(order => order.orderId);
+        orders.slOrderIds = slIds;
+        orders.slOrderId = slIds[0];
+        console.log(`PositionManager: Found existing SL orders for ${key}: ${slIds.join(", ")}`);
+        placeSL = false;
+      } else {
+        delete orders.slOrderIds;
+        delete orders.slOrderId;
       }
 
-      // Handle multiple TP orders - keep the first one, cancel the rest
-      if (existingTpOrders.length > 1) {
-        console.log(`PositionManager: Found ${existingTpOrders.length} TP orders for ${key}, cancelling duplicates`);
-        for (let i = 1; i < existingTpOrders.length; i++) {
-          try {
-            await this.cancelOrderById(symbol, existingTpOrders[i].orderId);
-            console.log(`PositionManager: Cancelled duplicate TP order ${existingTpOrders[i].orderId}`);
-          } catch (error: any) {
-            console.error(`PositionManager: Failed to cancel duplicate TP order ${existingTpOrders[i].orderId}:`, error?.response?.data || error?.message);
-            // Non-critical error - duplicate cancellation failure
-          }
-        }
-      }
-
-      // Update our tracking with the remaining orders
-      const existingSlOrder = existingSlOrders.length > 0 ? existingSlOrders[0] : undefined;
-      const existingTpOrder = existingTpOrders.length > 0 ? existingTpOrders[0] : undefined;
-
-      if (existingSlOrder) {
-        orders.slOrderId = existingSlOrder.orderId;
-        placeSL = false; // Don't place if one already exists
-        console.log(`PositionManager: Found existing SL order ${existingSlOrder.orderId} for ${key}, skipping placement`);
-      }
-
-      if (existingTpOrder) {
-        orders.tpOrderId = existingTpOrder.orderId;
-        placeTP = false; // Don't place if one already exists
-        console.log(`PositionManager: Found existing TP order ${existingTpOrder.orderId} for ${key}, skipping placement`);
+      if (existingTpOrders.length > 0) {
+        const tpIds = existingTpOrders.map(order => order.orderId);
+        orders.tpOrderIds = tpIds;
+        orders.tpOrderId = tpIds[0];
+        console.log(`PositionManager: Found existing TP orders for ${key}: ${tpIds.join(", ")}`);
+        placeTP = false;
+      } else {
+        delete orders.tpOrderIds;
+        delete orders.tpOrderId;
       }
 
       // Exit early if no orders need to be placed
@@ -1261,22 +1286,99 @@ export class PositionManager extends EventEmitter implements PositionTracker {
     }
 
     try {
-      // Use batch orders when placing both SL and TP to save API calls
-      if (placeSL && placeTP) {
-        // Get current market price to validate stop loss placement
-        const ticker = await axios.get(`https://fapi.asterdex.com/fapi/v1/ticker/price?symbol=${symbol}`);
-        const currentPrice = parseFloat(ticker.data.price);
+      const orderPositionSide = position.positionSide || 'BOTH';
+      const side = isLong ? 'SELL' : 'BUY';
+      let currentPriceCache: number | null = null;
 
-        // Calculate SL price
+      const getCurrentPrice = async (): Promise<number> => {
+        if (currentPriceCache !== null) {
+          return currentPriceCache;
+        }
+        const ticker = await axios.get(`https://fapi.asterdex.com/fapi/v1/ticker/price?symbol=${symbol}`);
+        currentPriceCache = parseFloat(ticker.data.price);
+        return currentPriceCache;
+      };
+
+      const placeReduceOnlyChunks = async (
+        orderType: 'STOP_MARKET' | 'TAKE_PROFIT_MARKET',
+        stopPrice: number,
+        clientPrefix: string
+      ): Promise<number[]> => {
+        const chunkQuantities = symbolPrecision.splitQuantity(symbol, quantity, orderType);
+        const orderIds: number[] = [];
+        const baseId = Date.now();
+
+        for (let i = 0; i < chunkQuantities.length; i++) {
+          const chunkQty = symbolPrecision.formatQuantity(symbol, chunkQuantities[i]);
+          if (chunkQty <= 0) {
+            console.warn(`PositionManager: Skipping ${orderType} chunk for ${symbol} with non-positive quantity ${chunkQty}`);
+            continue;
+          }
+
+          const params: any = {
+            symbol,
+            side,
+            type: orderType,
+            quantity: chunkQty,
+            stopPrice,
+            positionSide: orderPositionSide as 'BOTH' | 'LONG' | 'SHORT',
+            newClientOrderId: `${clientPrefix}_${symbol}_${baseId}_${i}`,
+          };
+
+          if (orderPositionSide === 'BOTH') {
+            params.reduceOnly = true;
+          }
+
+          const orderResponse = await placeOrder(params, this.config.api);
+          const orderId = typeof orderResponse.orderId === 'string'
+            ? parseInt(orderResponse.orderId)
+            : orderResponse.orderId;
+          orderIds.push(orderId);
+
+          console.log(`PositionManager: Placed ${orderType} chunk ${i + 1}/${chunkQuantities.length} for ${symbol} (qty ${chunkQty}, stop ${stopPrice}) orderId: ${orderResponse.orderId}`);
+        }
+
+        return orderIds;
+      };
+
+      const placeMarketChunks = async (): Promise<void> => {
+        const chunkQuantities = symbolPrecision.splitQuantity(symbol, quantity, 'MARKET');
+        const baseId = Date.now();
+
+        for (let i = 0; i < chunkQuantities.length; i++) {
+          const chunkQty = symbolPrecision.formatQuantity(symbol, chunkQuantities[i]);
+          if (chunkQty <= 0) {
+            console.warn(`PositionManager: Skipping market chunk for ${symbol} with non-positive quantity ${chunkQty}`);
+            continue;
+          }
+
+          const params: any = {
+            symbol,
+            side,
+            type: 'MARKET',
+            quantity: chunkQty,
+            positionSide: orderPositionSide as 'BOTH' | 'LONG' | 'SHORT',
+            newClientOrderId: `al_market_tp_${symbol}_${baseId}_${i}`,
+          };
+
+          if (orderPositionSide === 'BOTH') {
+            params.reduceOnly = true;
+          }
+
+          const marketOrder = await placeOrder(params, this.config.api);
+          console.log(`PositionManager: Executed market chunk ${i + 1}/${chunkQuantities.length} for ${symbol}, orderId: ${marketOrder.orderId}`);
+        }
+      };
+
+      if (placeSL) {
         const rawSlPrice = isLong
           ? entryPrice * (1 - symbolConfig.slPercent / 100)
           : entryPrice * (1 + symbolConfig.slPercent / 100);
 
-        // Check if stop loss would be triggered immediately
         let adjustedSlPrice = rawSlPrice;
+        const currentPrice = await getCurrentPrice();
         if ((isLong && rawSlPrice >= currentPrice) || (!isLong && rawSlPrice <= currentPrice)) {
-          // Position is already at a loss beyond the intended stop
-          const bufferPercent = 0.1; // 0.1% buffer
+          const bufferPercent = 0.1;
           adjustedSlPrice = isLong
             ? currentPrice * (1 - bufferPercent / 100)
             : currentPrice * (1 + bufferPercent / 100);
@@ -1284,249 +1386,43 @@ export class PositionManager extends EventEmitter implements PositionTracker {
           console.log(`PositionManager: Position ${symbol} is underwater. Adjusting SL from ${rawSlPrice.toFixed(4)} to ${adjustedSlPrice.toFixed(4)} (current: ${currentPrice.toFixed(4)})`);
         }
 
-        // Calculate TP price and check if it would trigger immediately
-        const rawTpPrice = isLong
-          ? entryPrice * (1 + symbolConfig.tpPercent / 100)
-          : entryPrice * (1 - symbolConfig.tpPercent / 100);
-
-        // Check if position has already exceeded TP target
-        const pastTP = isLong
-          ? currentPrice >= rawTpPrice
-          : currentPrice <= rawTpPrice;
-
-        if (pastTP) {
-          const pnlPercent = isLong
-            ? ((currentPrice - entryPrice) / entryPrice) * 100
-            : ((entryPrice - currentPrice) / entryPrice) * 100;
-
-          console.log(`PositionManager: Position ${symbol} has exceeded TP target (PnL: ${pnlPercent.toFixed(2)}%, TP: ${symbolConfig.tpPercent}%)`);
-          console.log(`PositionManager: Closing position at market instead of placing TP order`);
-
-          // Close at market immediately
-          try {
-            const formattedQuantity = symbolPrecision.formatQuantity(symbol, quantity);
-            const orderPositionSide = position.positionSide || 'BOTH';
-            const side = isLong ? 'SELL' : 'BUY';
-
-            const marketParams: any = {
-              symbol,
-              side: side as 'BUY' | 'SELL',
-              type: 'MARKET',
-              quantity: formattedQuantity,
-              positionSide: orderPositionSide as 'BOTH' | 'LONG' | 'SHORT',
-              newClientOrderId: `al_batch_tp_close_${symbol}_${Date.now()}`,
-            };
-
-            if (orderPositionSide === 'BOTH') {
-              marketParams.reduceOnly = true;
-            }
-
-            const marketOrder = await placeOrder(marketParams, this.config.api);
-            console.log(`PositionManager: Position closed at market! Order ID: ${marketOrder.orderId}, PnL: ~${pnlPercent.toFixed(2)}%`);
-
-            if (this.statusBroadcaster) {
-              this.statusBroadcaster.broadcastPositionClosed({
-                symbol,
-                side: isLong ? 'LONG' : 'SHORT',
-                quantity,
-                pnl: pnlPercent * quantity * currentPrice / 100,
-                reason: 'Auto-closed at market (exceeded TP target in batch)',
-              });
-            }
-
-            // Still place SL if needed
-            if (placeSL) {
-              console.log(`PositionManager: Position closed, skipping SL placement`);
-            }
-            return; // Exit after closing position
-          } catch (marketError: any) {
-            console.error(`PositionManager: Failed to close at market: ${marketError.response?.data?.msg || marketError.message}`);
-            // If market close fails, skip TP placement entirely
-            console.log(`PositionManager: Skipping TP placement since position is past target`);
-            placeTP = false;
-          }
-        }
-
-        let finalTpPrice = rawTpPrice;
-
-        // Format prices and quantity
         const slPrice = symbolPrecision.formatPrice(symbol, adjustedSlPrice);
-        const tpPrice = symbolPrecision.formatPrice(symbol, finalTpPrice);
-        const formattedQuantity = symbolPrecision.formatQuantity(symbol, quantity);
+        console.log(`PositionManager: Placing SL orders for ${symbol} with formatted price ${slPrice} and quantity ${quantity}`);
 
-        const orderPositionSide = position.positionSide || 'BOTH';
-        const side = isLong ? 'SELL' : 'BUY';
+        const slOrderIds = await placeReduceOnlyChunks('STOP_MARKET', slPrice, 'al_sl');
+        orders.slOrderIds = slOrderIds;
+        orders.slOrderId = slOrderIds[0];
 
-        console.log(`PositionManager: Placing SL/TP batch for ${symbol}:`);
-        console.log(`  Quantity: ${formattedQuantity}`);
-        console.log(`  SL price: ${slPrice.toFixed(4)}`);
-        console.log(`  TP price: ${tpPrice.toFixed(4)}`);
-        console.log(`  Side: ${side}`);
-        console.log(`  Position Mode: ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'}`);
-        console.log(`  Position Side: ${orderPositionSide}`);
-
-        // Place both orders in a single batch request (saves 1 API call)
-        const batchResult = await placeStopLossAndTakeProfit({
-          symbol,
-          side: side as 'BUY' | 'SELL',
-          quantity: formattedQuantity,
-          stopLossPrice: slPrice,
-          takeProfitPrice: tpPrice,
-          positionSide: orderPositionSide as 'BOTH' | 'LONG' | 'SHORT',
-          reduceOnly: orderPositionSide === 'BOTH',
-        }, this.config.api);
-
-        // Handle results
-        if (batchResult.stopLoss) {
-          orders.slOrderId = typeof batchResult.stopLoss.orderId === 'string' ?
-            parseInt(batchResult.stopLoss.orderId) : batchResult.stopLoss.orderId;
-          console.log(`PositionManager: Placed SL for ${symbol} at ${slPrice.toFixed(4)}, orderId: ${batchResult.stopLoss.orderId}`);
-
-          if (this.statusBroadcaster) {
-            this.statusBroadcaster.broadcastStopLossPlaced({
-              symbol,
-              price: slPrice,
-              quantity,
-              orderId: batchResult.stopLoss.orderId?.toString(),
-            });
-          }
-        }
-
-        if (batchResult.takeProfit) {
-          orders.tpOrderId = typeof batchResult.takeProfit.orderId === 'string' ?
-            parseInt(batchResult.takeProfit.orderId) : batchResult.takeProfit.orderId;
-          console.log(`PositionManager: Placed TP for ${symbol} at ${tpPrice.toFixed(4)}, orderId: ${batchResult.takeProfit.orderId}`);
-
-          if (this.statusBroadcaster) {
-            this.statusBroadcaster.broadcastTakeProfitPlaced({
-              symbol,
-              price: tpPrice,
-              quantity,
-              orderId: batchResult.takeProfit.orderId?.toString(),
-            });
-          }
-        }
-
-        if (batchResult.errors.length > 0) {
-          console.error(`PositionManager: Batch order errors for ${symbol}:`, batchResult.errors);
-        }
-
-        console.log(`PositionManager: Batch order placement saved 1 API call!`);
-      } else if (placeSL) {
-        // Place orders individually if not placing both
-        // Get current market price to avoid "Order would immediately trigger" error
-        const ticker = await axios.get(`https://fapi.asterdex.com/fapi/v1/ticker/price?symbol=${symbol}`);
-        const currentPrice = parseFloat(ticker.data.price);
-
-        const rawSlPrice = isLong
-          ? entryPrice * (1 - symbolConfig.slPercent / 100)
-          : entryPrice * (1 + symbolConfig.slPercent / 100);
-
-        // Check if the position is already beyond the stop level
-        let adjustedSlPrice = rawSlPrice;
-        if ((isLong && rawSlPrice >= currentPrice) || (!isLong && rawSlPrice <= currentPrice)) {
-          // Position is already at a loss beyond the intended stop
-          // Place stop slightly beyond current price to avoid immediate trigger
-          const bufferPercent = 0.1; // 0.1% buffer
-          adjustedSlPrice = isLong
-            ? currentPrice * (1 - bufferPercent / 100)
-            : currentPrice * (1 + bufferPercent / 100);
-
-          console.log(`PositionManager: Position ${symbol} is underwater. Adjusting SL from ${rawSlPrice.toFixed(4)} to ${adjustedSlPrice.toFixed(4)} (current: ${currentPrice.toFixed(4)})`);
-        }
-
-        // Format price and quantity according to symbol precision
-        const slPrice = symbolPrecision.formatPrice(symbol, adjustedSlPrice);
-        const formattedQuantity = symbolPrecision.formatQuantity(symbol, quantity);
-
-        console.log(`PositionManager: SL order preparation for ${symbol}:`);
-        console.log(`  Raw quantity: ${quantity}`);
-        console.log(`  Formatted quantity: ${formattedQuantity}`);
-        console.log(`  Raw SL price: ${rawSlPrice}`);
-        console.log(`  Adjusted SL price: ${adjustedSlPrice}`);
-        console.log(`  Formatted SL price: ${slPrice}`);
-
-        // Determine position side for the SL order
-        const orderPositionSide = position.positionSide || 'BOTH';
-
-        const orderParams: any = {
-          symbol,
-          side: isLong ? 'SELL' : 'BUY', // Opposite side to close
-          type: 'STOP_MARKET',
-          quantity: formattedQuantity,
-          stopPrice: slPrice,
-          positionSide: orderPositionSide as 'BOTH' | 'LONG' | 'SHORT',
-          newClientOrderId: `al_sl_${symbol}_${Date.now()}`,
-        };
-
-        // Only add reduceOnly in One-way mode (positionSide == BOTH)
-        // In Hedge Mode, the opposite positionSide naturally closes the position
-        if (orderPositionSide === 'BOTH') {
-          orderParams.reduceOnly = true;
-        }
-
-        const slOrder = await placeOrder(orderParams, this.config.api);
-
-        orders.slOrderId = typeof slOrder.orderId === 'string' ? parseInt(slOrder.orderId) : slOrder.orderId;
-        console.log(`PositionManager: Placed SL (STOP_MARKET) for ${symbol} at ${slPrice.toFixed(4)}, orderId: ${slOrder.orderId}`);
-
-        // Broadcast SL placed event
-        if (this.statusBroadcaster) {
+        if (this.statusBroadcaster && slOrderIds.length > 0) {
           this.statusBroadcaster.broadcastStopLossPlaced({
             symbol,
             price: slPrice,
             quantity,
-            orderId: slOrder.orderId?.toString(),
+            orderId: slOrderIds[0].toString(),
           });
         }
       }
 
-      // Place Take Profit
       if (placeTP) {
-        // Get current market price to check if TP would trigger immediately
-        const ticker = await axios.get(`https://fapi.asterdex.com/fapi/v1/ticker/price?symbol=${symbol}`);
-        const currentPrice = parseFloat(ticker.data.price);
-
         const rawTpPrice = isLong
           ? entryPrice * (1 + symbolConfig.tpPercent / 100)
           : entryPrice * (1 - symbolConfig.tpPercent / 100);
 
-        // Check if position has already exceeded TP target
+        const currentPrice = await getCurrentPrice();
         const pastTP = isLong
           ? currentPrice >= rawTpPrice
           : currentPrice <= rawTpPrice;
 
         if (pastTP) {
-          // Calculate current PnL percentage
           const pnlPercent = isLong
             ? ((currentPrice - entryPrice) / entryPrice) * 100
             : ((entryPrice - currentPrice) / entryPrice) * 100;
 
-          console.log(`PositionManager: Position ${symbol} has exceeded TP target!`);
-          console.log(`  Current PnL: ${pnlPercent.toFixed(2)}%, TP target: ${symbolConfig.tpPercent}%`);
-
-          // Always close at market if past TP, regardless of exact profit amount
-          console.log(`PositionManager: Closing position at market - already past TP target`);
+          console.log(`PositionManager: Position ${symbol} has exceeded TP target! Current PnL: ${pnlPercent.toFixed(2)}%, target: ${symbolConfig.tpPercent}%`);
+          console.log('PositionManager: Closing position at market - already past TP target');
 
           try {
-            const formattedQuantity = symbolPrecision.formatQuantity(symbol, quantity);
-            const orderPositionSide = position.positionSide || 'BOTH';
-
-            const marketParams: any = {
-              symbol,
-              side: isLong ? 'SELL' : 'BUY',
-              type: 'MARKET',
-              quantity: formattedQuantity,
-              positionSide: orderPositionSide as 'BOTH' | 'LONG' | 'SHORT',
-              newClientOrderId: `al_market_tp_${symbol}_${Date.now()}`,
-            };
-
-            if (orderPositionSide === 'BOTH') {
-              marketParams.reduceOnly = true;
-            }
-
-            const marketOrder = await placeOrder(marketParams, this.config.api);
-            console.log(`PositionManager: Position closed at market! Order ID: ${marketOrder.orderId}, PnL: ~${pnlPercent.toFixed(2)}%`);
+            await placeMarketChunks();
 
             if (this.statusBroadcaster) {
               this.statusBroadcaster.broadcastPositionClosed({
@@ -1537,53 +1433,32 @@ export class PositionManager extends EventEmitter implements PositionTracker {
                 reason: 'Auto-closed at market (exceeded TP target)',
               });
             }
-            return; // Exit after market close
+
+            if (placeSL) {
+              console.log(`PositionManager: Position closed, skipping SL placement`);
+            }
+            return;
           } catch (marketError: any) {
             console.error(`PositionManager: Failed to close at market: ${marketError.response?.data?.msg || marketError.message}`);
-            // If market close fails, don't place TP at all since it would trigger immediately
             console.log(`PositionManager: Not placing TP order since position is past target and market close failed`);
             return;
           }
+        }
 
-        } else {
-          // Normal TP placement - position hasn't reached target yet
-          const tpPrice = symbolPrecision.formatPrice(symbol, rawTpPrice);
-          const formattedQuantity = symbolPrecision.formatQuantity(symbol, quantity);
+        const tpPrice = symbolPrecision.formatPrice(symbol, rawTpPrice);
+        console.log(`PositionManager: Placing TP orders for ${symbol} with formatted price ${tpPrice} and quantity ${quantity}`);
 
-          console.log(`PositionManager: TP order preparation for ${symbol}:`);
-          console.log(`  Raw quantity: ${quantity}`);
-          console.log(`  Formatted quantity: ${formattedQuantity}`);
-          console.log(`  Raw TP price: ${rawTpPrice}`);
-          console.log(`  Formatted TP price: ${tpPrice}`);
+        const tpOrderIds = await placeReduceOnlyChunks('TAKE_PROFIT_MARKET', tpPrice, 'al_tp');
+        orders.tpOrderIds = tpOrderIds;
+        orders.tpOrderId = tpOrderIds[0];
 
-          const orderPositionSide = position.positionSide || 'BOTH';
-          const tpParams: any = {
+        if (this.statusBroadcaster && tpOrderIds.length > 0) {
+          this.statusBroadcaster.broadcastTakeProfitPlaced({
             symbol,
-            side: isLong ? 'SELL' : 'BUY',
-            type: 'TAKE_PROFIT_MARKET',
-            quantity: formattedQuantity,
-            stopPrice: tpPrice,
-            positionSide: orderPositionSide as 'BOTH' | 'LONG' | 'SHORT',
-            newClientOrderId: `al_tp_${symbol}_${Date.now()}`,
-          };
-
-          if (orderPositionSide === 'BOTH') {
-            tpParams.reduceOnly = true;
-          }
-
-          const tpOrder = await placeOrder(tpParams, this.config.api);
-          orders.tpOrderId = typeof tpOrder.orderId === 'string' ? parseInt(tpOrder.orderId) : tpOrder.orderId;
-          console.log(`PositionManager: Placed TP for ${symbol} at ${tpPrice}, orderId: ${tpOrder.orderId}`);
-
-          // Broadcast TP placed event
-          if (this.statusBroadcaster) {
-            this.statusBroadcaster.broadcastTakeProfitPlaced({
-              symbol,
-              price: tpPrice,
-              quantity,
-              orderId: tpOrder.orderId?.toString(),
-            });
-          }
+            price: tpPrice,
+            quantity,
+            orderId: tpOrderIds[0].toString(),
+          });
         }
       }
 
@@ -2020,14 +1895,14 @@ export class PositionManager extends EventEmitter implements PositionTracker {
         }
 
         // Find SL/TP orders for this position
-        const slOrder = openOrders.find(o =>
+        const slOrders = openOrders.filter(o =>
           o.symbol === symbol &&
           (o.type === 'STOP_MARKET' || o.type === 'STOP') &&
           o.reduceOnly &&
           ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
         );
 
-        const tpOrder = openOrders.find(o =>
+        const tpOrders = openOrders.filter(o =>
           o.symbol === symbol &&
           (o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT' || o.type === 'LIMIT') &&
           o.reduceOnly &&
@@ -2036,30 +1911,28 @@ export class PositionManager extends EventEmitter implements PositionTracker {
 
         let needsAdjustment = false;
 
-        // Check if SL order quantity matches
-        if (slOrder) {
-          const slOrderQty = parseFloat(slOrder.origQty);
-          if (Math.abs(slOrderQty - positionQty) > 0.00000001) {
-            console.log(`PositionManager: [Periodic Check] SL order ${slOrder.orderId} quantity mismatch - Order: ${slOrderQty}, Position: ${positionQty}`);
+        if (slOrders.length > 0) {
+          const slTotalQty = slOrders.reduce((sum, order) => sum + Math.abs(parseFloat(order.origQty)), 0);
+          if (Math.abs(slTotalQty - positionQty) > 0.00000001) {
+            console.log(`PositionManager: [Periodic Check] SL orders ${slOrders.map(o => o.orderId).join(', ')} quantity mismatch - Total: ${slTotalQty}, Position: ${positionQty}`);
             needsAdjustment = true;
           }
         }
 
-        // Check if TP order quantity matches
-        if (tpOrder) {
-          const tpOrderQty = parseFloat(tpOrder.origQty);
-          if (Math.abs(tpOrderQty - positionQty) > 0.00000001) {
-            console.log(`PositionManager: [Periodic Check] TP order ${tpOrder.orderId} quantity mismatch - Order: ${tpOrderQty}, Position: ${positionQty}`);
+        if (tpOrders.length > 0) {
+          const tpTotalQty = tpOrders.reduce((sum, order) => sum + Math.abs(parseFloat(order.origQty)), 0);
+          if (Math.abs(tpTotalQty - positionQty) > 0.00000001) {
+            console.log(`PositionManager: [Periodic Check] TP orders ${tpOrders.map(o => o.orderId).join(', ')} quantity mismatch - Total: ${tpTotalQty}, Position: ${positionQty}`);
             needsAdjustment = true;
           }
         }
 
         // Adjust if needed
         if (needsAdjustment) {
-          await this.adjustProtectiveOrders(position, slOrder, tpOrder);
-        } else if (!slOrder || !tpOrder) {
-          console.log(`PositionManager: [Periodic Check] Position ${key} missing protection (SL: ${!!slOrder}, TP: ${!!tpOrder})`);
-          await this.placeProtectiveOrdersWithLock(key, position, !slOrder, !tpOrder);
+          await this.adjustProtectiveOrders(position, slOrders, tpOrders);
+        } else if (slOrders.length === 0 || tpOrders.length === 0) {
+          console.log(`PositionManager: [Periodic Check] Position ${key} missing protection (SL: ${slOrders.length > 0}, TP: ${tpOrders.length > 0})`);
+          await this.placeProtectiveOrdersWithLock(key, position, slOrders.length === 0, tpOrders.length === 0);
         }
       }
     } catch (error: any) {
@@ -2100,14 +1973,14 @@ export class PositionManager extends EventEmitter implements PositionTracker {
       const openOrders = await this.getOpenOrdersFromExchange();
 
       // Find SL/TP orders for this position
-      const slOrder = openOrders.find(o =>
+      const slOrders = openOrders.filter(o =>
         o.symbol === symbol &&
         (o.type === 'STOP_MARKET' || o.type === 'STOP') &&
         o.reduceOnly &&
         ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
       );
 
-      const tpOrder = openOrders.find(o =>
+      const tpOrders = openOrders.filter(o =>
         o.symbol === symbol &&
         (o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT' || o.type === 'LIMIT') &&
         o.reduceOnly &&
@@ -2115,7 +1988,7 @@ export class PositionManager extends EventEmitter implements PositionTracker {
       );
 
       // Always adjust orders when position size changes
-      await this.adjustProtectiveOrders(position, slOrder, tpOrder);
+      await this.adjustProtectiveOrders(position, slOrders, tpOrders);
     } catch (error: any) {
       console.error(`PositionManager: Error checking orders for position ${positionKey}:`, error?.response?.data || error?.message);
       // Log to error database
@@ -2169,20 +2042,114 @@ export class PositionManager extends EventEmitter implements PositionTracker {
       await this.cancelProtectiveOrders(targetKey, orders);
     }
 
-    // Place market close order
+    // Place market close orders in compliant chunks
     const posAmt = parseFloat(targetPosition.positionAmt);
     const quantity = Math.abs(posAmt);
     const closeSide = posAmt > 0 ? 'SELL' : 'BUY';
+    const orderPositionSide = (targetPosition.positionSide || 'BOTH') as 'BOTH' | 'LONG' | 'SHORT';
+    const orderSide = closeSide as 'BUY' | 'SELL';
 
-    await placeOrder({
-      symbol,
-      side: closeSide,
-      type: 'MARKET',
-      quantity: quantity,
-      positionSide: (targetPosition.positionSide || 'BOTH') as 'BOTH' | 'LONG' | 'SHORT',
-      // Only use reduceOnly in One-way mode
-      ...(targetPosition.positionSide === 'BOTH' ? { reduceOnly: true } : {}),
-    }, this.config.api);
+    let chunkQuantities: number[] = [];
+    try {
+      const exchangeInfo = await getExchangeInfo();
+      const symbolInfo = exchangeInfo?.symbols?.find((info: any) => info.symbol === symbol);
+
+      const marketLot = symbolInfo?.filters?.find((f: any) => f.filterType === 'MARKET_LOT_SIZE');
+      const lotSize = symbolInfo?.filters?.find((f: any) => f.filterType === 'LOT_SIZE');
+
+      const rawStepSize = marketLot?.stepSize ?? lotSize?.stepSize ?? '0';
+      const stepSize = parseFloat(rawStepSize) || 0;
+      const tolerance = stepSize > 0 ? stepSize / 1000 : 1e-8;
+      const maxQty = parseFloat(marketLot?.maxQty ?? '0');
+      const minQty = parseFloat(marketLot?.minQty ?? lotSize?.minQty ?? '0');
+
+      const floorToStep = (value: number) => {
+        if (stepSize <= 0) return value;
+        const units = Math.floor((value + tolerance) / stepSize);
+        return units * stepSize;
+      };
+
+      let remaining = quantity;
+      const effectiveMax = maxQty > 0 ? maxQty : quantity;
+
+      while (remaining > tolerance) {
+        let chunk = floorToStep(Math.min(remaining, effectiveMax));
+        if (chunk <= tolerance) {
+          chunk = floorToStep(remaining);
+        }
+
+        if (chunk <= tolerance) {
+          break;
+        }
+
+        if (minQty > 0 && chunk + tolerance < minQty) {
+          if (chunkQuantities.length === 0) {
+            chunk = floorToStep(minQty);
+            if (chunk > remaining + tolerance) {
+              chunk = floorToStep(remaining);
+            }
+          } else {
+            const lastIndex = chunkQuantities.length - 1;
+            const merged = chunkQuantities[lastIndex] + chunk;
+            if (maxQty > 0 && merged > maxQty + tolerance) {
+              throw new Error('Cannot merge remainder for ' + symbol + ' without exceeding max quantity');
+            }
+            chunkQuantities[lastIndex] = symbolPrecision.formatQuantity(symbol, merged);
+            remaining = floorToStep(remaining - chunk);
+            continue;
+          }
+        }
+
+        const formattedChunk = symbolPrecision.formatQuantity(symbol, chunk);
+        if (formattedChunk <= tolerance) {
+          break;
+        }
+
+        chunkQuantities.push(formattedChunk);
+        remaining = floorToStep(remaining - chunk);
+      }
+
+      const executed = chunkQuantities.reduce((sum, value) => sum + value, 0);
+      const residual = quantity - executed;
+      if (Math.abs(residual) > tolerance) {
+        const formattedResidual = symbolPrecision.formatQuantity(symbol, residual);
+        if (formattedResidual > tolerance) {
+          chunkQuantities.push(formattedResidual);
+        }
+      }
+
+      if (chunkQuantities.length === 0) {
+        chunkQuantities = [symbolPrecision.formatQuantity(symbol, quantity)];
+      }
+    } catch (error) {
+      console.warn('PositionManager: Falling back to single close order for ' + symbol + ': ' + (error instanceof Error ? error.message : String(error)));
+      const fallbackQty = symbolPrecision.formatQuantity(symbol, quantity);
+      chunkQuantities = [fallbackQty > 0 ? fallbackQty : quantity];
+    }
+
+    let totalClosed = 0;
+    for (const chunk of chunkQuantities) {
+      if (chunk <= 0) {
+        continue;
+      }
+
+      console.log('PositionManager: Closing ' + symbol + ' ' + side + ' chunk with quantity ' + chunk);
+      await placeOrder({
+        symbol,
+        side: orderSide,
+        type: 'MARKET',
+        quantity: chunk,
+        positionSide: orderPositionSide,
+        ...(orderPositionSide === 'BOTH' ? { reduceOnly: true } : {}),
+      }, this.config.api);
+
+      totalClosed += chunk;
+    }
+
+    const quantityDiff = Math.abs(totalClosed - quantity);
+    if (quantityDiff > 1e-6) {
+      console.warn('PositionManager: Requested close quantity ' + quantity + ' vs executed ' + totalClosed + ' for ' + symbol);
+    }
 
     // Remove from our maps (will be confirmed by ACCOUNT_UPDATE)
     this.currentPositions.delete(targetKey);

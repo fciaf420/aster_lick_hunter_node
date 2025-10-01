@@ -555,7 +555,10 @@ export class Hunter extends EventEmitter {
 
         const optimalPrice = await calculateOptimalPrice(symbol, side, priceOffsetBps, usePostOnly);
         if (optimalPrice) {
-          orderPrice = optimalPrice;
+          // Snap the calculated price to allowed precision to avoid tick errors
+          orderPrice = symbolPrecision.hasSymbol(symbol)
+            ? symbolPrecision.formatPrice(symbol, optimalPrice)
+            : optimalPrice;
 
           // Analyze liquidity at this price level
           const targetNotional = symbolConfig.tradeSize * orderPrice;
@@ -629,7 +632,7 @@ export class Hunter extends EventEmitter {
           ? symbolPrecision.formatPrice(symbol, orderPrice)
           : orderPrice;
 
-        const validation = await validateOrderParams(symbol, side, orderPrice, quantity);
+          const validation = await validateOrderParams(symbol, side, orderPrice, quantity);
         if (!validation.valid) {
           console.error(`Hunter: Order validation failed for ${symbol}: ${validation.error}`);
           return;

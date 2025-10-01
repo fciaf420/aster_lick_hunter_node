@@ -48,3 +48,4 @@ data/*.db-wal
 # user configuration
 config.user.json
 config.json
+config.user.backup-*.json
