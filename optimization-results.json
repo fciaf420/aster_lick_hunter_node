@@ -1,0 +1,2704 @@
+{
+  "timestamp": "2025-10-02T14:15:02.754Z",
+  "summary": {
+    "currentDailyPnl": 1072.1408062923394,
+    "optimizedDailyPnl": 1450.4467267384557,
+    "dailyImprovement": 378.3059204461164,
+    "monthlyImprovement": 11349.177613383492,
+    "improvementPercent": 35.285096717320926,
+    "recommendedMaxOpenPositions": 51
+  },
+  "recommendations": [
+    {
+      "symbol": "STBLUSDT",
+      "thresholds": {
+        "current": {
+          "long": 9820,
+          "short": 375
+        },
+        "optimized": {
+          "long": 1030,
+          "short": 375
+        }
+      },
+      "settings": {
+        "current": {
+          "tradeSize": 25.34,
+          "shortTradeSize": 25.34,
+          "maxPositionMarginUSDT": 50.67,
+          "leverage": 20,
+          "tpPercent": 1.5,
+          "slPercent": 0.5,
+          "maxPositionsLong": 1,
+          "maxPositionsShort": 1
+        },
+        "optimized": {
+          "tradeSize": 48.48,
+          "shortTradeSize": 48.48,
+          "maxPositionMarginUSDT": 48.48,
+          "leverage": 20,
+          "tpPercent": 10,
+          "slPercent": 0.63,
+          "maxPositionsLong": 1,
+          "maxPositionsShort": 1,
+          "vwapProtection": false
+        }
+      },
+      "improvement": {
+        "long": 58.02987973302755,
+        "short": 158.2460368060052,
+        "total": 216.27591653903278
+      },
+      "performance": {
+        "current": {
+          "long": {
+            "trades": 15,
+            "winRate": 40,
+            "pnl": 22.80599999999966,
+            "sharpe": 0.30618621784789396,
+            "maxDrawdown": 10.136000000000099
+          },
+          "short": {
+            "trades": 31,
+            "winRate": 54.83870967741935,
+            "pnl": 93.7580000000009,
+            "sharpe": 0.5995884442857616,
+            "maxDrawdown": 10.135999999999717
+          }
+        },
+        "optimized": {
+          "long": {
+            "trades": 54,
+            "winRate": 11.11111111111111,
+            "pnl": 290.8772055472104,
+            "sharpe": 0.16636193486913473,
+            "maxDrawdown": 134.391701934328
+          },
+          "short": {
+            "trades": 26,
+            "winRate": 38.46153846153847,
+            "pnl": 824.7815012517223,
+            "sharpe": 0.6520628904813633,
+            "maxDrawdown": 24.434854897150572
+          }
+        }
+      }
+    },
+    {
+      "symbol": "ASTERUSDT",
+      "thresholds": {
+        "current": {
+          "long": 350,
+          "short": 260
+        },
+        "optimized": {
+          "long": 175,
+          "short": 130
+        }
+      },
+      "settings": {
+        "current": {
+          "tradeSize": 20.59,
+          "shortTradeSize": 20.59,
+          "maxPositionMarginUSDT": 329.37,
+          "leverage": 20,
+          "tpPercent": 1.25,
+          "slPercent": 0.52,
+          "maxPositionsLong": 15,
+          "maxPositionsShort": 15
+        },
+        "optimized": {
+          "tradeSize": 21.01,
+          "shortTradeSize": 21.01,
+          "maxPositionMarginUSDT": 315.15,
+          "leverage": 20,
+          "tpPercent": 5,
+          "slPercent": 0.5,
+          "maxPositionsLong": 15,
+          "maxPositionsShort": 15,
+          "vwapProtection": false
+        }
+      },
+      "improvement": {
+        "long": 66.23987496882921,
+        "short": 36.44126160574333,
+        "total": 102.68113657457252
+      },
+      "performance": {
+        "current": {
+          "long": {
+            "trades": 469,
+            "winRate": 80.81023454157783,
+            "pnl": 1756.722855311953,
+            "sharpe": 1.3053074610241229,
+            "maxDrawdown": 12.848160000000462
+          },
+          "short": {
+            "trades": 352,
+            "winRate": 83.80681818181817,
+            "pnl": 1396.4549799999959,
+            "sharpe": 1.4774707599020367,
+            "maxDrawdown": 10.706800000000385
+          }
+        },
+        "optimized": {
+          "long": {
+            "trades": 507,
+            "winRate": 27.021696252465482,
+            "pnl": 2068.56693179022,
+            "sharpe": 0.3996837806972435,
+            "maxDrawdown": 178.5829653503722
+          },
+          "short": {
+            "trades": 380,
+            "winRate": 27.368421052631582,
+            "pnl": 1568.0131475915496,
+            "sharpe": 0.40572684679634136,
+            "maxDrawdown": 90.34197070665755
+          }
+        }
+      }
+    },
+    {
+      "symbol": "WLFIUSDT",
+      "thresholds": {
+        "current": {
+          "long": 195,
+          "short": 515
+        },
+        "optimized": {
+          "long": 98,
+          "short": 258
+        }
+      },
+      "settings": {
+        "current": {
+          "tradeSize": 25.34,
+          "shortTradeSize": 25.34,
+          "maxPositionMarginUSDT": 50.67,
+          "leverage": 20,
+          "tpPercent": 1.25,
+          "slPercent": 6,
+          "maxPositionsLong": 1,
+          "maxPositionsShort": 1
+        },
+        "optimized": {
+          "tradeSize": 48.48,
+          "shortTradeSize": 48.48,
+          "maxPositionMarginUSDT": 48.48,
+          "leverage": 20,
+          "tpPercent": 2,
+          "slPercent": 0.63,
+          "maxPositionsLong": 1,
+          "maxPositionsShort": 1,
+          "vwapProtection": false
+        }
+      },
+      "improvement": {
+        "long": 15.546893865605623,
+        "short": 8.87261373291528,
+        "total": 24.41950759852091
+      },
+      "performance": {
+        "current": {
+          "long": {
+            "trades": 19,
+            "winRate": 100,
+            "pnl": 115.52628234700185,
+            "sharpe": 5.627483940380233,
+            "maxDrawdown": 0
+          },
+          "short": {
+            "trades": 4,
+            "winRate": 100,
+            "pnl": 25.33999999999996,
+            "sharpe": 361287836577525.8,
+            "maxDrawdown": 0
+          }
+        },
+        "optimized": {
+          "long": {
+            "trades": 17,
+            "winRate": 70.58823529411765,
+            "pnl": 185.63936128163243,
+            "sharpe": 0.9379085872734445,
+            "maxDrawdown": 12.217427448575293
+          },
+          "short": {
+            "trades": 6,
+            "winRate": 66.66666666666666,
+            "pnl": 65.35354047888733,
+            "sharpe": 0.9060645827371389,
+            "maxDrawdown": 6.108713724287635
+          }
+        }
+      }
+    },
+    {
+      "symbol": "SOLUSDT",
+      "thresholds": {
+        "current": {
+          "long": 265,
+          "short": 390
+        },
+        "optimized": {
+          "long": 133,
+          "short": 195
+        }
+      },
+      "settings": {
+        "current": {
+          "tradeSize": 18.1,
+          "shortTradeSize": 18.1,
+          "maxPositionMarginUSDT": 126.68,
+          "leverage": 20,
+          "tpPercent": 1.88,
+          "slPercent": 0.5,
+          "maxPositionsLong": 6,
+          "maxPositionsShort": 6
+        },
+        "optimized": {
+          "tradeSize": 20.2,
+          "shortTradeSize": 20.2,
+          "maxPositionMarginUSDT": 121.21,
+          "leverage": 20,
+          "tpPercent": 2.35,
+          "slPercent": 0.5,
+          "maxPositionsLong": 6,
+          "maxPositionsShort": 6,
+          "vwapProtection": false
+        }
+      },
+      "improvement": {
+        "long": 11.860341277561485,
+        "short": 8.988345611457337,
+        "total": 20.848686889018808
+      },
+      "performance": {
+        "current": {
+          "long": {
+            "trades": 61,
+            "winRate": 100,
+            "pnl": 415.1415999999982,
+            "sharpe": 465276223465857.44,
+            "maxDrawdown": 0
+          },
+          "short": {
+            "trades": 53,
+            "winRate": 96.22641509433963,
+            "pnl": 338.25208004733696,
+            "sharpe": 3.6047463188808844,
+            "maxDrawdown": 1.8099999999999739
+          }
+        },
+        "optimized": {
+          "long": {
+            "trades": 52,
+            "winRate": 96.15384615384616,
+            "pnl": 470.6965866910227,
+            "sharpe": 4.087719298245616,
+            "maxDrawdown": 2.0201570244250036
+          },
+          "short": {
+            "trades": 53,
+            "winRate": 81.13207547169812,
+            "pnl": 380.35436101319357,
+            "sharpe": 1.5747959696341889,
+            "maxDrawdown": 6.06047107327484
+          }
+        }
+      }
+    },
+    {
+      "symbol": "HYPEUSDT",
+      "thresholds": {
+        "current": {
+          "long": 160,
+          "short": 100
+        },
+        "optimized": {
+          "long": 80,
+          "short": 75
+        }
+      },
+      "settings": {
+        "current": {
+          "tradeSize": 10.13,
+          "shortTradeSize": 10.13,
+          "maxPositionMarginUSDT": 50.67,
+          "leverage": 20,
+          "tpPercent": 1.5,
+          "slPercent": 0.5,
+          "maxPositionsLong": 5,
+          "maxPositionsShort": 5
+        },
+        "optimized": {
+          "tradeSize": 9.7,
+          "shortTradeSize": 9.7,
+          "maxPositionMarginUSDT": 48.48,
+          "leverage": 20,
+          "tpPercent": 1.88,
+          "slPercent": 0.5,
+          "maxPositionsLong": 5,
+          "maxPositionsShort": 5,
+          "vwapProtection": false
+        }
+      },
+      "improvement": {
+        "long": 5.753226728914339,
+        "short": 5.82697002395408,
+        "total": 11.58019675286841
+      },
+      "performance": {
+        "current": {
+          "long": {
+            "trades": 144,
+            "winRate": 49.30555555555556,
+            "pnl": 133.3725887897984,
+            "sharpe": 0.4616716808074283,
+            "maxDrawdown": 12.156000000000018
+          },
+          "short": {
+            "trades": 169,
+            "winRate": 40.23668639053255,
+            "pnl": 104.3390000000026,
+            "sharpe": 0.31071490733480356,
+            "maxDrawdown": 27.35099999999906
+          }
+        },
+        "optimized": {
+          "long": {
+            "trades": 248,
+            "winRate": 35.88709677419355,
+            "pnl": 160.41263042833273,
+            "sharpe": 0.2954830937323006,
+            "maxDrawdown": 30.52417587945652
+          },
+          "short": {
+            "trades": 216,
+            "winRate": 34.25925925925926,
+            "pnl": 131.7256335359874,
+            "sharpe": 0.27870521674545057,
+            "maxDrawdown": 43.86638236297888
+          }
+        }
+      }
+    },
+    {
+      "symbol": "ETHUSDT",
+      "thresholds": {
+        "current": {
+          "long": 825,
+          "short": 1300
+        },
+        "optimized": {
+          "long": 413,
+          "short": 650
+        }
+      },
+      "settings": {
+        "current": {
+          "tradeSize": 8.45,
+          "shortTradeSize": 8.45,
+          "maxPositionMarginUSDT": 76.01,
+          "leverage": 20,
+          "tpPercent": 1.25,
+          "slPercent": 0.95,
+          "maxPositionsLong": 8,
+          "maxPositionsShort": 8
+        },
+        "optimized": {
+          "tradeSize": 9.09,
+          "shortTradeSize": 9.09,
+          "maxPositionMarginUSDT": 72.73,
+          "leverage": 20,
+          "tpPercent": 0.5,
+          "slPercent": 1.19,
+          "maxPositionsLong": 8,
+          "maxPositionsShort": 8,
+          "vwapProtection": false
+        }
+      },
+      "improvement": {
+        "long": -5.031880062812309,
+        "short": 7.5323561549152265,
+        "total": 2.5004760921029217
+      },
+      "performance": {
+        "current": {
+          "long": {
+            "trades": 88,
+            "winRate": 89.77272727272727,
+            "pnl": 151.47162360141465,
+            "sharpe": 1.5295167713281486,
+            "maxDrawdown": 10.731499999999947
+          },
+          "short": {
+            "trades": 112,
+            "winRate": 58.92857142857143,
+            "pnl": 61.63909250681463,
+            "sharpe": 0.30784596351325827,
+            "maxDrawdown": 17.66050000000019
+          }
+        },
+        "optimized": {
+          "long": {
+            "trades": 144,
+            "winRate": 99.30555555555556,
+            "pnl": 127.8368800344176,
+            "sharpe": 3.4790636522838825,
+            "maxDrawdown": 2.1636451036973448
+          },
+          "short": {
+            "trades": 127,
+            "winRate": 95.2755905511811,
+            "pnl": 97.01857372545385,
+            "sharpe": 1.1718197299167112,
+            "maxDrawdown": 2.5091010446238613
+          }
+        }
+      }
+    },
+    {
+      "symbol": "BTCUSDT",
+      "thresholds": {
+        "current": {
+          "long": 970,
+          "short": 4460
+        },
+        "optimized": {
+          "long": 970,
+          "short": 4460
+        }
+      },
+      "settings": {
+        "current": {
+          "tradeSize": 10.13,
+          "shortTradeSize": 10.13,
+          "maxPositionMarginUSDT": 101.35,
+          "leverage": 20,
+          "tpPercent": 0.5,
+          "slPercent": 0.5,
+          "maxPositionsLong": 10,
+          "maxPositionsShort": 10
+        },
+        "optimized": {
+          "tradeSize": 10.13,
+          "shortTradeSize": 10.13,
+          "maxPositionMarginUSDT": 101.35,
+          "leverage": 20,
+          "tpPercent": 0.5,
+          "slPercent": 0.5,
+          "maxPositionsLong": 10,
+          "maxPositionsShort": 10,
+          "vwapProtection": false
+        }
+      },
+      "improvement": {
+        "long": 0,
+        "short": 0,
+        "total": 0
+      },
+      "performance": {
+        "current": {
+          "long": {
+            "trades": 110,
+            "winRate": 98.18181818181819,
+            "pnl": 107.37799999999761,
+            "sharpe": 3.606193232430743,
+            "maxDrawdown": 1.0130000000000052
+          },
+          "short": {
+            "trades": 128,
+            "winRate": 93.75,
+            "pnl": 112.5881097533836,
+            "sharpe": 1.7783932450463433,
+            "maxDrawdown": 2.0259999999999536
+          }
+        },
+        "optimized": {
+          "long": {
+            "trades": 110,
+            "winRate": 98.18181818181819,
+            "pnl": 107.37799999999761,
+            "sharpe": 3.606193232430743,
+            "maxDrawdown": 1.0130000000000052
+          },
+          "short": {
+            "trades": 128,
+            "winRate": 93.75,
+            "pnl": 112.5881097533836,
+            "sharpe": 1.7783932450463433,
+            "maxDrawdown": 2.0259999999999536
+          }
+        }
+      }
+    },
+    {
+      "symbol": "BNBUSDT",
+      "thresholds": {
+        "current": {
+          "long": 445,
+          "short": 790
+        },
+        "optimized": {
+          "long": 445,
+          "short": 790
+        }
+      },
+      "settings": {
+        "current": {
+          "tradeSize": 15.2,
+          "shortTradeSize": 15.2,
+          "maxPositionMarginUSDT": 76.01,
+          "leverage": 20,
+          "tpPercent": 0.5,
+          "slPercent": 2,
+          "maxPositionsLong": 5,
+          "maxPositionsShort": 5
+        },
+        "optimized": {
+          "tradeSize": 15.2,
+          "shortTradeSize": 15.2,
+          "maxPositionMarginUSDT": 76.01,
+          "leverage": 20,
+          "tpPercent": 0.5,
+          "slPercent": 2,
+          "maxPositionsLong": 5,
+          "maxPositionsShort": 5,
+          "vwapProtection": false
+        }
+      },
+      "improvement": {
+        "long": 0,
+        "short": 0,
+        "total": 0
+      },
+      "performance": {
+        "current": {
+          "long": {
+            "trades": 83,
+            "winRate": 100,
+            "pnl": 126.15999999999714,
+            "sharpe": 124278377357184.86,
+            "maxDrawdown": 0
+          },
+          "short": {
+            "trades": 52,
+            "winRate": 98.07692307692307,
+            "pnl": 71.43999999999998,
+            "sharpe": 1.3162632789863289,
+            "maxDrawdown": 6.079999999999998
+          }
+        },
+        "optimized": {
+          "long": {
+            "trades": 83,
+            "winRate": 100,
+            "pnl": 126.15999999999714,
+            "sharpe": 124278377357184.86,
+            "maxDrawdown": 0
+          },
+          "short": {
+            "trades": 52,
+            "winRate": 98.07692307692307,
+            "pnl": 71.43999999999998,
+            "sharpe": 1.3162632789863289,
+            "maxDrawdown": 6.079999999999998
+          }
+        }
+      }
+    }
+  ],
+  "capitalAllocation": {
+    "currentAllocation": 861.43,
+    "maxSafeAllocation": 415.33148932000006,
+    "isOverallocated": true,
+    "rankedSymbols": [
+      {
+        "symbol": "STBLUSDT",
+        "currentLong": 9820,
+        "currentShort": 375,
+        "optimizedLong": 1030,
+        "optimizedShort": 375,
+        "currentTradeSize": 25.34,
+        "currentShortTradeSize": 25.34,
+        "currentMargin": 50.67,
+        "currentLeverage": 20,
+        "currentTp": 1.5,
+        "currentSl": 0.5,
+        "currentLongMaxPositions": 1,
+        "currentShortMaxPositions": 1,
+        "optimizedTradeSize": 48.48,
+        "optimizedShortTradeSize": 48.48,
+        "optimizedMargin": 48.48,
+        "optimizedLeverage": 20,
+        "optimizedTp": 10,
+        "optimizedSl": 0.63,
+        "optimizedLongMaxPositions": 1,
+        "optimizedShortMaxPositions": 1,
+        "longImprovement": 58.02987973302755,
+        "shortImprovement": 158.2460368060052,
+        "totalDailyImprovement": 216.27591653903278,
+        "currentPerformance": {
+          "long": {
+            "totalTrades": 15,
+            "wins": 6,
+            "losses": 9,
+            "totalPnl": 22.80599999999966,
+            "winRate": 40,
+            "avgWin": 7.6019999999999515,
+            "avgLoss": -2.5340000000000056,
+            "avgDuration": 46.55797444444445,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "STBLUSDT",
+                "side": "LONG",
+                "entryPrice": 0.3358984,
+                "exitPrice": 0.334218908,
+                "pnl": -2.5340000000000074,
+                "exitReason": "SL",
+                "duration": 918090,
+                "margin": 25.34
+              },
+              {
+                "symbol": "STBLUSDT",
+                "side": "LONG",
+                "entryPrice": 0.3507389,
+                "exitPrice": 0.3489852055,
+                "pnl": -2.53400000000002,
+                "exitReason": "SL",
+                "duration": 3757962,
+                "margin": 25.34
+              },
+              {
+                "symbol": "STBLUSDT",
+                "side": "LONG",
+                "entryPrice": 0.320177,
+                "exitPrice": 0.318576115,
+                "pnl": -2.5339999999999945,
+                "exitReason": "SL",
+                "duration": 1050019,
+                "margin": 25.34
+              }
+            ],
+            "sharpeRatio": 0.30618621784789396,
+            "maxDrawdown": 10.136000000000099,
+            "maxDrawdownPercent": 30.769230769231292,
+            "profitFactor": 1.999999999999983
+          },
+          "short": {
+            "totalTrades": 31,
+            "wins": 17,
+            "losses": 14,
+            "totalPnl": 93.7580000000009,
+            "winRate": 54.83870967741935,
+            "avgWin": 7.6019999999999985,
+            "avgLoss": -2.533999999999936,
+            "avgDuration": 47.05678655913979,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "STBLUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.3398822,
+                "exitPrice": 0.334783967,
+                "pnl": 7.602000000000011,
+                "exitReason": "TP",
+                "duration": 2401978,
+                "margin": 25.34
+              },
+              {
+                "symbol": "STBLUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.3577253,
+                "exitPrice": 0.3523594205,
+                "pnl": 7.602000000000006,
+                "exitReason": "TP",
+                "duration": 22632019,
+                "margin": 25.34
+              },
+              {
+                "symbol": "STBLUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.3425545,
+                "exitPrice": 0.3374161825,
+                "pnl": 7.601999999999984,
+                "exitReason": "TP",
+                "duration": 2163128,
+                "margin": 25.34
+              }
+            ],
+            "sharpeRatio": 0.5995884442857616,
+            "maxDrawdown": 10.135999999999717,
+            "maxDrawdownPercent": 10.810810810810406,
+            "profitFactor": 3.6428571428572343
+          },
+          "totalPnl": 116.56400000000056,
+          "dailyPnl": 25.23282904403321
+        },
+        "optimizedPerformance": {
+          "long": {
+            "totalTrades": 54,
+            "wins": 6,
+            "losses": 48,
+            "totalPnl": 290.8772055472104,
+            "winRate": 11.11111111111111,
+            "avgWin": 96.96370990932809,
+            "avgLoss": -6.06052195643246,
+            "avgDuration": 90.84218209876545,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "STBLUSDT",
+                "side": "LONG",
+                "entryPrice": 0.3194542,
+                "exitPrice": 0.3513996200000001,
+                "pnl": 96.96370990932816,
+                "exitReason": "TP",
+                "duration": 27416987,
+                "margin": 48.481854954663994
+              },
+              {
+                "symbol": "STBLUSDT",
+                "side": "LONG",
+                "entryPrice": 0.333341,
+                "exitPrice": 0.3312409517,
+                "pnl": -6.108713724287635,
+                "exitReason": "SL",
+                "duration": 2399970,
+                "margin": 48.481854954663994
+              },
+              {
+                "symbol": "STBLUSDT",
+                "side": "LONG",
+                "entryPrice": 0.3406687,
+                "exitPrice": 0.3393352,
+                "pnl": -3.795508867239276,
+                "exitReason": "EOD",
+                "duration": 10090934,
+                "margin": 48.481854954663994
+              }
+            ],
+            "sharpeRatio": 0.16636193486913473,
+            "maxDrawdown": 134.391701934328,
+            "maxDrawdownPercent": 44.680851063829316,
+            "profitFactor": 1.9999042699287157
+          },
+          "short": {
+            "totalTrades": 26,
+            "wins": 10,
+            "losses": 16,
+            "totalPnl": 824.7815012517223,
+            "winRate": 38.46153846153847,
+            "avgWin": 92.25209208403243,
+            "avgLoss": -6.108713724287633,
+            "avgDuration": 153.33060128205128,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "STBLUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.3375007,
+                "exitPrice": 0.33962695440999996,
+                "pnl": -6.108713724287584,
+                "exitReason": "SL",
+                "duration": 269962,
+                "margin": 48.481854954663994
+              },
+              {
+                "symbol": "STBLUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.3398822,
+                "exitPrice": 0.34202345786,
+                "pnl": -6.10871372428757,
+                "exitReason": "SL",
+                "duration": 3105040,
+                "margin": 48.481854954663994
+              },
+              {
+                "symbol": "STBLUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.3577253,
+                "exitPrice": 0.3393352,
+                "pnl": 49.84753165637248,
+                "exitReason": "EOD",
+                "duration": 44173903,
+                "margin": 48.481854954663994
+              }
+            ],
+            "sharpeRatio": 0.6520628904813633,
+            "maxDrawdown": 24.434854897150572,
+            "maxDrawdownPercent": 2.962585225307216,
+            "profitFactor": 9.438575804146723
+          },
+          "totalPnl": 1115.6587067989326,
+          "dailyPnl": 241.50874558306597
+        },
+        "optimizedConfig": {
+          "longVolumeThresholdUSDT": 1030,
+          "shortVolumeThresholdUSDT": 375,
+          "tradeSize": 48.48,
+          "shortTradeSize": 48.48,
+          "maxPositionMarginUSDT": 48.48,
+          "leverage": 20,
+          "tpPercent": 10,
+          "slPercent": 0.63,
+          "priceOffsetBps": 5,
+          "maxSlippageBps": 50,
+          "orderType": "LIMIT",
+          "vwapProtection": false,
+          "vwapTimeframe": "1m",
+          "vwapLookback": 100,
+          "maxPositionsLong": 2,
+          "maxPositionsShort": 2
+        },
+        "spanDays": 4.6195375
+      },
+      {
+        "symbol": "ASTERUSDT",
+        "currentLong": 350,
+        "currentShort": 260,
+        "optimizedLong": 175,
+        "optimizedShort": 130,
+        "currentTradeSize": 20.59,
+        "currentShortTradeSize": 20.59,
+        "currentMargin": 329.37,
+        "currentLeverage": 20,
+        "currentTp": 1.25,
+        "currentSl": 0.52,
+        "currentLongMaxPositions": 15,
+        "currentShortMaxPositions": 15,
+        "optimizedTradeSize": 21.01,
+        "optimizedShortTradeSize": 21.01,
+        "optimizedMargin": 315.15,
+        "optimizedLeverage": 20,
+        "optimizedTp": 5,
+        "optimizedSl": 0.5,
+        "optimizedLongMaxPositions": 15,
+        "optimizedShortMaxPositions": 15,
+        "longImprovement": 66.23987496882921,
+        "shortImprovement": 36.44126160574333,
+        "totalDailyImprovement": 102.68113657457252,
+        "currentPerformance": {
+          "long": {
+            "totalTrades": 469,
+            "wins": 379,
+            "losses": 90,
+            "totalPnl": 1756.722855311953,
+            "winRate": 80.81023454157783,
+            "avgWin": 5.143655027208329,
+            "avgLoss": -2.1413599999999917,
+            "avgDuration": 5.858286140724947,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "ASTERUSDT",
+                "side": "LONG",
+                "entryPrice": 1.7918,
+                "exitPrice": 1.78248264,
+                "pnl": -2.141360000000012,
+                "exitReason": "SL",
+                "duration": 329828,
+                "margin": 20.59
+              },
+              {
+                "symbol": "ASTERUSDT",
+                "side": "LONG",
+                "entryPrice": 1.76564,
+                "exitPrice": 1.7877105,
+                "pnl": 5.147499999999972,
+                "exitReason": "TP",
+                "duration": 5902,
+                "margin": 20.59
+              },
+              {
+                "symbol": "ASTERUSDT",
+                "side": "LONG",
+                "entryPrice": 1.7743,
+                "exitPrice": 1.7902,
+                "pnl": 3.690255311954016,
+                "exitReason": "EOD",
+                "duration": 232922,
+                "margin": 20.59
+              }
+            ],
+            "sharpeRatio": 1.3053074610241229,
+            "maxDrawdown": 12.848160000000462,
+            "maxDrawdownPercent": 0.7313709138097898,
+            "profitFactor": 10.115301881420967
+          },
+          "short": {
+            "totalTrades": 352,
+            "wins": 295,
+            "losses": 57,
+            "totalPnl": 1396.4549799999959,
+            "winRate": 83.80681818181817,
+            "avgWin": 5.147499999999998,
+            "avgLoss": -2.141360000000036,
+            "avgDuration": 6.3432000473484855,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "ASTERUSDT",
+                "side": "SHORT",
+                "entryPrice": 1.86301,
+                "exitPrice": 1.8397223750000002,
+                "pnl": 5.147499999999958,
+                "exitReason": "TP",
+                "duration": 34890,
+                "margin": 20.59
+              },
+              {
+                "symbol": "ASTERUSDT",
+                "side": "SHORT",
+                "entryPrice": 1.85308,
+                "exitPrice": 1.8299165000000002,
+                "pnl": 5.147499999999976,
+                "exitReason": "TP",
+                "duration": 38913,
+                "margin": 20.59
+              },
+              {
+                "symbol": "ASTERUSDT",
+                "side": "SHORT",
+                "entryPrice": 1.82939,
+                "exitPrice": 1.8065226250000002,
+                "pnl": 5.14749999999998,
+                "exitReason": "TP",
+                "duration": 1164894,
+                "margin": 20.59
+              }
+            ],
+            "sharpeRatio": 1.4774707599020367,
+            "maxDrawdown": 10.706800000000385,
+            "maxDrawdownPercent": 0.766712866031701,
+            "profitFactor": 12.440958164642161
+          },
+          "totalPnl": 3153.177835311949,
+          "dailyPnl": 669.7773705510907
+        },
+        "optimizedPerformance": {
+          "long": {
+            "totalTrades": 507,
+            "wins": 137,
+            "losses": 370,
+            "totalPnl": 2068.56693179022,
+            "winRate": 27.021696252465482,
+            "avgWin": 20.7731976283218,
+            "avgLoss": -2.1009760629455547,
+            "avgDuration": 69.83288313609468,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "ASTERUSDT",
+                "side": "LONG",
+                "entryPrice": 1.7918,
+                "exitPrice": 1.7828410000000001,
+                "pnl": -2.100976062945539,
+                "exitReason": "SL",
+                "duration": 329828,
+                "margin": 21.009760629455535
+              },
+              {
+                "symbol": "ASTERUSDT",
+                "side": "LONG",
+                "entryPrice": 1.7743,
+                "exitPrice": 1.7902,
+                "pnl": 3.765487166864043,
+                "exitReason": "EOD",
+                "duration": 232922,
+                "margin": 21.009760629455535
+              },
+              {
+                "symbol": "ASTERUSDT",
+                "side": "LONG",
+                "entryPrice": 1.76564,
+                "exitPrice": 1.7902,
+                "pnl": 5.844902936718993,
+                "exitReason": "EOD",
+                "duration": 5902,
+                "margin": 21.009760629455535
+              }
+            ],
+            "sharpeRatio": 0.3996837806972435,
+            "maxDrawdown": 178.5829653503722,
+            "maxDrawdownPercent": 8.611955420466092,
+            "profitFactor": 3.6610114869337163
+          },
+          "short": {
+            "totalTrades": 380,
+            "wins": 104,
+            "losses": 276,
+            "totalPnl": 1568.0131475915496,
+            "winRate": 27.368421052631582,
+            "avgWin": 20.65271674004337,
+            "avgLoss": -2.1009760629455103,
+            "avgDuration": 75.35295131578947,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "ASTERUSDT",
+                "side": "SHORT",
+                "entryPrice": 1.8624,
+                "exitPrice": 1.7902,
+                "pnl": 16.28978433684161,
+                "exitReason": "EOD",
+                "duration": 3202926,
+                "margin": 21.009760629455535
+              },
+              {
+                "symbol": "ASTERUSDT",
+                "side": "SHORT",
+                "entryPrice": 1.86301,
+                "exitPrice": 1.7902,
+                "pnl": 16.422033928220014,
+                "exitReason": "EOD",
+                "duration": 3034890,
+                "margin": 21.009760629455535
+              },
+              {
+                "symbol": "ASTERUSDT",
+                "side": "SHORT",
+                "entryPrice": 1.85308,
+                "exitPrice": 1.7902,
+                "pnl": 14.25835634058071,
+                "exitReason": "EOD",
+                "duration": 1658913,
+                "margin": 21.009760629455535
+              }
+            ],
+            "sharpeRatio": 0.40572684679634136,
+            "maxDrawdown": 90.34197070665755,
+            "maxDrawdownPercent": 5.761556964329144,
+            "profitFactor": 3.7040798592089748
+          },
+          "totalPnl": 3636.58007938177,
+          "dailyPnl": 772.4585071256632
+        },
+        "optimizedConfig": {
+          "longVolumeThresholdUSDT": 175,
+          "shortVolumeThresholdUSDT": 130,
+          "tradeSize": 21.01,
+          "shortTradeSize": 21.01,
+          "maxPositionMarginUSDT": 315.15,
+          "leverage": 20,
+          "tpPercent": 5,
+          "slPercent": 0.5,
+          "priceOffsetBps": 5,
+          "maxSlippageBps": 50,
+          "orderType": "LIMIT",
+          "vwapProtection": false,
+          "vwapTimeframe": "1m",
+          "vwapLookback": 100,
+          "maxPositionsLong": 16,
+          "maxPositionsShort": 16
+        },
+        "spanDays": 4.707799895833333
+      },
+      {
+        "symbol": "WLFIUSDT",
+        "currentLong": 195,
+        "currentShort": 515,
+        "optimizedLong": 98,
+        "optimizedShort": 258,
+        "currentTradeSize": 25.34,
+        "currentShortTradeSize": 25.34,
+        "currentMargin": 50.67,
+        "currentLeverage": 20,
+        "currentTp": 1.25,
+        "currentSl": 6,
+        "currentLongMaxPositions": 1,
+        "currentShortMaxPositions": 1,
+        "optimizedTradeSize": 48.48,
+        "optimizedShortTradeSize": 48.48,
+        "optimizedMargin": 48.48,
+        "optimizedLeverage": 20,
+        "optimizedTp": 2,
+        "optimizedSl": 0.63,
+        "optimizedLongMaxPositions": 1,
+        "optimizedShortMaxPositions": 1,
+        "longImprovement": 15.546893865605623,
+        "shortImprovement": 8.87261373291528,
+        "totalDailyImprovement": 24.41950759852091,
+        "currentPerformance": {
+          "long": {
+            "totalTrades": 19,
+            "wins": 19,
+            "losses": 0,
+            "totalPnl": 115.52628234700185,
+            "winRate": 100,
+            "avgWin": 6.080330649842203,
+            "avgLoss": 0,
+            "avgDuration": 27.16582894736842,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "WLFIUSDT",
+                "side": "LONG",
+                "entryPrice": 0.1928486,
+                "exitPrice": 0.1952592075,
+                "pnl": 6.334999999999986,
+                "exitReason": "TP",
+                "duration": 118920,
+                "margin": 25.34
+              },
+              {
+                "symbol": "WLFIUSDT",
+                "side": "LONG",
+                "entryPrice": 0.1932851,
+                "exitPrice": 0.19570116375,
+                "pnl": 6.335000000000008,
+                "exitReason": "TP",
+                "duration": 908783,
+                "margin": 25.34
+              },
+              {
+                "symbol": "WLFIUSDT",
+                "side": "LONG",
+                "entryPrice": 0.2028511,
+                "exitPrice": 0.20345,
+                "pnl": 1.4962823470022726,
+                "exitReason": "EOD",
+                "duration": 3233920,
+                "margin": 25.34
+              }
+            ],
+            "sharpeRatio": 5.627483940380233,
+            "maxDrawdown": 0,
+            "maxDrawdownPercent": 0,
+            "profitFactor": null
+          },
+          "short": {
+            "totalTrades": 4,
+            "wins": 4,
+            "losses": 0,
+            "totalPnl": 25.33999999999996,
+            "winRate": 100,
+            "avgWin": 6.33499999999999,
+            "avgLoss": 0,
+            "avgDuration": 293.11925833333333,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "WLFIUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.2156821,
+                "exitPrice": 0.21298607375,
+                "pnl": 6.334999999999961,
+                "exitReason": "TP",
+                "duration": 46089931,
+                "margin": 25.34
+              },
+              {
+                "symbol": "WLFIUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.2119585,
+                "exitPrice": 0.20930901875,
+                "pnl": 6.335000000000005,
+                "exitReason": "TP",
+                "duration": 165911,
+                "margin": 25.34
+              },
+              {
+                "symbol": "WLFIUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.2047051,
+                "exitPrice": 0.20214628625,
+                "pnl": 6.334999999999999,
+                "exitReason": "TP",
+                "duration": 1583838,
+                "margin": 25.34
+              }
+            ],
+            "sharpeRatio": 361287836577525.8,
+            "maxDrawdown": 0,
+            "maxDrawdownPercent": 0,
+            "profitFactor": null
+          },
+          "totalPnl": 140.8662823470018,
+          "dailyPnl": 31.235729113153532
+        },
+        "optimizedPerformance": {
+          "long": {
+            "totalTrades": 17,
+            "wins": 12,
+            "losses": 5,
+            "totalPnl": 185.63936128163243,
+            "winRate": 70.58823529411765,
+            "avgWin": 18.015244158589223,
+            "avgLoss": -6.1087137242876555,
+            "avgDuration": 108.04993137254901,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "WLFIUSDT",
+                "side": "LONG",
+                "entryPrice": 0.1928486,
+                "exitPrice": 0.19670557200000002,
+                "pnl": 19.39274198186567,
+                "exitReason": "TP",
+                "duration": 1558920,
+                "margin": 48.481854954663994
+              },
+              {
+                "symbol": "WLFIUSDT",
+                "side": "LONG",
+                "entryPrice": 0.1932851,
+                "exitPrice": 0.19715080199999999,
+                "pnl": 19.39274198186559,
+                "exitReason": "TP",
+                "duration": 9428783,
+                "margin": 48.481854954663994
+              },
+              {
+                "symbol": "WLFIUSDT",
+                "side": "LONG",
+                "entryPrice": 0.2028511,
+                "exitPrice": 0.20345,
+                "pnl": 2.862768102548871,
+                "exitReason": "EOD",
+                "duration": 3233920,
+                "margin": 48.481854954663994
+              }
+            ],
+            "sharpeRatio": 0.9379085872734445,
+            "maxDrawdown": 12.217427448575293,
+            "maxDrawdownPercent": 6.581269922621799,
+            "profitFactor": 7.077854345786355
+          },
+          "short": {
+            "totalTrades": 6,
+            "wins": 4,
+            "losses": 2,
+            "totalPnl": 65.35354047888733,
+            "winRate": 66.66666666666666,
+            "avgWin": 19.39274198186564,
+            "avgLoss": -6.108713724287618,
+            "avgDuration": 102.47342499999999,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "WLFIUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.2119585,
+                "exitPrice": 0.20771932999999998,
+                "pnl": 19.392741981865665,
+                "exitReason": "TP",
+                "duration": 1665911,
+                "margin": 48.481854954663994
+              },
+              {
+                "symbol": "WLFIUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.2047051,
+                "exitPrice": 0.20061099799999998,
+                "pnl": 19.392741981865676,
+                "exitReason": "TP",
+                "duration": 3863838,
+                "margin": 48.481854954663994
+              },
+              {
+                "symbol": "WLFIUSDT",
+                "side": "SHORT",
+                "entryPrice": 0.210686,
+                "exitPrice": 0.20647228,
+                "pnl": 19.392741981865615,
+                "exitReason": "TP",
+                "duration": 10514964,
+                "margin": 48.481854954663994
+              }
+            ],
+            "sharpeRatio": 0.9060645827371389,
+            "maxDrawdown": 6.108713724287635,
+            "maxDrawdownPercent": 9.347181008901996,
+            "profitFactor": 6.34920634920641
+          },
+          "totalPnl": 250.99290176051977,
+          "dailyPnl": 55.65523671167444
+        },
+        "optimizedConfig": {
+          "longVolumeThresholdUSDT": 98,
+          "shortVolumeThresholdUSDT": 258,
+          "tradeSize": 48.48,
+          "shortTradeSize": 48.48,
+          "maxPositionMarginUSDT": 48.48,
+          "leverage": 20,
+          "tpPercent": 2,
+          "slPercent": 0.63,
+          "priceOffsetBps": 5,
+          "maxSlippageBps": 50,
+          "orderType": "LIMIT",
+          "vwapProtection": false,
+          "vwapTimeframe": "1m",
+          "vwapLookback": 100,
+          "maxPositionsLong": 2,
+          "maxPositionsShort": 2
+        },
+        "spanDays": 4.509780509259259
+      },
+      {
+        "symbol": "SOLUSDT",
+        "currentLong": 265,
+        "currentShort": 390,
+        "optimizedLong": 133,
+        "optimizedShort": 195,
+        "currentTradeSize": 18.1,
+        "currentShortTradeSize": 18.1,
+        "currentMargin": 126.68,
+        "currentLeverage": 20,
+        "currentTp": 1.88,
+        "currentSl": 0.5,
+        "currentLongMaxPositions": 6,
+        "currentShortMaxPositions": 6,
+        "optimizedTradeSize": 20.2,
+        "optimizedShortTradeSize": 20.2,
+        "optimizedMargin": 121.21,
+        "optimizedLeverage": 20,
+        "optimizedTp": 2.35,
+        "optimizedSl": 0.5,
+        "optimizedLongMaxPositions": 6,
+        "optimizedShortMaxPositions": 6,
+        "longImprovement": 11.860341277561485,
+        "shortImprovement": 8.988345611457337,
+        "totalDailyImprovement": 20.848686889018808,
+        "currentPerformance": {
+          "long": {
+            "totalTrades": 61,
+            "wins": 61,
+            "losses": 0,
+            "totalPnl": 415.1415999999982,
+            "winRate": 100,
+            "avgWin": 6.805599999999971,
+            "avgLoss": 0,
+            "avgDuration": 2.678350819672131,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "SOLUSDT",
+                "side": "LONG",
+                "entryPrice": 202.7564,
+                "exitPrice": 206.56822032,
+                "pnl": 6.8055999999999655,
+                "exitReason": "TP",
+                "duration": 22804,
+                "margin": 18.1
+              },
+              {
+                "symbol": "SOLUSDT",
+                "side": "LONG",
+                "entryPrice": 202.5857,
+                "exitPrice": 206.39431116,
+                "pnl": 6.8055999999999965,
+                "exitReason": "TP",
+                "duration": 42825,
+                "margin": 18.1
+              },
+              {
+                "symbol": "SOLUSDT",
+                "side": "LONG",
+                "entryPrice": 212.0586,
+                "exitPrice": 216.04530168,
+                "pnl": 6.805599999999969,
+                "exitReason": "TP",
+                "duration": 43870,
+                "margin": 18.1
+              }
+            ],
+            "sharpeRatio": 465276223465857.44,
+            "maxDrawdown": 0,
+            "maxDrawdownPercent": 0,
+            "profitFactor": null
+          },
+          "short": {
+            "totalTrades": 53,
+            "wins": 51,
+            "losses": 2,
+            "totalPnl": 338.25208004733696,
+            "winRate": 96.22641509433963,
+            "avgWin": 6.703374118575233,
+            "avgLoss": -1.809999999999976,
+            "avgDuration": 18.434978301886794,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "SOLUSDT",
+                "side": "SHORT",
+                "entryPrice": 231.4305,
+                "exitPrice": 227.07960659999998,
+                "pnl": 6.8056000000000285,
+                "exitReason": "TP",
+                "duration": 100833,
+                "margin": 18.1
+              },
+              {
+                "symbol": "SOLUSDT",
+                "side": "SHORT",
+                "entryPrice": 231.199,
+                "exitPrice": 226.8524588,
+                "pnl": 6.8056000000000285,
+                "exitReason": "TP",
+                "duration": 25978,
+                "margin": 18.1
+              },
+              {
+                "symbol": "SOLUSDT",
+                "side": "SHORT",
+                "entryPrice": 226.466,
+                "exitPrice": 225.47,
+                "pnl": 1.5920800473360388,
+                "exitReason": "EOD",
+                "duration": 41725833,
+                "margin": 18.1
+              }
+            ],
+            "sharpeRatio": 3.6047463188808844,
+            "maxDrawdown": 1.8099999999999739,
+            "maxDrawdownPercent": 0.5351038786654829,
+            "profitFactor": 94.43980111805011
+          },
+          "totalPnl": 753.3936800473352,
+          "dailyPnl": 160.84075784978984
+        },
+        "optimizedPerformance": {
+          "long": {
+            "totalTrades": 52,
+            "wins": 50,
+            "losses": 2,
+            "totalPnl": 470.6965866910227,
+            "winRate": 96.15384615384616,
+            "avgWin": 9.494738014797452,
+            "avgLoss": -2.020157024424985,
+            "avgDuration": 126.73643076923076,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "SOLUSDT",
+                "side": "LONG",
+                "entryPrice": 202.7564,
+                "exitPrice": 207.52117540000003,
+                "pnl": 9.49473801479746,
+                "exitReason": "TP",
+                "duration": 742804,
+                "margin": 20.201570244249833
+              },
+              {
+                "symbol": "SOLUSDT",
+                "side": "LONG",
+                "entryPrice": 203.5712,
+                "exitPrice": 208.3551232,
+                "pnl": 9.494738014797429,
+                "exitReason": "TP",
+                "duration": 1897936,
+                "margin": 20.201570244249833
+              },
+              {
+                "symbol": "SOLUSDT",
+                "side": "LONG",
+                "entryPrice": 212.0586,
+                "exitPrice": 217.04197710000003,
+                "pnl": 9.494738014797447,
+                "exitReason": "TP",
+                "duration": 2203870,
+                "margin": 20.201570244249833
+              }
+            ],
+            "sharpeRatio": 4.087719298245616,
+            "maxDrawdown": 2.0201570244250036,
+            "maxDrawdownPercent": 0.429184549356226,
+            "profitFactor": 117.50000000000028
+          },
+          "short": {
+            "totalTrades": 53,
+            "wins": 43,
+            "losses": 10,
+            "totalPnl": 380.35436101319357,
+            "winRate": 81.13207547169812,
+            "avgWin": 9.315254215289372,
+            "avgLoss": -2.0201570244249423,
+            "avgDuration": 171.1937962264151,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "SOLUSDT",
+                "side": "SHORT",
+                "entryPrice": 230.5825,
+                "exitPrice": 225.16381125,
+                "pnl": 9.494738014797424,
+                "exitReason": "TP",
+                "duration": 3824876,
+                "margin": 20.201570244249833
+              },
+              {
+                "symbol": "SOLUSDT",
+                "side": "SHORT",
+                "entryPrice": 231.199,
+                "exitPrice": 225.7658235,
+                "pnl": 9.494738014797424,
+                "exitReason": "TP",
+                "duration": 865978,
+                "margin": 20.201570244249833
+              },
+              {
+                "symbol": "SOLUSDT",
+                "side": "SHORT",
+                "entryPrice": 226.466,
+                "exitPrice": 225.47,
+                "pnl": 1.7769346359518006,
+                "exitReason": "EOD",
+                "duration": 41725833,
+                "margin": 20.201570244249833
+              }
+            ],
+            "sharpeRatio": 1.5747959696341889,
+            "maxDrawdown": 6.06047107327484,
+            "maxDrawdownPercent": 1.5933749404452384,
+            "profitFactor": 19.827960223610102
+          },
+          "totalPnl": 851.0509477042162,
+          "dailyPnl": 181.68944473880865
+        },
+        "optimizedConfig": {
+          "longVolumeThresholdUSDT": 133,
+          "shortVolumeThresholdUSDT": 195,
+          "tradeSize": 20.2,
+          "shortTradeSize": 20.2,
+          "maxPositionMarginUSDT": 121.21,
+          "leverage": 20,
+          "tpPercent": 2.35,
+          "slPercent": 0.5,
+          "priceOffsetBps": 5,
+          "maxSlippageBps": 50,
+          "orderType": "LIMIT",
+          "vwapProtection": false,
+          "vwapTimeframe": "1m",
+          "vwapLookback": 100,
+          "maxPositionsLong": 7,
+          "maxPositionsShort": 7
+        },
+        "spanDays": 4.684096805555556
+      },
+      {
+        "symbol": "HYPEUSDT",
+        "currentLong": 160,
+        "currentShort": 100,
+        "optimizedLong": 80,
+        "optimizedShort": 75,
+        "currentTradeSize": 10.13,
+        "currentShortTradeSize": 10.13,
+        "currentMargin": 50.67,
+        "currentLeverage": 20,
+        "currentTp": 1.5,
+        "currentSl": 0.5,
+        "currentLongMaxPositions": 5,
+        "currentShortMaxPositions": 5,
+        "optimizedTradeSize": 9.7,
+        "optimizedShortTradeSize": 9.7,
+        "optimizedMargin": 48.48,
+        "optimizedLeverage": 20,
+        "optimizedTp": 1.88,
+        "optimizedSl": 0.5,
+        "optimizedLongMaxPositions": 5,
+        "optimizedShortMaxPositions": 5,
+        "longImprovement": 5.753226728914339,
+        "shortImprovement": 5.82697002395408,
+        "totalDailyImprovement": 11.58019675286841,
+        "currentPerformance": {
+          "long": {
+            "totalTrades": 144,
+            "wins": 71,
+            "losses": 73,
+            "totalPnl": 133.3725887897984,
+            "winRate": 49.30555555555556,
+            "avgWin": 2.9200223773211036,
+            "avgLoss": -1.013,
+            "avgDuration": 56.29413125,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "HYPEUSDT",
+                "side": "LONG",
+                "entryPrice": 48.79645,
+                "exitPrice": 48.8335,
+                "pnl": 0.15382942816537148,
+                "exitReason": "EOD",
+                "duration": 3308920,
+                "margin": 10.13
+              },
+              {
+                "symbol": "HYPEUSDT",
+                "side": "LONG",
+                "entryPrice": 48.79211,
+                "exitPrice": 48.8335,
+                "pnl": 0.17186413950944043,
+                "exitReason": "EOD",
+                "duration": 3185624,
+                "margin": 10.13
+              },
+              {
+                "symbol": "HYPEUSDT",
+                "side": "LONG",
+                "entryPrice": 48.75075,
+                "exitPrice": 48.8335,
+                "pnl": 0.34389522212480583,
+                "exitReason": "EOD",
+                "duration": 649513,
+                "margin": 10.13
+              }
+            ],
+            "sharpeRatio": 0.4616716808074283,
+            "maxDrawdown": 12.156000000000018,
+            "maxDrawdownPercent": 9.090909090909188,
+            "profitFactor": 2.8035752855318985
+          },
+          "short": {
+            "totalTrades": 169,
+            "wins": 68,
+            "losses": 101,
+            "totalPnl": 104.3390000000026,
+            "winRate": 40.23668639053255,
+            "avgWin": 3.0390000000000046,
+            "avgLoss": -1.0129999999999777,
+            "avgDuration": 45.73231213017752,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "HYPEUSDT",
+                "side": "SHORT",
+                "entryPrice": 49.92312,
+                "exitPrice": 49.174273199999995,
+                "pnl": 3.0390000000000112,
+                "exitReason": "TP",
+                "duration": 5094817,
+                "margin": 10.13
+              },
+              {
+                "symbol": "HYPEUSDT",
+                "side": "SHORT",
+                "entryPrice": 49.75945,
+                "exitPrice": 49.01305825,
+                "pnl": 3.0390000000000037,
+                "exitReason": "TP",
+                "duration": 6905108,
+                "margin": 10.13
+              },
+              {
+                "symbol": "HYPEUSDT",
+                "side": "SHORT",
+                "entryPrice": 49.67056,
+                "exitPrice": 48.925501600000004,
+                "pnl": 3.0389999999999913,
+                "exitReason": "TP",
+                "duration": 1182863,
+                "margin": 10.13
+              }
+            ],
+            "sharpeRatio": 0.31071490733480356,
+            "maxDrawdown": 27.35099999999906,
+            "maxDrawdownPercent": 26.213592233008153,
+            "profitFactor": 2.019801980198067
+          },
+          "totalPnl": 237.711588789801,
+          "dailyPnl": 50.5771656967133
+        },
+        "optimizedPerformance": {
+          "long": {
+            "totalTrades": 248,
+            "wins": 89,
+            "losses": 159,
+            "totalPnl": 160.41263042833273,
+            "winRate": 35.88709677419355,
+            "avgWin": 3.5301435781497257,
+            "avgLoss": -0.9671078492263699,
+            "avgDuration": 67.97773924731183,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "HYPEUSDT",
+                "side": "LONG",
+                "entryPrice": 48.79645,
+                "exitPrice": 48.8335,
+                "pnl": 0.14724454144269386,
+                "exitReason": "EOD",
+                "duration": 3308920,
+                "margin": 9.696370990932799
+              },
+              {
+                "symbol": "HYPEUSDT",
+                "side": "LONG",
+                "entryPrice": 48.79211,
+                "exitPrice": 48.8335,
+                "pnl": 0.16450725140384656,
+                "exitReason": "EOD",
+                "duration": 3185624,
+                "margin": 9.696370990932799
+              },
+              {
+                "symbol": "HYPEUSDT",
+                "side": "LONG",
+                "entryPrice": 48.75075,
+                "exitPrice": 48.8335,
+                "pnl": 0.32917429967733053,
+                "exitReason": "EOD",
+                "duration": 649513,
+                "margin": 9.696370990932799
+              }
+            ],
+            "sharpeRatio": 0.2954830937323006,
+            "maxDrawdown": 30.52417587945652,
+            "maxDrawdownPercent": 18.587623996221264,
+            "profitFactor": 2.043197476796172
+          },
+          "short": {
+            "totalTrades": 216,
+            "wins": 74,
+            "losses": 142,
+            "totalPnl": 131.7256335359874,
+            "winRate": 34.25925925925926,
+            "avgWin": 3.640731102800408,
+            "avgLoss": -0.9696370990932587,
+            "avgDuration": 60.338157870370374,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "HYPEUSDT",
+                "side": "SHORT",
+                "entryPrice": 49.89077,
+                "exitPrice": 48.952823524,
+                "pnl": 3.645835492590734,
+                "exitReason": "TP",
+                "duration": 6697749,
+                "margin": 9.696370990932799
+              },
+              {
+                "symbol": "HYPEUSDT",
+                "side": "SHORT",
+                "entryPrice": 49.75945,
+                "exitPrice": 48.82397234,
+                "pnl": 3.6458354925907464,
+                "exitReason": "TP",
+                "duration": 9665108,
+                "margin": 9.696370990932799
+              },
+              {
+                "symbol": "HYPEUSDT",
+                "side": "SHORT",
+                "entryPrice": 49.67056,
+                "exitPrice": 48.8335,
+                "pnl": 3.2681106481063305,
+                "exitReason": "EOD",
+                "duration": 4422863,
+                "margin": 9.696370990932799
+              }
+            ],
+            "sharpeRatio": 0.27870521674545057,
+            "maxDrawdown": 43.86638236297888,
+            "maxDrawdownPercent": 33.301325782574125,
+            "profitFactor": 1.9566932901586935
+          },
+          "totalPnl": 292.1382639643201,
+          "dailyPnl": 62.15736244958171
+        },
+        "optimizedConfig": {
+          "longVolumeThresholdUSDT": 80,
+          "shortVolumeThresholdUSDT": 75,
+          "tradeSize": 9.7,
+          "shortTradeSize": 9.7,
+          "maxPositionMarginUSDT": 48.48,
+          "leverage": 20,
+          "tpPercent": 1.88,
+          "slPercent": 0.5,
+          "priceOffsetBps": 5,
+          "maxSlippageBps": 50,
+          "orderType": "LIMIT",
+          "vwapProtection": false,
+          "vwapTimeframe": "1m",
+          "vwapLookback": 100,
+          "maxPositionsLong": 5,
+          "maxPositionsShort": 5
+        },
+        "spanDays": 4.699978449074074
+      },
+      {
+        "symbol": "ETHUSDT",
+        "currentLong": 825,
+        "currentShort": 1300,
+        "optimizedLong": 413,
+        "optimizedShort": 650,
+        "currentTradeSize": 8.45,
+        "currentShortTradeSize": 8.45,
+        "currentMargin": 76.01,
+        "currentLeverage": 20,
+        "currentTp": 1.25,
+        "currentSl": 0.95,
+        "currentLongMaxPositions": 8,
+        "currentShortMaxPositions": 8,
+        "optimizedTradeSize": 9.09,
+        "optimizedShortTradeSize": 9.09,
+        "optimizedMargin": 72.73,
+        "optimizedLeverage": 20,
+        "optimizedTp": 0.5,
+        "optimizedSl": 1.19,
+        "optimizedLongMaxPositions": 8,
+        "optimizedShortMaxPositions": 8,
+        "longImprovement": -5.031880062812309,
+        "shortImprovement": 7.5323561549152265,
+        "totalDailyImprovement": 2.5004760921029217,
+        "currentPerformance": {
+          "long": {
+            "totalTrades": 88,
+            "wins": 79,
+            "losses": 9,
+            "totalPnl": 151.47162360141465,
+            "winRate": 89.77272727272727,
+            "avgWin": 2.1002673873596778,
+            "avgLoss": -1.6054999999999895,
+            "avgDuration": 334.60430606060606,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "ETHUSDT",
+                "side": "LONG",
+                "entryPrice": 4358.8,
+                "exitPrice": 4413.285,
+                "pnl": 2.1124999999999874,
+                "exitReason": "TP",
+                "duration": 18627967,
+                "margin": 8.45
+              },
+              {
+                "symbol": "ETHUSDT",
+                "side": "LONG",
+                "entryPrice": 4376.9,
+                "exitPrice": 4415.5,
+                "pnl": 1.490415590943376,
+                "exitReason": "EOD",
+                "duration": 26225809,
+                "margin": 8.45
+              },
+              {
+                "symbol": "ETHUSDT",
+                "side": "LONG",
+                "entryPrice": 4369.78,
+                "exitPrice": 4415.5,
+                "pnl": 1.7682080104719329,
+                "exitReason": "EOD",
+                "duration": 2828960,
+                "margin": 8.45
+              }
+            ],
+            "sharpeRatio": 1.5295167713281486,
+            "maxDrawdown": 10.731499999999947,
+            "maxDrawdownPercent": 7.084825358602495,
+            "profitFactor": 11.48282802874948
+          },
+          "short": {
+            "totalTrades": 112,
+            "wins": 66,
+            "losses": 46,
+            "totalPnl": 61.63909250681463,
+            "winRate": 58.92857142857143,
+            "avgWin": 2.0163507680465482,
+            "avgLoss": -1.553044743136033,
+            "avgDuration": 249.34091726190476,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "ETHUSDT",
+                "side": "SHORT",
+                "entryPrice": 4424.47,
+                "exitPrice": 4415.5,
+                "pnl": 0.3426240883088919,
+                "exitReason": "EOD",
+                "duration": 3940833,
+                "margin": 8.45
+              },
+              {
+                "symbol": "ETHUSDT",
+                "side": "SHORT",
+                "entryPrice": 4433.51,
+                "exitPrice": 4415.5,
+                "pnl": 0.6865192590069802,
+                "exitReason": "EOD",
+                "duration": 972878,
+                "margin": 8.45
+              },
+              {
+                "symbol": "ETHUSDT",
+                "side": "SHORT",
+                "entryPrice": 4438.21,
+                "exitPrice": 4415.5,
+                "pnl": 0.8647607932026665,
+                "exitReason": "EOD",
+                "duration": 625978,
+                "margin": 8.45
+              }
+            ],
+            "sharpeRatio": 0.30784596351325827,
+            "maxDrawdown": 17.66050000000019,
+            "maxDrawdownPercent": 28.24324324324404,
+            "profitFactor": 1.8628085429022985
+          },
+          "totalPnl": 213.11071610822927,
+          "dailyPnl": 45.3716606028276
+        },
+        "optimizedPerformance": {
+          "long": {
+            "totalTrades": 144,
+            "wins": 143,
+            "losses": 1,
+            "totalPnl": 127.8368800344176,
+            "winRate": 99.30555555555556,
+            "avgWin": 0.9090945813854193,
+            "avgLoss": -2.1636451036973448,
+            "avgDuration": 11.64707928240741,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "ETHUSDT",
+                "side": "LONG",
+                "entryPrice": 4358.8,
+                "exitPrice": 4380.594,
+                "pnl": 0.9090945813854321,
+                "exitReason": "TP",
+                "duration": 567967,
+                "margin": 9.090945813854377
+              },
+              {
+                "symbol": "ETHUSDT",
+                "side": "LONG",
+                "entryPrice": 4347.73,
+                "exitPrice": 4369.468649999999,
+                "pnl": 0.9090945813854096,
+                "exitReason": "TP",
+                "duration": 16820,
+                "margin": 9.090945813854377
+              },
+              {
+                "symbol": "ETHUSDT",
+                "side": "LONG",
+                "entryPrice": 4369.78,
+                "exitPrice": 4391.6289,
+                "pnl": 0.909094581385436,
+                "exitReason": "TP",
+                "duration": 8960,
+                "margin": 9.090945813854377
+              }
+            ],
+            "sharpeRatio": 3.4790636522838825,
+            "maxDrawdown": 2.1636451036973448,
+            "maxDrawdownPercent": 1.6925046223866111,
+            "profitFactor": 60.08403361344408
+          },
+          "short": {
+            "totalTrades": 127,
+            "wins": 121,
+            "losses": 6,
+            "totalPnl": 97.01857372545385,
+            "winRate": 95.2755905511811,
+            "avgWin": 0.9090945813854375,
+            "avgLoss": -2.1636451036973487,
+            "avgDuration": 15.792536876640419,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "ETHUSDT",
+                "side": "SHORT",
+                "entryPrice": 4424.47,
+                "exitPrice": 4402.347650000001,
+                "pnl": 0.9090945813854229,
+                "exitReason": "TP",
+                "duration": 400833,
+                "margin": 9.090945813854377
+              },
+              {
+                "symbol": "ETHUSDT",
+                "side": "SHORT",
+                "entryPrice": 4433.51,
+                "exitPrice": 4411.34245,
+                "pnl": 0.9090945813854425,
+                "exitReason": "TP",
+                "duration": 12878,
+                "margin": 9.090945813854377
+              },
+              {
+                "symbol": "ETHUSDT",
+                "side": "SHORT",
+                "entryPrice": 4438.21,
+                "exitPrice": 4416.01895,
+                "pnl": 0.9090945813854524,
+                "exitReason": "TP",
+                "duration": 25978,
+                "margin": 9.090945813854377
+              }
+            ],
+            "sharpeRatio": 1.1718197299167112,
+            "maxDrawdown": 2.5091010446238613,
+            "maxDrawdownPercent": 2.5862068965517806,
+            "profitFactor": 8.473389355742267
+          },
+          "totalPnl": 224.85545375987147,
+          "dailyPnl": 47.872136694930525
+        },
+        "optimizedConfig": {
+          "volumeThresholdUSDT": 50000,
+          "longVolumeThresholdUSDT": 413,
+          "shortVolumeThresholdUSDT": 650,
+          "tradeSize": 9.09,
+          "shortTradeSize": 9.09,
+          "maxPositionMarginUSDT": 72.73,
+          "leverage": 20,
+          "tpPercent": 0.5,
+          "slPercent": 1.19,
+          "vwapProtection": false,
+          "maxPositionsLong": 9,
+          "maxPositionsShort": 9
+        },
+        "spanDays": 4.697000578703704
+      },
+      {
+        "symbol": "BTCUSDT",
+        "currentLong": 970,
+        "currentShort": 4460,
+        "optimizedLong": 970,
+        "optimizedShort": 4460,
+        "currentTradeSize": 10.13,
+        "currentShortTradeSize": 10.13,
+        "currentMargin": 101.35,
+        "currentLeverage": 20,
+        "currentTp": 0.5,
+        "currentSl": 0.5,
+        "currentLongMaxPositions": 10,
+        "currentShortMaxPositions": 10,
+        "optimizedTradeSize": 10.13,
+        "optimizedShortTradeSize": 10.13,
+        "optimizedMargin": 101.35,
+        "optimizedLeverage": 20,
+        "optimizedTp": 0.5,
+        "optimizedSl": 0.5,
+        "optimizedLongMaxPositions": 10,
+        "optimizedShortMaxPositions": 10,
+        "longImprovement": 0,
+        "shortImprovement": 0,
+        "totalDailyImprovement": 0,
+        "currentPerformance": {
+          "long": {
+            "totalTrades": 110,
+            "wins": 108,
+            "losses": 2,
+            "totalPnl": 107.37799999999761,
+            "winRate": 98.18181818181819,
+            "avgWin": 1.012999999999978,
+            "avgLoss": -1.0130000000000037,
+            "avgDuration": 21.23765,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "entryPrice": 117936.5,
+                "exitPrice": 118526.18249999998,
+                "pnl": 1.012999999999967,
+                "exitReason": "TP",
+                "duration": 1208820,
+                "margin": 10.13
+              },
+              {
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "entryPrice": 118503.2,
+                "exitPrice": 119095.71599999999,
+                "pnl": 1.0129999999999808,
+                "exitReason": "TP",
+                "duration": 188920,
+                "margin": 10.13
+              },
+              {
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "entryPrice": 118835.6,
+                "exitPrice": 119429.77799999999,
+                "pnl": 1.012999999999975,
+                "exitReason": "TP",
+                "duration": 5902,
+                "margin": 10.13
+              }
+            ],
+            "sharpeRatio": 3.606193232430743,
+            "maxDrawdown": 1.0130000000000052,
+            "maxDrawdownPercent": 0.9433962264151201,
+            "profitFactor": 53.99999999999863
+          },
+          "short": {
+            "totalTrades": 128,
+            "wins": 120,
+            "losses": 8,
+            "totalPnl": 112.5881097533836,
+            "winRate": 93.75,
+            "avgWin": 1.0057675812781954,
+            "avgLoss": -1.012999999999977,
+            "avgDuration": 29.257743229166667,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "BTCUSDT",
+                "side": "SHORT",
+                "entryPrice": 120285.1,
+                "exitPrice": 119683.67450000001,
+                "pnl": 1.012999999999996,
+                "exitReason": "TP",
+                "duration": 44945,
+                "margin": 10.13
+              },
+              {
+                "symbol": "BTCUSDT",
+                "side": "SHORT",
+                "entryPrice": 120102,
+                "exitPrice": 119501.49,
+                "pnl": 1.0129999999999912,
+                "exitReason": "TP",
+                "duration": 235934,
+                "margin": 10.13
+              },
+              {
+                "symbol": "BTCUSDT",
+                "side": "SHORT",
+                "entryPrice": 119513.4,
+                "exitPrice": 119427.8,
+                "pnl": 0.14510975338328785,
+                "exitReason": "EOD",
+                "duration": 5874950,
+                "margin": 10.13
+              }
+            ],
+            "sharpeRatio": 1.7783932450463433,
+            "maxDrawdown": 2.0259999999999536,
+            "maxDrawdownPercent": 1.7994795404574826,
+            "profitFactor": 14.892905941928207
+          },
+          "totalPnl": 219.9661097533812,
+          "dailyPnl": 46.727433251422426
+        },
+        "optimizedPerformance": {
+          "long": {
+            "totalTrades": 110,
+            "wins": 108,
+            "losses": 2,
+            "totalPnl": 107.37799999999761,
+            "winRate": 98.18181818181819,
+            "avgWin": 1.012999999999978,
+            "avgLoss": -1.0130000000000037,
+            "avgDuration": 21.23765,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "entryPrice": 117936.5,
+                "exitPrice": 118526.18249999998,
+                "pnl": 1.012999999999967,
+                "exitReason": "TP",
+                "duration": 1208820,
+                "margin": 10.13
+              },
+              {
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "entryPrice": 118503.2,
+                "exitPrice": 119095.71599999999,
+                "pnl": 1.0129999999999808,
+                "exitReason": "TP",
+                "duration": 188920,
+                "margin": 10.13
+              },
+              {
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "entryPrice": 118835.6,
+                "exitPrice": 119429.77799999999,
+                "pnl": 1.012999999999975,
+                "exitReason": "TP",
+                "duration": 5902,
+                "margin": 10.13
+              }
+            ],
+            "sharpeRatio": 3.606193232430743,
+            "maxDrawdown": 1.0130000000000052,
+            "maxDrawdownPercent": 0.9433962264151201,
+            "profitFactor": 53.99999999999863
+          },
+          "short": {
+            "totalTrades": 128,
+            "wins": 120,
+            "losses": 8,
+            "totalPnl": 112.5881097533836,
+            "winRate": 93.75,
+            "avgWin": 1.0057675812781954,
+            "avgLoss": -1.012999999999977,
+            "avgDuration": 29.257743229166667,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "BTCUSDT",
+                "side": "SHORT",
+                "entryPrice": 120285.1,
+                "exitPrice": 119683.67450000001,
+                "pnl": 1.012999999999996,
+                "exitReason": "TP",
+                "duration": 44945,
+                "margin": 10.13
+              },
+              {
+                "symbol": "BTCUSDT",
+                "side": "SHORT",
+                "entryPrice": 120102,
+                "exitPrice": 119501.49,
+                "pnl": 1.0129999999999912,
+                "exitReason": "TP",
+                "duration": 235934,
+                "margin": 10.13
+              },
+              {
+                "symbol": "BTCUSDT",
+                "side": "SHORT",
+                "entryPrice": 119513.4,
+                "exitPrice": 119427.8,
+                "pnl": 0.14510975338328785,
+                "exitReason": "EOD",
+                "duration": 5874950,
+                "margin": 10.13
+              }
+            ],
+            "sharpeRatio": 1.7783932450463433,
+            "maxDrawdown": 2.0259999999999536,
+            "maxDrawdownPercent": 1.7994795404574826,
+            "profitFactor": 14.892905941928207
+          },
+          "totalPnl": 219.9661097533812,
+          "dailyPnl": 46.727433251422426
+        },
+        "optimizedConfig": {
+          "volumeThresholdUSDT": 50000,
+          "longVolumeThresholdUSDT": 970,
+          "shortVolumeThresholdUSDT": 4460,
+          "tradeSize": 10.13,
+          "shortTradeSize": 10.13,
+          "maxPositionMarginUSDT": 101.35,
+          "leverage": 20,
+          "tpPercent": 0.5,
+          "slPercent": 0.5,
+          "vwapProtection": false,
+          "maxPositionsLong": 10,
+          "maxPositionsShort": 10
+        },
+        "spanDays": 4.707429756944444
+      },
+      {
+        "symbol": "BNBUSDT",
+        "currentLong": 445,
+        "currentShort": 790,
+        "optimizedLong": 445,
+        "optimizedShort": 790,
+        "currentTradeSize": 15.2,
+        "currentShortTradeSize": 15.2,
+        "currentMargin": 76.01,
+        "currentLeverage": 20,
+        "currentTp": 0.5,
+        "currentSl": 2,
+        "currentLongMaxPositions": 5,
+        "currentShortMaxPositions": 5,
+        "optimizedTradeSize": 15.2,
+        "optimizedShortTradeSize": 15.2,
+        "optimizedMargin": 76.01,
+        "optimizedLeverage": 20,
+        "optimizedTp": 0.5,
+        "optimizedSl": 2,
+        "optimizedLongMaxPositions": 5,
+        "optimizedShortMaxPositions": 5,
+        "longImprovement": 0,
+        "shortImprovement": 0,
+        "totalDailyImprovement": 0,
+        "currentPerformance": {
+          "long": {
+            "totalTrades": 83,
+            "wins": 83,
+            "losses": 0,
+            "totalPnl": 126.15999999999714,
+            "winRate": 100,
+            "avgWin": 1.5199999999999656,
+            "avgLoss": 0,
+            "avgDuration": 12.646116064257027,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "BNBUSDT",
+                "side": "LONG",
+                "entryPrice": 1018.004,
+                "exitPrice": 1023.0940199999999,
+                "pnl": 1.5199999999999605,
+                "exitReason": "TP",
+                "duration": 26798,
+                "margin": 15.2
+              },
+              {
+                "symbol": "BNBUSDT",
+                "side": "LONG",
+                "entryPrice": 1032.828,
+                "exitPrice": 1037.9921399999998,
+                "pnl": 1.5199999999999592,
+                "exitReason": "TP",
+                "duration": 44963939,
+                "margin": 15.2
+              },
+              {
+                "symbol": "BNBUSDT",
+                "side": "LONG",
+                "entryPrice": 1050.376,
+                "exitPrice": 1055.6278799999998,
+                "pnl": 1.5199999999999423,
+                "exitReason": "TP",
+                "duration": 8920,
+                "margin": 15.2
+              }
+            ],
+            "sharpeRatio": 124278377357184.86,
+            "maxDrawdown": 0,
+            "maxDrawdownPercent": 0,
+            "profitFactor": null
+          },
+          "short": {
+            "totalTrades": 52,
+            "wins": 51,
+            "losses": 1,
+            "totalPnl": 71.43999999999998,
+            "winRate": 98.07692307692307,
+            "avgWin": 1.5199999999999994,
+            "avgLoss": -6.08,
+            "avgDuration": 45.63096634615385,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "BNBUSDT",
+                "side": "SHORT",
+                "entryPrice": 1054.457,
+                "exitPrice": 1049.184715,
+                "pnl": 1.520000000000003,
+                "exitReason": "TP",
+                "duration": 36933,
+                "margin": 15.2
+              },
+              {
+                "symbol": "BNBUSDT",
+                "side": "SHORT",
+                "entryPrice": 1059.84,
+                "exitPrice": 1054.5408,
+                "pnl": 1.5199999999999794,
+                "exitReason": "TP",
+                "duration": 15892,
+                "margin": 15.2
+              },
+              {
+                "symbol": "BNBUSDT",
+                "side": "SHORT",
+                "entryPrice": 1064.713,
+                "exitPrice": 1059.389435,
+                "pnl": 1.5199999999999763,
+                "exitReason": "TP",
+                "duration": 742941,
+                "margin": 15.2
+              }
+            ],
+            "sharpeRatio": 1.3162632789863289,
+            "maxDrawdown": 6.079999999999998,
+            "maxDrawdownPercent": 8.51063829787234,
+            "profitFactor": 12.749999999999995
+          },
+          "totalPnl": 197.59999999999712,
+          "dailyPnl": 42.37786018330898
+        },
+        "optimizedPerformance": {
+          "long": {
+            "totalTrades": 83,
+            "wins": 83,
+            "losses": 0,
+            "totalPnl": 126.15999999999714,
+            "winRate": 100,
+            "avgWin": 1.5199999999999656,
+            "avgLoss": 0,
+            "avgDuration": 12.646116064257027,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "BNBUSDT",
+                "side": "LONG",
+                "entryPrice": 1018.004,
+                "exitPrice": 1023.0940199999999,
+                "pnl": 1.5199999999999605,
+                "exitReason": "TP",
+                "duration": 26798,
+                "margin": 15.2
+              },
+              {
+                "symbol": "BNBUSDT",
+                "side": "LONG",
+                "entryPrice": 1032.828,
+                "exitPrice": 1037.9921399999998,
+                "pnl": 1.5199999999999592,
+                "exitReason": "TP",
+                "duration": 44963939,
+                "margin": 15.2
+              },
+              {
+                "symbol": "BNBUSDT",
+                "side": "LONG",
+                "entryPrice": 1050.376,
+                "exitPrice": 1055.6278799999998,
+                "pnl": 1.5199999999999423,
+                "exitReason": "TP",
+                "duration": 8920,
+                "margin": 15.2
+              }
+            ],
+            "sharpeRatio": 124278377357184.86,
+            "maxDrawdown": 0,
+            "maxDrawdownPercent": 0,
+            "profitFactor": null
+          },
+          "short": {
+            "totalTrades": 52,
+            "wins": 51,
+            "losses": 1,
+            "totalPnl": 71.43999999999998,
+            "winRate": 98.07692307692307,
+            "avgWin": 1.5199999999999994,
+            "avgLoss": -6.08,
+            "avgDuration": 45.63096634615385,
+            "activePositions": 0,
+            "recentTrades": [
+              {
+                "symbol": "BNBUSDT",
+                "side": "SHORT",
+                "entryPrice": 1054.457,
+                "exitPrice": 1049.184715,
+                "pnl": 1.520000000000003,
+                "exitReason": "TP",
+                "duration": 36933,
+                "margin": 15.2
+              },
+              {
+                "symbol": "BNBUSDT",
+                "side": "SHORT",
+                "entryPrice": 1059.84,
+                "exitPrice": 1054.5408,
+                "pnl": 1.5199999999999794,
+                "exitReason": "TP",
+                "duration": 15892,
+                "margin": 15.2
+              },
+              {
+                "symbol": "BNBUSDT",
+                "side": "SHORT",
+                "entryPrice": 1064.713,
+                "exitPrice": 1059.389435,
+                "pnl": 1.5199999999999763,
+                "exitReason": "TP",
+                "duration": 742941,
+                "margin": 15.2
+              }
+            ],
+            "sharpeRatio": 1.3162632789863289,
+            "maxDrawdown": 6.079999999999998,
+            "maxDrawdownPercent": 8.51063829787234,
+            "profitFactor": 12.749999999999995
+          },
+          "totalPnl": 197.59999999999712,
+          "dailyPnl": 42.37786018330898
+        },
+        "optimizedConfig": {
+          "longVolumeThresholdUSDT": 445,
+          "shortVolumeThresholdUSDT": 790,
+          "tradeSize": 15.2,
+          "shortTradeSize": 15.2,
+          "maxPositionMarginUSDT": 76.01,
+          "leverage": 20,
+          "tpPercent": 0.5,
+          "slPercent": 2,
+          "priceOffsetBps": 5,
+          "maxSlippageBps": 50,
+          "orderType": "LIMIT",
+          "vwapProtection": false,
+          "vwapTimeframe": "1m",
+          "vwapLookback": 100,
+          "maxPositionsLong": 5,
+          "maxPositionsShort": 5
+        },
+        "spanDays": 4.662812118055555
+      }
+    ]
+  },
+  "recommendedMaxOpenPositions": 51,
+  "optimizedConfig": {
+    "api": {
+      "apiKey": "5c42d29d49cce1ac12e3e1284f613aedde30df50d9eb1f528dbaaab61fb1e4ef",
+      "secretKey": "c6f530add755f68e77de0021f9645baf2ff178117aa554d586f78ce666d412a4"
+    },
+    "symbols": {
+      "BTCUSDT": {
+        "volumeThresholdUSDT": 50000,
+        "longVolumeThresholdUSDT": 970,
+        "shortVolumeThresholdUSDT": 4460,
+        "tradeSize": 10.13,
+        "shortTradeSize": 10.13,
+        "maxPositionMarginUSDT": 101.35,
+        "leverage": 20,
+        "tpPercent": 0.5,
+        "slPercent": 0.5,
+        "vwapProtection": false,
+        "maxPositionsLong": 10,
+        "maxPositionsShort": 10
+      },
+      "ETHUSDT": {
+        "volumeThresholdUSDT": 50000,
+        "longVolumeThresholdUSDT": 825,
+        "shortVolumeThresholdUSDT": 1300,
+        "tradeSize": 8.45,
+        "shortTradeSize": 8.45,
+        "maxPositionMarginUSDT": 76.01,
+        "leverage": 20,
+        "tpPercent": 1.25,
+        "slPercent": 0.95,
+        "vwapProtection": false,
+        "maxPositionsLong": 9,
+        "maxPositionsShort": 9
+      },
+      "ASTERUSDT": {
+        "longVolumeThresholdUSDT": 350,
+        "shortVolumeThresholdUSDT": 260,
+        "tradeSize": 20.59,
+        "shortTradeSize": 20.59,
+        "maxPositionMarginUSDT": 329.37,
+        "leverage": 20,
+        "tpPercent": 1.25,
+        "slPercent": 0.52,
+        "priceOffsetBps": 5,
+        "maxSlippageBps": 50,
+        "orderType": "LIMIT",
+        "vwapProtection": false,
+        "vwapTimeframe": "1m",
+        "vwapLookback": 100,
+        "maxPositionsLong": 16,
+        "maxPositionsShort": 16
+      },
+      "STBLUSDT": {
+        "longVolumeThresholdUSDT": 9820,
+        "shortVolumeThresholdUSDT": 375,
+        "tradeSize": 25.34,
+        "shortTradeSize": 25.34,
+        "maxPositionMarginUSDT": 50.67,
+        "leverage": 20,
+        "tpPercent": 1.5,
+        "slPercent": 0.5,
+        "priceOffsetBps": 5,
+        "maxSlippageBps": 50,
+        "orderType": "LIMIT",
+        "vwapProtection": false,
+        "vwapTimeframe": "1m",
+        "vwapLookback": 100,
+        "maxPositionsLong": 2,
+        "maxPositionsShort": 2
+      },
+      "BNBUSDT": {
+        "longVolumeThresholdUSDT": 445,
+        "shortVolumeThresholdUSDT": 790,
+        "tradeSize": 15.2,
+        "shortTradeSize": 15.2,
+        "maxPositionMarginUSDT": 76.01,
+        "leverage": 20,
+        "tpPercent": 0.5,
+        "slPercent": 2,
+        "priceOffsetBps": 5,
+        "maxSlippageBps": 50,
+        "orderType": "LIMIT",
+        "vwapProtection": false,
+        "vwapTimeframe": "1m",
+        "vwapLookback": 100,
+        "maxPositionsLong": 5,
+        "maxPositionsShort": 5
+      },
+      "WLFIUSDT": {
+        "longVolumeThresholdUSDT": 195,
+        "shortVolumeThresholdUSDT": 515,
+        "tradeSize": 25.34,
+        "shortTradeSize": 25.34,
+        "maxPositionMarginUSDT": 50.67,
+        "leverage": 20,
+        "tpPercent": 1.25,
+        "slPercent": 6,
+        "priceOffsetBps": 5,
+        "maxSlippageBps": 50,
+        "orderType": "LIMIT",
+        "vwapProtection": false,
+        "vwapTimeframe": "1m",
+        "vwapLookback": 100,
+        "maxPositionsLong": 2,
+        "maxPositionsShort": 2
+      },
+      "SOLUSDT": {
+        "longVolumeThresholdUSDT": 265,
+        "shortVolumeThresholdUSDT": 390,
+        "tradeSize": 18.1,
+        "shortTradeSize": 18.1,
+        "maxPositionMarginUSDT": 126.68,
+        "leverage": 20,
+        "tpPercent": 1.88,
+        "slPercent": 0.5,
+        "priceOffsetBps": 5,
+        "maxSlippageBps": 50,
+        "orderType": "LIMIT",
+        "vwapProtection": false,
+        "vwapTimeframe": "1m",
+        "vwapLookback": 100,
+        "maxPositionsLong": 7,
+        "maxPositionsShort": 7
+      },
+      "HYPEUSDT": {
+        "longVolumeThresholdUSDT": 160,
+        "shortVolumeThresholdUSDT": 100,
+        "tradeSize": 10.13,
+        "shortTradeSize": 10.13,
+        "maxPositionMarginUSDT": 50.67,
+        "leverage": 20,
+        "tpPercent": 1.5,
+        "slPercent": 0.5,
+        "priceOffsetBps": 5,
+        "maxSlippageBps": 50,
+        "orderType": "LIMIT",
+        "vwapProtection": false,
+        "vwapTimeframe": "1m",
+        "vwapLookback": 100,
+        "maxPositionsLong": 5,
+        "maxPositionsShort": 5
+      }
+    },
+    "global": {
+      "riskPercent": 97,
+      "paperMode": false,
+      "positionMode": "HEDGE",
+      "maxOpenPositions": 51,
+      "server": {
+        "dashboardPassword": "",
+        "dashboardPort": 3000,
+        "websocketPort": 8080
+      },
+      "rateLimit": {
+        "maxRequestWeight": 2400,
+        "maxOrderCount": 1200,
+        "reservePercent": 30,
+        "enableBatching": true,
+        "queueTimeout": 30000
+      }
+    },
+    "version": "1.1.0"
+  }
+}

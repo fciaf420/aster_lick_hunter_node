@@ -7,6 +7,9 @@ const axios = require('axios');
 const crypto = require('crypto');
 const readline = require('readline');
 
+const FORCE_OPTIMIZER_OVERWRITE = process.env.FORCE_OPTIMIZER_OVERWRITE === '1';
+const FORCE_OPTIMIZER_CONFIRM = process.env.FORCE_OPTIMIZER_CONFIRM === '1';
+
 // Connect to the database
 const dbPath = path.join(__dirname, 'data', 'liquidations.db');
 const db = new Database(dbPath, { readonly: true });
@@ -48,7 +51,7 @@ async function getAccountBalance(credentials) {
       availableBalance: parseFloat(usdtBalance?.availableBalance || 0),
       crossMargin: parseFloat(usdtBalance?.crossUnPnl || 0)
     };
-  } catch (_error) {
+  } catch (error) {
     console.error('❌ Failed to fetch balance:', error.response?.data || error.message);
     return { totalWalletBalance: 0, availableBalance: 0, crossMargin: 0 };
   }
@@ -65,7 +68,7 @@ async function getAccountInfo(credentials) {
     );
 
     return response.data;
-  } catch (_error) {
+  } catch (error) {
     console.error('❌ Failed to fetch account info:', error.response?.data || error.message);
     return null;
   }
@@ -86,7 +89,7 @@ async function getUserTrades(credentials, symbol, limit = 100, startTime = null,
     );
 
     return response.data;
-  } catch (_error) {
+  } catch (error) {
     console.error(`❌ Failed to fetch trade history for ${symbol}:`, error.response?.data || error.message);
     return [];
   }
@@ -105,7 +108,7 @@ async function getCurrentPositions(credentials) {
     // Filter out positions with zero size
     const activePositions = response.data.filter(pos => parseFloat(pos.positionAmt) !== 0);
     return activePositions;
-  } catch (_error) {
+  } catch (error) {
     console.error('❌ Failed to fetch positions:', error.response?.data || error.message);
     return [];
   }
@@ -129,7 +132,7 @@ async function _getHistoricalPrices(symbol, interval = '1m', limit = 1000) {
     }));
 
     return priceData;
-  } catch (_error) {
+  } catch (error) {
     console.error(`❌ Failed to fetch price data for ${symbol}:`, error.response?.data || error.message);
     return [];
   }
@@ -163,7 +166,7 @@ async function getCachedHistoricalPrices(symbol, interval = '1m', totalCandles =
     let response;
     try {
       response = await axios.get(`https://fapi.asterdex.com/fapi/v1/klines?${params.toString()}`);
-    } catch (_error) {
+    } catch (error) {
       console.error(`❌ Failed to fetch price data for ${symbol}:`, error.response?.data || error.message);
       break;
     }
@@ -422,7 +425,7 @@ function generateTpCandidates(volStats, currentTp) {
     ? [currentTp, currentTp * 0.5, currentTp * 0.75, currentTp * 1.25, currentTp * 1.5, currentTp * 2]
     : [];
 
-  const general = [0.1, 0.15, 0.2, 0.25, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10, 12.5, 15, 20, 25, 30];
+  const general = [0.1, 0.15, 0.2, 0.25, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10]; // trimmed: 12.5, 15, 20, 25, 30
   const dynamic = [
     base * 0.5,
     base * 0.75,
@@ -451,7 +454,7 @@ function generateSlCandidates(volStats, currentSl) {
     ? [currentSl, currentSl * 0.5, currentSl * 0.75, currentSl * 1.25, currentSl * 1.5, currentSl * 2, currentSl * 3]
     : [];
 
-  const general = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5, 10, 12.5, 15, 20, 25, 30, 35, 40];
+  const general = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5]; // trimmed: 10, 12.5, 15, 20, 25, 30, 35, 40
   const dynamic = [
     base * 0.5,
     base * 0.75,
@@ -506,8 +509,14 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
   const longThresholdCandidates = generateThresholdCandidates(symbol, 'SELL', currentLongThreshold || 1000);
   const shortThresholdCandidates = generateThresholdCandidates(symbol, 'BUY', currentShortThreshold || 1000);
 
-  const tpCandidates = generateTpCandidates(volStats, currentTp).slice(0, 8);
-  const slCandidates = generateSlCandidates(volStats, currentSl).slice(0, 8);
+  const tpCandidatesFull = generateTpCandidates(volStats, currentTp);
+  const slCandidatesFull = generateSlCandidates(volStats, currentSl);
+  const tpCandidates = tpCandidatesFull.length > 10
+    ? [...tpCandidatesFull.slice(0, 5), ...tpCandidatesFull.slice(-5)]
+    : tpCandidatesFull;
+  const slCandidates = slCandidatesFull.length > 10
+    ? [...slCandidatesFull.slice(0, 5), ...slCandidatesFull.slice(-5)]
+    : slCandidatesFull;
   const leverageCandidates = generateLeverageCandidates(leverageCurrent).slice(0, 6);
   const marginCandidates = generateMarginCandidates(capitalBudget, currentMargin).slice(-6); // focus on higher budgets
 
@@ -598,9 +607,18 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
           if (!bestLongSide || !bestShortSide) continue;
 
           const combinedPnl = bestLongSide.result.totalPnl + bestShortSide.result.totalPnl;
-          if (combinedPnl > bestCombination.totalPnl) {
+          const stopExitCount = (bestLongSide.result.exitReasons?.SL || 0) + (bestShortSide.result.exitReasons?.SL || 0);
+          const totalTrades = (bestLongSide.result.totalTrades || 0) + (bestShortSide.result.totalTrades || 0);
+          const stopRate = totalTrades > 0 ? stopExitCount / totalTrades : 0;
+          const combinedProfitFactor = ((bestLongSide.result.profitFactor || 0) + (bestShortSide.result.profitFactor || 0)) / 2;
+          const pnlPenalty = Math.abs(combinedPnl) * stopRate * 0.5;
+          const adjustedPnl = combinedPnl - pnlPenalty;
+          if (combinedProfitFactor < 1.05 || stopRate > 0.65) {
+            continue;
+          }
+          if (adjustedPnl > bestCombination.totalPnl) {
             bestCombination = {
-              totalPnl: combinedPnl,
+              totalPnl: adjustedPnl,
               leverage,
               margin,
               tp,
@@ -766,11 +784,11 @@ function analyzeCurrentConfig() {
   console.log('📊 ROLLING 60-SECOND WINDOW ANALYSIS');
   console.log('=====================================\n');
 
-  for (const [_symbol, symbolConfig] of Object.entries(config.symbols)) {
+  for (const [symbol, symbolConfig] of Object.entries(config.symbols)) {
     console.log(`🔍 ${symbol} Analysis:`);
 
-    const _longThreshold = symbolConfig.longVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
-    const _shortThreshold = symbolConfig.shortVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
+    const longThreshold = symbolConfig.longVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
+    const shortThreshold = symbolConfig.shortVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
     const tradeSize = symbolConfig.tradeSize || 20;
     const leverage = symbolConfig.leverage || 10;
     const tpPercent = symbolConfig.tpPercent || 1;
@@ -859,12 +877,12 @@ function rankSymbolProfitability() {
 
   const symbolStats = [];
 
-  for (const [_symbol, symbolConfig] of Object.entries(config.symbols)) {
+  for (const [symbol, symbolConfig] of Object.entries(config.symbols)) {
     const tradeSize = symbolConfig.tradeSize || 20;
     const leverage = symbolConfig.leverage || 10;
     const tpPercent = symbolConfig.tpPercent || 1;
-    const _longThreshold = symbolConfig.longVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
-    const _shortThreshold = symbolConfig.shortVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
+    const longThreshold = symbolConfig.longVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
+    const shortThreshold = symbolConfig.shortVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
 
     const stats = db.prepare(`
       SELECT
@@ -1180,14 +1198,15 @@ async function generateRecommendations(deployableCapital) {
 
   const baselineTotalMargin = symbolEntries.reduce((sum, [, cfg]) => {
     const baseMargin = cfg.maxPositionMarginUSDT || (cfg.tradeSize || 20) * 5;
-    return sum + (Number.isFinite(baseMargin) && baseMargin > 0 ? baseMargin : 0);
+    const perSide = Number.isFinite(baseMargin) && baseMargin > 0 ? baseMargin : 0;
+    return sum + perSide * 2;
   }, 0);
 
   const scaleFactor = baselineTotalMargin > 0 && sanitizedCapital > 0
     ? Math.max(0.25, Math.min(2.5, sanitizedCapital / baselineTotalMargin))
     : 1;
 
-  for (const [_symbol, symbolConfig] of symbolEntries) {
+  for (const [symbol, symbolConfig] of symbolEntries) {
     const spanDays = getSymbolDataSpanDays(symbol);
     const fallbackMargin = (symbolConfig.tradeSize || 20) * 5;
     const baseMargin = symbolConfig.maxPositionMarginUSDT || fallbackMargin;
@@ -1344,33 +1363,33 @@ function analyzeCapitalAllocation(balance, accountInfo, positions) {
   console.log();
 
   console.log(`🎯 Per-Symbol Capital Allocation:`);
-  console.log(`Symbol      | Trade Size | Max Margin | Max Positions | Strategy`);
-  console.log(`------------|------------|------------|---------------|----------`);
+  console.log(`Symbol      | Trade Size | Max Margin/Side | Max Positions | Strategy`);
+  console.log(`------------|------------|------------------|---------------|----------`);
 
-  for (const [_symbol, symbolConfig] of Object.entries(config.symbols)) {
+  for (const [symbol, symbolConfig] of Object.entries(config.symbols)) {
     const tradeSize = symbolConfig.tradeSize || 20;
     const shortTradeSize = symbolConfig.shortTradeSize || tradeSize;
-    const maxMargin = symbolConfig.maxPositionMarginUSDT || 100;
-    const maxLongPositions = Math.floor(maxMargin / tradeSize);
-    const maxShortPositions = Math.floor(maxMargin / shortTradeSize);
+    const maxMarginPerSide = symbolConfig.maxPositionMarginUSDT || 100;
+    const maxLongPositions = Math.floor(maxMarginPerSide / tradeSize);
+    const maxShortPositions = Math.floor(maxMarginPerSide / shortTradeSize);
 
-    totalMaxAllocation += maxMargin;
+    totalMaxAllocation += maxMarginPerSide * 2;
 
     const _longThreshold = symbolConfig.longVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
     const _shortThreshold = symbolConfig.shortVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
 
-    console.log(`${symbol.padEnd(11)} | $${tradeSize.toString().padEnd(9)} | $${maxMargin.toString().padEnd(10)} | ${maxLongPositions}L/${maxShortPositions}S${' '.padEnd(8)} | Cascade`);
+    console.log(`${symbol.padEnd(11)} | $${tradeSize.toString().padEnd(9)} | $${maxMarginPerSide.toString().padEnd(16)} | ${maxLongPositions}L/${maxShortPositions}S${' '.padEnd(8)} | Cascade`);
   }
 
-  console.log(`------------|------------|------------|---------------|----------`);
-  console.log(`TOTAL       |            | $${totalMaxAllocation.toString().padEnd(10)} |               |`);
+  console.log(`------------|------------|------------------|---------------|----------`);
+  console.log(`TOTAL       |            | $${totalMaxAllocation.toString().padEnd(16)} |               |`);
   console.log();
 
   const utilizationRate = (totalMaxAllocation / balance.availableBalance * 100).toFixed(1);
   const safeUtilization = utilizationRate <= 80 ? '✅' : utilizationRate <= 95 ? '⚠️' : '🚨';
 
   console.log(`📊 Capital Utilization:`);
-  console.log(`   Max Allocation: $${formatLargeNumber(totalMaxAllocation)} (${utilizationRate}% of available) ${safeUtilization}`);
+  console.log(`   Max Allocation (both sides): $${formatLargeNumber(totalMaxAllocation)} (${utilizationRate}% of available) ${safeUtilization}`);
   console.log(`   Safe Range: ≤80% optimal, ≤95% acceptable`);
   console.log();
 
@@ -1497,7 +1516,7 @@ async function analyzeRealTradingHistory(credentials) {
         console.log(`      ⚠️  Large discrepancy detected - backtest may need refinement`);
       }
 
-    } catch (_error) {
+    } catch (error) {
       console.log(`   ❌ Failed to analyze ${symbol}: ${error.message}`);
     }
 
@@ -1602,7 +1621,7 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
 
   // Threshold recommendations
   console.log('🎯 RECOMMENDED THRESHOLD CHANGES:');
-  _recommendations.forEach(_rec => {
+  recommendations.forEach(_rec => {
     if (_rec.optimizedLong !== _rec.currentLong || _rec.optimizedShort !== _rec.currentShort) {
       console.log(`   ${_rec.symbol}:`);
       if (_rec.optimizedLong !== _rec.currentLong) {
@@ -1646,7 +1665,7 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
       improvementPercent: improvementPercent,
       recommendedMaxOpenPositions: recommendedGlobalMax
     },
-    _recommendations: _recommendations.map(_rec => ({
+    recommendations: recommendations.map(_rec => ({
       symbol: _rec.symbol,
       thresholds: {
         current: { long: _rec.currentLong, short: _rec.currentShort },
@@ -1743,12 +1762,15 @@ function askYesNo(question) {
 }
 
 async function maybeApplyOptimizedConfig(originalConfig, optimizedConfig, summary) {
-  if (!process.stdin.isTTY) {
-    console.log('🛑 Non-interactive shell detected. Skipping config overwrite prompt.');
+  const autoMode = FORCE_OPTIMIZER_OVERWRITE;
+  const autoConfirm = FORCE_OPTIMIZER_CONFIRM || autoMode;
+
+  if (!process.stdin.isTTY && !autoMode) {
+    console.log('dY>` Non-interactive shell detected. Skipping config overwrite prompt.');
     return;
   }
 
-  console.log('📊 Optimization Delta Overview:');
+  console.log('dY"S Optimization Delta Overview:');
   if (summary) {
     console.log(`   Current Daily P&L: ${formatCurrency(summary.currentDailyPnl)}`);
     console.log(`   Optimized Daily P&L: ${formatCurrency(summary.optimizedDailyPnl)}`);
@@ -1762,9 +1784,15 @@ async function maybeApplyOptimizedConfig(originalConfig, optimizedConfig, summar
   }
   console.log();
 
-  const confirm = await askYesNo('Overwrite config.user.json with optimized settings? (y/N): ');
+  let confirm = autoConfirm;
   if (!confirm) {
-    console.log('⚙️  Keeping existing config.user.json');
+    confirm = await askYesNo('Overwrite config.user.json with optimized settings? (y/N): ');
+  } else {
+    console.log('dY"? Auto-confirm enabled via FORCE_OPTIMIZER_OVERWRITE/CONFIRM environment variables');
+  }
+
+  if (!confirm) {
+    console.log('�sT�,?  Keeping existing config.user.json');
     return;
   }
 
@@ -1774,8 +1802,8 @@ async function maybeApplyOptimizedConfig(originalConfig, optimizedConfig, summar
   fs.writeFileSync(backupPath, JSON.stringify(originalConfig, null, 2));
   fs.writeFileSync(configPath, JSON.stringify(optimizedConfig, null, 2));
 
-  console.log(`🗂  Backup saved to ${backupPath}`);
-  console.log('✅ config.user.json overwritten with optimized settings');
+  console.log(`dY-,  Backup saved to ${backupPath}`);
+  console.log('�o. config.user.json overwritten with optimized settings');
 }
 
 async function main() {
@@ -1816,7 +1844,7 @@ async function main() {
     console.log('💡 Strategy: Accumulate positions during cascades, profit on rebounds');
     console.log('\n📊 Review optimization-results.json for detailed recommendations and the fully optimized config snapshot');
 
-  } catch (_error) {
+  } catch (error) {
     console.error('❌ Error:', error.message);
     console.error(error.stack);
   } finally {

@@ -517,20 +517,21 @@ export class Hunter extends EventEmitter {
 
         // Check symbol-specific margin limit
         if (symbolConfig.maxPositionMarginUSDT) {
-          const currentMargin = this.positionTracker.getMarginUsage(symbol);
+          const positionSide = side === 'BUY' ? 'LONG' : 'SHORT';
+          const currentMargin = this.positionTracker.getMarginUsage(symbol, positionSide);
           const newTradeMargin = symbolConfig.tradeSize;
           const totalMargin = currentMargin + newTradeMargin;
 
           // Enhanced logging to debug margin issues
-          console.log(`Hunter: Margin check for ${symbol} - Current: ${currentMargin.toFixed(2)} USDT, New trade: ${newTradeMargin} USDT, Total: ${totalMargin.toFixed(2)} USDT, Max allowed: ${symbolConfig.maxPositionMarginUSDT} USDT`);
+          console.log(`Hunter: Margin check for ${symbol} (${positionSide}) - Current: ${currentMargin.toFixed(2)} USDT, New trade: ${newTradeMargin} USDT, Total: ${totalMargin.toFixed(2)} USDT, Max allowed: ${symbolConfig.maxPositionMarginUSDT} USDT`);
 
           if (totalMargin > symbolConfig.maxPositionMarginUSDT) {
-            console.log(`Hunter: Skipping trade - would exceed max margin for ${symbol} (${totalMargin.toFixed(2)}/${symbolConfig.maxPositionMarginUSDT} USDT)`);
+            console.log(`Hunter: Skipping trade - would exceed max margin for ${symbol} ${positionSide} (${totalMargin.toFixed(2)}/${symbolConfig.maxPositionMarginUSDT} USDT)`);
             return;
           }
+
         }
       }
-
       if (this.config.global.paperMode) {
         console.log(`Hunter: PAPER MODE - Would place ${side} order for ${symbol}, quantity: ${symbolConfig.tradeSize}, leverage: ${symbolConfig.leverage}`);
         this.emit('positionOpened', {

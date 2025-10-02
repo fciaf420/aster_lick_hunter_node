@@ -98,16 +98,24 @@ export async function GET(request: NextRequest) {
         console.error('Failed to fetch income history:', err);
       }
 
-      // Create a map of realized PnL by time (within a 5 second window)
-      const pnlMap = new Map<string, string>();
-      incomeRecords.forEach(record => {
-        if (record.incomeType === 'REALIZED_PNL' && record.symbol) {
-          // Create a key with symbol and time window
-          const timeWindow = Math.floor(record.time / 5000) * 5000; // 5 second window
+      // Bucket realized PnL by symbol/time window and preserve every fill
+      const pnlBuckets = new Map<string, number[]>();
+      incomeRecords
+        .filter(record => record?.incomeType === 'REALIZED_PNL' && record?.symbol)
+        .sort((a, b) => (a.time || 0) - (b.time || 0))
+        .forEach(record => {
+          const rawIncome = typeof record.income === 'string' ? parseFloat(record.income) : Number(record.income);
+          if (!Number.isFinite(rawIncome)) {
+            return;
+          }
+
+          const timeWindow = Math.floor((record.time || 0) / 5000) * 5000; // 5 second window
           const key = `${record.symbol}_${timeWindow}`;
-          pnlMap.set(key, record.income);
-        }
-      });
+
+          const bucket = pnlBuckets.get(key) || [];
+          bucket.push(rawIncome);
+          pnlBuckets.set(key, bucket);
+        });
 
       // Transform and enrich order data
       const transformedOrders: Order[] = allOrders.map(order => {
@@ -118,7 +126,17 @@ export async function GET(request: NextRequest) {
         if (order.status === 'FILLED' && order.updateTime) {
           const timeWindow = Math.floor(order.updateTime / 5000) * 5000;
           const key = `${order.symbol}_${timeWindow}`;
-          realizedPnl = pnlMap.get(key) || '0';
+          const bucket = pnlBuckets.get(key);
+          if (bucket && bucket.length > 0) {
+            const amount = bucket.shift() ?? 0;
+            realizedPnl = Number.isFinite(amount) ? amount.toString() : '0';
+
+            if (bucket.length === 0) {
+              pnlBuckets.delete(key);
+            } else {
+              pnlBuckets.set(key, bucket);
+            }
+          }
         }
 
         return {

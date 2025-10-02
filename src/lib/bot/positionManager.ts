@@ -56,7 +56,7 @@ const BASE_URL = 'https://fapi.asterdex.com';
 
 // Position tracking interface for Hunter
 export interface PositionTracker {
-  getMarginUsage(symbol: string): number;
+  getMarginUsage(symbol: string, side?: 'LONG' | 'SHORT'): number;
   getTotalPositionCount(): number;
   getUniquePositionCount(isHedgeMode: boolean): number;
   getPositionsMap(): Map<string, ExchangePosition>;
@@ -1201,6 +1201,54 @@ export class PositionManager extends EventEmitter implements PositionTracker {
     }
   }
 
+  private getBufferedTakeProfitPrice(
+    symbol: string,
+    rawTpPrice: number,
+    markPrice: number,
+    isLong: boolean,
+  ): number {
+    const filter = symbolPrecision.getSymbolFilter(symbol);
+    const tickSize = filter ? parseFloat(filter.tickSize) : 0;
+    const precision = filter ? filter.pricePrecision : 6;
+    const bufferRatio = 0.0005;
+    const fallbackStep = Math.pow(10, -(precision + 2));
+    const baseBump = Math.max(Math.abs(markPrice) * bufferRatio, tickSize > 0 ? tickSize : fallbackStep);
+
+    let target = rawTpPrice;
+    if (isLong && markPrice >= target) {
+      target = markPrice + baseBump;
+    } else if (!isLong && markPrice <= target) {
+      target = markPrice - baseBump;
+    }
+
+    let formatted = symbolPrecision.formatPrice(symbol, target);
+    const bump = Math.max(baseBump, tickSize > 0 ? tickSize : fallbackStep);
+
+    if (isLong) {
+      let attempts = 0;
+      while (formatted <= markPrice && attempts < 10) {
+        target += bump;
+        formatted = symbolPrecision.formatPrice(symbol, target);
+        attempts++;
+      }
+      if (formatted <= markPrice) {
+        formatted = symbolPrecision.formatPrice(symbol, markPrice + bump);
+      }
+    } else {
+      let attempts = 0;
+      while (formatted >= markPrice && attempts < 10) {
+        target -= bump;
+        formatted = symbolPrecision.formatPrice(symbol, target);
+        attempts++;
+      }
+      if (formatted >= markPrice) {
+        formatted = symbolPrecision.formatPrice(symbol, markPrice - bump);
+      }
+    }
+
+    return formatted;
+  }
+
   // Place protective orders (SL/TP) for a position
   private async placeProtectiveOrders(position: ExchangePosition, placeSL: boolean, placeTP: boolean): Promise<void> {
     const symbol = position.symbol;
@@ -1341,34 +1389,6 @@ export class PositionManager extends EventEmitter implements PositionTracker {
         return orderIds;
       };
 
-      const placeMarketChunks = async (): Promise<void> => {
-        const chunkQuantities = symbolPrecision.splitQuantity(symbol, quantity, 'MARKET');
-        const baseId = Date.now();
-
-        for (let i = 0; i < chunkQuantities.length; i++) {
-          const chunkQty = symbolPrecision.formatQuantity(symbol, chunkQuantities[i]);
-          if (chunkQty <= 0) {
-            console.warn(`PositionManager: Skipping market chunk for ${symbol} with non-positive quantity ${chunkQty}`);
-            continue;
-          }
-
-          const params: any = {
-            symbol,
-            side,
-            type: 'MARKET',
-            quantity: chunkQty,
-            positionSide: orderPositionSide as 'BOTH' | 'LONG' | 'SHORT',
-            newClientOrderId: `al_market_tp_${symbol}_${baseId}_${i}`,
-          };
-
-          if (orderPositionSide === 'BOTH') {
-            params.reduceOnly = true;
-          }
-
-          const marketOrder = await placeOrder(params, this.config.api);
-          console.log(`PositionManager: Executed market chunk ${i + 1}/${chunkQuantities.length} for ${symbol}, orderId: ${marketOrder.orderId}`);
-        }
-      };
 
       if (placeSL) {
         const rawSlPrice = isLong
@@ -1413,49 +1433,41 @@ export class PositionManager extends EventEmitter implements PositionTracker {
           ? currentPrice >= rawTpPrice
           : currentPrice <= rawTpPrice;
 
+        let tpStopPrice = symbolPrecision.formatPrice(symbol, rawTpPrice);
+
         if (pastTP) {
-          const pnlPercent = isLong
-            ? ((currentPrice - entryPrice) / entryPrice) * 100
-            : ((entryPrice - currentPrice) / entryPrice) * 100;
-
-          console.log(`PositionManager: Position ${symbol} has exceeded TP target! Current PnL: ${pnlPercent.toFixed(2)}%, target: ${symbolConfig.tpPercent}%`);
-          console.log('PositionManager: Closing position at market - already past TP target');
-
-          try {
-            await placeMarketChunks();
-
-            if (this.statusBroadcaster) {
-              this.statusBroadcaster.broadcastPositionClosed({
-                symbol,
-                side: isLong ? 'LONG' : 'SHORT',
-                quantity,
-                pnl: pnlPercent * quantity * currentPrice / 100,
-                reason: 'Auto-closed at market (exceeded TP target)',
-              });
-            }
-
-            if (placeSL) {
-              console.log(`PositionManager: Position closed, skipping SL placement`);
-            }
-            return;
-          } catch (marketError: any) {
-            console.error(`PositionManager: Failed to close at market: ${marketError.response?.data?.msg || marketError.message}`);
-            console.log(`PositionManager: Not placing TP order since position is past target and market close failed`);
-            return;
+          const bufferedPrice = this.getBufferedTakeProfitPrice(symbol, rawTpPrice, currentPrice, isLong);
+          if (bufferedPrice !== tpStopPrice) {
+            console.log(`PositionManager: ${symbol} mark price ${currentPrice} is past TP ${tpStopPrice}, adjusting stop to ${bufferedPrice}`);
+            tpStopPrice = bufferedPrice;
+          } else {
+            console.log(`PositionManager: ${symbol} mark price ${currentPrice} is past TP ${tpStopPrice}, keeping buffered stop`);
           }
         }
 
-        const tpPrice = symbolPrecision.formatPrice(symbol, rawTpPrice);
-        console.log(`PositionManager: Placing TP orders for ${symbol} with formatted price ${tpPrice} and quantity ${quantity}`);
+        console.log(`PositionManager: Placing TP orders for ${symbol} with formatted price ${tpStopPrice} and quantity ${quantity}`);
 
-        const tpOrderIds = await placeReduceOnlyChunks('TAKE_PROFIT_MARKET', tpPrice, 'al_tp');
+        let tpOrderIds: number[] = [];
+        try {
+          tpOrderIds = await placeReduceOnlyChunks('TAKE_PROFIT_MARKET', tpStopPrice, 'al_tp');
+        } catch (tpError: any) {
+          const errorCode = tpError?.response?.data?.code;
+          if (errorCode === -2021) {
+            const retriedPrice = this.getBufferedTakeProfitPrice(symbol, tpStopPrice, currentPrice, isLong);
+            console.warn(`PositionManager: TP order for ${symbol} would trigger immediately at ${tpStopPrice}. Retrying with ${retriedPrice}`);
+            tpOrderIds = await placeReduceOnlyChunks('TAKE_PROFIT_MARKET', retriedPrice, 'al_tp_retry');
+            tpStopPrice = retriedPrice;
+          } else {
+            throw tpError;
+          }
+        }
         orders.tpOrderIds = tpOrderIds;
         orders.tpOrderId = tpOrderIds[0];
 
         if (this.statusBroadcaster && tpOrderIds.length > 0) {
           this.statusBroadcaster.broadcastTakeProfitPlaced({
             symbol,
-            price: tpPrice,
+            price: tpStopPrice,
             quantity,
             orderId: tpOrderIds[0].toString(),
           });
@@ -1842,58 +1854,6 @@ export class PositionManager extends EventEmitter implements PositionTracker {
           ? markPrice >= targetTP
           : markPrice <= targetTP;
 
-        if (pastTP) {
-          const pnlPercent = isLong
-            ? ((markPrice - entryPrice) / entryPrice) * 100
-            : ((entryPrice - markPrice) / entryPrice) * 100;
-
-          console.log(`PositionManager: [Periodic Check] Position ${symbol} exceeded TP target!`);
-          console.log(`  PnL: ${pnlPercent.toFixed(2)}%, TP target: ${tpPercent}%`);
-
-          // Always close at market if past TP target
-          if (pnlPercent > tpPercent) {
-            console.log(`PositionManager: Auto-closing ${symbol} at market - PnL ${pnlPercent.toFixed(2)}% exceeds TP target`);
-
-            try {
-              const formattedQty = symbolPrecision.formatQuantity(symbol, positionQty);
-              const orderPositionSide = position.positionSide || 'BOTH';
-
-              const marketParams: any = {
-                symbol,
-                side: isLong ? 'SELL' : 'BUY',
-                type: 'MARKET',
-                quantity: formattedQty,
-                positionSide: orderPositionSide as 'BOTH' | 'LONG' | 'SHORT',
-                newClientOrderId: `al_periodic_close_${symbol}_${Date.now()}`,
-              };
-
-              if (orderPositionSide === 'BOTH') {
-                marketParams.reduceOnly = true;
-              }
-
-              const marketOrder = await placeOrder(marketParams, this.config.api);
-              console.log(`PositionManager: Position ${symbol} closed at market! Order ID: ${marketOrder.orderId}`);
-
-              if (this.statusBroadcaster) {
-                this.statusBroadcaster.broadcastPositionClosed({
-                  symbol,
-                  side: isLong ? 'LONG' : 'SHORT',
-                  quantity: positionQty,
-                  pnl: pnlPercent * positionQty * markPrice / 100,
-                  reason: 'Periodic auto-close (exceeded TP target)',
-                });
-              }
-
-              // Remove from tracking
-              this.currentPositions.delete(key);
-              this.positionOrders.delete(key);
-              continue; // Skip to next position
-            } catch (error: any) {
-              console.error(`PositionManager: Failed to auto-close ${symbol}: ${error?.response?.data?.msg || error?.message}`);
-            }
-          }
-        }
-
         // Find SL/TP orders for this position
         const slOrders = openOrders.filter(o =>
           o.symbol === symbol &&
@@ -1908,6 +1868,46 @@ export class PositionManager extends EventEmitter implements PositionTracker {
           o.reduceOnly &&
           ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
         );
+
+        if (pastTP) {
+          const adjustedTp = this.getBufferedTakeProfitPrice(symbol, targetTP, markPrice, isLong);
+          console.log(`PositionManager: [Periodic Check] Position ${symbol} exceeded TP target of ${tpPercent}%. Nudging stop to ${adjustedTp}`);
+
+          if (tpOrders.length > 0) {
+            const tickSize = symbolPrecision.getSymbolFilter(symbol)?.tickSize ?? '0';
+            const tolerancePrice = Math.max(1e-8, parseFloat(tickSize) / 2 || 0);
+            const hasBufferedOrder = tpOrders.some(order => {
+              const stop = parseFloat(order.stopPrice || order.price || '0');
+              if (Number.isNaN(stop)) {
+                return false;
+              }
+              return isLong ? stop >= adjustedTp - tolerancePrice : stop <= adjustedTp + tolerancePrice;
+            });
+
+            if (!hasBufferedOrder) {
+              for (const tpOrder of tpOrders) {
+                try {
+                  console.log(`PositionManager: Cancelling TP order ${tpOrder.orderId} to reposition stop`);
+                  await this.cancelOrderWithRetry(symbol, tpOrder.orderId, 'TP');
+                } catch (cancelError: any) {
+                  console.error(`PositionManager: Failed to cancel TP order ${tpOrder.orderId}:`, cancelError?.response?.data || cancelError?.message);
+                }
+              }
+              const trackedOrders = this.positionOrders.get(key);
+              if (trackedOrders) {
+                delete trackedOrders.tpOrderId;
+                delete trackedOrders.tpOrderIds;
+                this.positionOrders.set(key, trackedOrders);
+              }
+              await this.placeProtectiveOrdersWithLock(key, position, false, true);
+              continue;
+            }
+          } else {
+            await this.placeProtectiveOrdersWithLock(key, position, false, true);
+            continue;
+          }
+        }
+
 
         let needsAdjustment = false;
 
@@ -2191,42 +2191,63 @@ export class PositionManager extends EventEmitter implements PositionTracker {
   // ===== Position Tracking Methods for Hunter =====
 
   // Calculate total margin usage for a symbol (position size × leverage × entry price)
-  public getMarginUsage(symbol: string): number {
+  public getMarginUsage(symbol: string, side?: 'LONG' | 'SHORT'): number {
     let totalMargin = 0;
 
+    const desiredSide = side ? side.toUpperCase() : null;
+
     for (const position of this.currentPositions.values()) {
-      if (position.symbol === symbol) {
-        const positionAmt = Math.abs(parseFloat(position.positionAmt));
-        if (positionAmt > 0) {
-          const entryPrice = parseFloat(position.entryPrice);
-          let leverage = parseFloat(position.leverage);
+      if (position.symbol !== symbol) {
+        continue;
+      }
 
-          // Handle invalid leverage (0, NaN, or undefined)
-          if (!leverage || leverage === 0 || isNaN(leverage)) {
-            // First try to use tracked leverage from ACCOUNT_CONFIG_UPDATE
-            const trackedLeverage = this.symbolLeverage.get(symbol);
-            if (trackedLeverage) {
-              console.log(`PositionManager: Using tracked leverage for ${symbol}: ${trackedLeverage}x`);
-              leverage = trackedLeverage;
-            } else {
-              // Then try to use configured leverage as fallback
-              const symbolConfig = this.config.symbols[symbol];
-              if (symbolConfig && symbolConfig.leverage) {
-                console.log(`PositionManager: Warning - No tracked leverage for ${symbol}, using configured leverage: ${symbolConfig.leverage}`);
-                leverage = symbolConfig.leverage;
-              } else {
-                // Last resort: assume leverage of 1 (no leverage)
-                console.log(`PositionManager: Warning - No tracked leverage for ${symbol} and no config found, defaulting to 1x`);
-                leverage = 1;
-              }
-            }
+      const rawPositionAmt = parseFloat(position.positionAmt);
+      if (!Number.isFinite(rawPositionAmt) || rawPositionAmt === 0) {
+        continue;
+      }
+
+      if (desiredSide) {
+        const positionSide = (position.positionSide || 'BOTH').toUpperCase();
+        if (positionSide === 'LONG' || positionSide === 'SHORT') {
+          if (positionSide !== desiredSide) {
+            continue;
           }
-
-          // Margin = (Position Size × Entry Price) / Leverage
-          const margin = (positionAmt * entryPrice) / leverage;
-          totalMargin += margin;
+        } else if (positionSide === 'BOTH') {
+          if (desiredSide === 'LONG' && rawPositionAmt < 0) {
+            continue;
+          }
+          if (desiredSide === 'SHORT' && rawPositionAmt > 0) {
+            continue;
+          }
         }
       }
+
+      const positionAmt = Math.abs(rawPositionAmt);
+      const entryPrice = parseFloat(position.entryPrice);
+      if (!Number.isFinite(positionAmt) || positionAmt === 0 || !Number.isFinite(entryPrice) || entryPrice === 0) {
+        continue;
+      }
+
+      let leverage = parseFloat(position.leverage);
+      if (!leverage || leverage === 0 || Number.isNaN(leverage)) {
+        const trackedLeverage = this.symbolLeverage.get(symbol);
+        if (trackedLeverage) {
+          console.log(`PositionManager: Using tracked leverage for ${symbol}: ${trackedLeverage}x`);
+          leverage = trackedLeverage;
+        } else {
+          const symbolConfig = this.config.symbols[symbol];
+          if (symbolConfig && symbolConfig.leverage) {
+            console.log(`PositionManager: Warning - No tracked leverage for ${symbol}, using configured leverage: ${symbolConfig.leverage}`);
+            leverage = symbolConfig.leverage;
+          } else {
+            console.log(`PositionManager: Warning - No tracked leverage for ${symbol} and no config found, defaulting to 1x`);
+            leverage = 1;
+          }
+        }
+      }
+
+      const margin = (positionAmt * entryPrice) / leverage;
+      totalMargin += margin;
     }
 
     return totalMargin;
