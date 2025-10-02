@@ -1765,8 +1765,9 @@ async function maybeApplyOptimizedConfig(originalConfig, optimizedConfig, summar
   const autoMode = FORCE_OPTIMIZER_OVERWRITE;
   const autoConfirm = FORCE_OPTIMIZER_CONFIRM || autoMode;
 
-  if (!process.stdin.isTTY && !autoMode) {
-    console.log('dY>` Non-interactive shell detected. Skipping config overwrite prompt.');
+  const canPrompt = Boolean(process.stdin.isTTY || process.stdout.isTTY);
+  if (!canPrompt && !autoMode) {
+    console.log('dY>` No interactive TTY detected. Skipping config overwrite prompt (set FORCE_OPTIMIZER_OVERWRITE or run in an interactive shell).');
     return;
   }
 
