@@ -17,7 +17,13 @@
       "Bash(then echo \"✅ Complete!\")",
       "Bash(cat:*)",
       "Bash(else echo \"⏳ Still running...\")",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(git checkout:*)",
+      "Bash(tee:*)",
+      "Bash(npx tsx:*)",
+      "Bash(timeout 10 npx tsx check-balance.js)",
+      "Read(//c/Users/fciaf/.claude/**)",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []

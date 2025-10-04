@@ -1,4 +1,4 @@
-// Symbol precision utilities for formatting prices and quantities according to exchange rules
+﻿// Symbol precision utilities for formatting prices and quantities according to exchange rules
 
 export interface SymbolFilter {
   symbol: string;
@@ -168,6 +168,24 @@ export class SymbolPrecisionManager {
     return parseFloat(value.toFixed(precision));
   }
 
+  public getPriceLimits(symbol: string): {
+    tickSize: number;
+    pricePrecision: number;
+  } {
+    const filter = this.symbolFilters.get(symbol);
+    if (!filter) {
+      return {
+        tickSize: 0,
+        pricePrecision: 0,
+      };
+    }
+
+    return {
+      tickSize: parseFloat(filter.tickSize) || 0,
+      pricePrecision: filter.pricePrecision,
+    };
+  }
+
   public getQuantityLimits(
     symbol: string,
     orderType: 'MARKET' | 'LIMIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET'
@@ -242,7 +260,7 @@ export class SymbolPrecisionManager {
     const chunks: number[] = [];
 
     while (unitsRemaining > 0) {
-      let chunkUnits = Math.min(unitsRemaining, maxUnits);
+      const chunkUnits = Math.min(unitsRemaining, maxUnits);
 
       if (chunkUnits < minUnits) {
         if (chunks.length === 0) {

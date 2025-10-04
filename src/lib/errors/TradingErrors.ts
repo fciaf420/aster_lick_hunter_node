@@ -155,12 +155,37 @@ export function parseExchangeError(error: any, context?: { symbol?: string; quan
 
     case -1111:
       // BAD_PRECISION - Price precision error
-      return new PricePrecisionError(context?.symbol || 'UNKNOWN', context?.price || 0, 'UNKNOWN');
+      // Try to get actual tick size from symbolPrecision
+      let tickSize = 'UNKNOWN';
+      if (context?.symbol) {
+        try {
+          const { symbolPrecision } = require('../utils/symbolPrecision');
+          if (symbolPrecision.hasSymbol(context.symbol)) {
+            const limits = symbolPrecision.getPriceLimits(context.symbol);
+            tickSize = limits.tickSize?.toString() || 'UNKNOWN';
+          }
+        } catch (e) {
+          // Fallback to UNKNOWN if symbolPrecision not available
+        }
+      }
+      return new PricePrecisionError(context?.symbol || 'UNKNOWN', context?.price || 0, tickSize);
 
     case -1013:
       // INVALID_MESSAGE - Often quantity precision
       if (msg.includes('quantity')) {
-        return new QuantityPrecisionError(context?.symbol || 'UNKNOWN', context?.quantity || 0, 'UNKNOWN');
+        let stepSize = 'UNKNOWN';
+        if (context?.symbol) {
+          try {
+            const { symbolPrecision } = require('../utils/symbolPrecision');
+            if (symbolPrecision.hasSymbol(context.symbol)) {
+              const limits = symbolPrecision.getQuantityLimits(context.symbol);
+              stepSize = limits.stepSize?.toString() || 'UNKNOWN';
+            }
+          } catch (e) {
+            // Fallback to UNKNOWN if symbolPrecision not available
+          }
+        }
+        return new QuantityPrecisionError(context?.symbol || 'UNKNOWN', context?.quantity || 0, stepSize);
       }
       return new TradingError(msg, code, context?.symbol);
 

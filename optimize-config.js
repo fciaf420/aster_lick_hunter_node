@@ -7,8 +7,33 @@ const axios = require('axios');
 const crypto = require('crypto');
 const readline = require('readline');
 
+// API request configuration
+const API_TIMEOUT_MS = 10000; // 10 second timeout
+const MAX_RETRIES = 3;
+
 const FORCE_OPTIMIZER_OVERWRITE = process.env.FORCE_OPTIMIZER_OVERWRITE === '1';
 const FORCE_OPTIMIZER_CONFIRM = process.env.FORCE_OPTIMIZER_CONFIRM === '1';
+
+// Realistic Slippage Model - Based on actual bot behavior
+const EXIT_SLIPPAGE = {
+  TP: 0.0010,          // 0.10% - TAKE_PROFIT_MARKET fills slightly worse than trigger
+  SL: 0.0050,          // 0.50% - STOP_MARKET normal conditions (conservative baseline)
+  SL_VOLATILE: 0.0080, // 0.80% - STOP_MARKET during high volatility/cascades
+  ENTRY_LIMIT: 0.0000, // 0% - LIMIT orders don't slip (wait for fill at exact price)
+  ENTRY_MARKET: 0.0020 // 0.20% - MARKET fallback orders (10% of entries)
+};
+
+const LIMIT_FILL_RATE = 0.85; // 85% of LIMIT orders actually fill (15% miss due to price movement)
+const MARKET_FALLBACK_RATE = 0.10; // 10% of entries use MARKET orders instead of LIMIT
+
+// Commission Model - Based on actual trading costs
+const COMMISSION = {
+  MAKER_FEE: 0.0002,        // 0.02% maker fee (LIMIT orders)
+  TAKER_FEE: 0.0004,        // 0.04% taker fee (MARKET orders)
+  AVG_FILLS_PER_TRADE: 1.5  // Average fills per complete trade (entry + exit, small partial fills)
+                             // Chunking only happens on large orders (> maxQty)
+                             // For typical trade sizes ($10-25), minimal chunking occurs
+};
 
 // Connect to the database
 const dbPath = path.join(__dirname, 'data', 'liquidations.db');
@@ -114,6 +139,31 @@ async function getCurrentPositions(credentials) {
   }
 }
 
+// Retry wrapper for API calls with timeout
+async function retryWithTimeout(fn, retries = MAX_RETRIES, timeoutMs = API_TIMEOUT_MS) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      const result = await fn(controller.signal);
+      clearTimeout(timeoutId);
+      return result;
+    } catch (error) {
+      const isLastAttempt = attempt === retries;
+      const isTimeout = error.code === 'ECONNABORTED' || error.name === 'AbortError';
+
+      if (isLastAttempt) {
+        throw error;
+      }
+
+      // Wait before retry (exponential backoff: 1s, 2s, 4s)
+      const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 // NEW: Fetch historical price data (klines)
 async function _getHistoricalPrices(symbol, interval = '1m', limit = 1000) {
   try {
@@ -165,9 +215,14 @@ async function getCachedHistoricalPrices(symbol, interval = '1m', totalCandles =
 
     let response;
     try {
-      response = await axios.get(`https://fapi.asterdex.com/fapi/v1/klines?${params.toString()}`);
+      response = await retryWithTimeout(async (signal) => {
+        return await axios.get(`https://fapi.asterdex.com/fapi/v1/klines?${params.toString()}`, {
+          timeout: API_TIMEOUT_MS,
+          signal
+        });
+      });
     } catch (error) {
-      console.error(`❌ Failed to fetch price data for ${symbol}:`, error.response?.data || error.message);
+      console.error(`❌ Failed to fetch price data for ${symbol} after ${MAX_RETRIES} retries:`, error.response?.data || error.message);
       break;
     }
 
@@ -421,6 +476,7 @@ function generateTpCandidates(volStats, currentTp) {
   const base = Math.max(volStats.avgAbsReturn || 0.3, 0.1);
   const highVol = Math.max(volStats.perc95 || base * 2, base);
   const midVol = Math.max(volStats.perc90 || base, base);
+
   const anchors = Number.isFinite(currentTp) && currentTp > 0
     ? [currentTp, currentTp * 0.5, currentTp * 0.75, currentTp * 1.25, currentTp * 1.5, currentTp * 2]
     : [];
@@ -443,13 +499,14 @@ function generateTpCandidates(volStats, currentTp) {
     .filter(val => typeof val === 'number' && val > 0.05 && val <= 40);
 
   const candidates = sampleCandidates(rawCandidates, 15)
-    .filter(val => val >= 0.1 && val <= 30);
+    .filter(val => val >= 0.1 && val <= 30);  // Basic sanity bounds only
 
   return candidates;
 }
 
 function generateSlCandidates(volStats, currentSl) {
   const base = Math.max(volStats.perc95 || volStats.avgAbsReturn * 2 || currentSl || 1, 0.5);
+
   const anchors = Number.isFinite(currentSl) && currentSl > 0
     ? [currentSl, currentSl * 0.5, currentSl * 0.75, currentSl * 1.25, currentSl * 1.5, currentSl * 2, currentSl * 3]
     : [];
@@ -470,14 +527,14 @@ function generateSlCandidates(volStats, currentSl) {
     .filter(val => typeof val === 'number' && val > 0.1 && val <= 80);
 
   const candidates = sampleCandidates(rawCandidates, 15)
-    .filter(val => val >= 0.5 && val <= 40);
+    .filter(val => val >= 0.1 && val <= 40);  // Basic sanity bounds only
 
   return candidates;
 }
 
 function generateLeverageCandidates(currentLeverage) {
-  const baseCandidates = [currentLeverage, 5, 7.5, 10, 12.5, 15, 20, 25, 30];
-  return dedupeAndSort(baseCandidates).filter(val => val > 0 && val <= 50);
+  const baseCandidates = [currentLeverage, 5, 7.5, 10, 12.5, 15, 20, 25];
+  return dedupeAndSort(baseCandidates).filter(val => val > 0 && val <= 25);
 }
 
 function generateMarginCandidates(capitalBudget, currentMargin) {
@@ -517,7 +574,7 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
   const slCandidates = slCandidatesFull.length > 10
     ? [...slCandidatesFull.slice(0, 5), ...slCandidatesFull.slice(-5)]
     : slCandidatesFull;
-  const leverageCandidates = generateLeverageCandidates(leverageCurrent).slice(0, 6);
+  const leverageCandidates = generateLeverageCandidates(leverageCurrent);  // Test all leverage values
   const marginCandidates = generateMarginCandidates(capitalBudget, currentMargin).slice(-6); // focus on higher budgets
 
   const backtestCache = new Map();
@@ -545,8 +602,22 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
   const dailyFactor = spanDays > 0 ? 1 / spanDays : 1;
   const currentDailyPnl = currentTotalPnl * dailyFactor;
 
+  // Calculate initial scores for current config
+  const rawCurrentLongSharpe = currentLongBacktest.sharpeRatio || 0;
+  const rawCurrentShortSharpe = currentShortBacktest.sharpeRatio || 0;
+  const cappedCurrentLongSharpe = Number.isFinite(rawCurrentLongSharpe) ? Math.min(Math.max(rawCurrentLongSharpe, -5), 5) : 0;
+  const cappedCurrentShortSharpe = Number.isFinite(rawCurrentShortSharpe) ? Math.min(Math.max(rawCurrentShortSharpe, -5), 5) : 0;
+  const currentSharpe = (cappedCurrentLongSharpe + cappedCurrentShortSharpe) / 2;
+  const currentDrawdown = Math.max(currentLongBacktest.maxDrawdown || 1, currentShortBacktest.maxDrawdown || 1);
+  const currentDrawdownScore = currentTotalPnl / (currentDrawdown + 1);
+  // Aggressive scoring: 50% PnL, 30% Sharpe, 20% Drawdown (prioritizes profit & capital deployment)
+  const currentFinalScore = (currentTotalPnl * 0.5) + (currentSharpe * 0.3) + (currentDrawdownScore * 0.2);
+
   let bestCombination = {
     totalPnl: currentTotalPnl,
+    finalScore: currentFinalScore,
+    sharpeRatio: currentSharpe,
+    drawdownScore: currentDrawdownScore,
     leverage: leverageCurrent,
     margin: currentMargin,
     tp: currentTp,
@@ -611,14 +682,60 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
           const totalTrades = (bestLongSide.result.totalTrades || 0) + (bestShortSide.result.totalTrades || 0);
           const stopRate = totalTrades > 0 ? stopExitCount / totalTrades : 0;
           const combinedProfitFactor = ((bestLongSide.result.profitFactor || 0) + (bestShortSide.result.profitFactor || 0)) / 2;
-          const pnlPenalty = Math.abs(combinedPnl) * stopRate * 0.5;
-          const adjustedPnl = combinedPnl - pnlPenalty;
+
+          // Skip combinations with poor profit factor or excessive stop rate
           if (combinedProfitFactor < 1.05 || stopRate > 0.65) {
             continue;
           }
-          if (adjustedPnl > bestCombination.totalPnl) {
+
+          // Risk management constraint: Enforce minimum R:R ratio
+          // Reject if TP/SL < 0.33 (worse than 1:3 R:R - requires >75% win rate)
+          const riskRewardRatio = tp / sl;
+          if (riskRewardRatio < 0.33) {
+            continue;  // Skip combinations with terrible R:R ratios
+          }
+
+          // Calculate required win rate for profitability
+          // Required WR = SL / (TP + SL)
+          const requiredWinRate = sl / (tp + sl);
+          const combinedWinRate = ((bestLongSide.result.winRate || 0) + (bestShortSide.result.winRate || 0)) / 2 / 100;
+
+          // Skip if backtest win rate is below required (with 5% safety margin)
+          if (combinedWinRate < requiredWinRate + 0.05) {
+            continue;  // Not profitable enough even in optimistic backtest
+          }
+
+          // Tri-Factor Weighted Scoring System
+          // Factor 1: Total PnL (50% weight) - Prioritize profit and capital deployment
+          const pnlScore = combinedPnl;
+
+          // Factor 2: Sharpe Ratio (30% weight) - Ensure consistency
+          // Cap Sharpe at 5.0 to prevent infinity from unrealistic backtests
+          const rawLongSharpe = bestLongSide.result.sharpeRatio || 0;
+          const rawShortSharpe = bestShortSide.result.sharpeRatio || 0;
+          const cappedLongSharpe = Number.isFinite(rawLongSharpe) ? Math.min(Math.max(rawLongSharpe, -5), 5) : 0;
+          const cappedShortSharpe = Number.isFinite(rawShortSharpe) ? Math.min(Math.max(rawShortSharpe, -5), 5) : 0;
+          const combinedSharpe = (cappedLongSharpe + cappedShortSharpe) / 2;
+
+          // Factor 3: PnL per Drawdown (20% weight) - Protect against blowup
+          const combinedDrawdown = Math.max(bestLongSide.result.maxDrawdown || 1, bestShortSide.result.maxDrawdown || 1);
+          const drawdownScore = combinedPnl / (combinedDrawdown + 1);  // +1 to avoid division by zero
+
+          // Calculate weighted final score - Aggressive: 50% PnL, 30% Sharpe, 20% Drawdown
+          // Prioritizes profit and capital deployment while maintaining risk awareness
+          const finalScore = (pnlScore * 0.5) + (combinedSharpe * 0.3) + (drawdownScore * 0.2);
+
+          // Sanity check for NaN/Infinity
+          if (!Number.isFinite(finalScore)) {
+            continue;
+          }
+
+          if (finalScore > bestCombination.finalScore) {
             bestCombination = {
-              totalPnl: adjustedPnl,
+              totalPnl: combinedPnl,
+              finalScore: finalScore,
+              sharpeRatio: combinedSharpe,
+              drawdownScore: drawdownScore,
               leverage,
               margin,
               tp,
@@ -685,7 +802,10 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
       tp: bestCombination.tp,
       sl: bestCombination.sl,
       totalPnl: bestCombination.totalPnl,
-      dailyPnl: optimizedDailyPnl
+      dailyPnl: optimizedDailyPnl,
+      finalScore: bestCombination.finalScore,
+      sharpeRatio: bestCombination.sharpeRatio,
+      drawdownScore: bestCombination.drawdownScore
     },
     improvements: {
       long: longImprovement,
@@ -1027,54 +1147,147 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
   let lastEntryTime = -Infinity;
   let lastHunterEntryTime = -Infinity;
 
-  const recordExit = (pos, exitPrice, exitReason, priceEventTime) => {
-    const pnl = pos.isLong
-      ? (exitPrice - pos.entryPrice) * pos.size
-      : (pos.entryPrice - exitPrice) * pos.size;
+  // Calculate volatility factor from recent price movements (for slippage adjustment)
+  const calculateVolatilityFactor = (currentIndex, lookbackPeriods = 20) => {
+    if (allPrices.length < 2) return 1.0;
 
-    totalPnl += pnl;
+    const startIndex = Math.max(0, currentIndex - lookbackPeriods);
+    const endIndex = Math.min(allPrices.length, currentIndex + 1);
+    const slice = allPrices.slice(startIndex, endIndex);
+
+    if (slice.length < 2) return 1.0;
+
+    // Calculate average absolute return
+    let sumAbsReturn = 0;
+    let count = 0;
+    for (let i = 1; i < slice.length; i++) {
+      const prev = slice[i - 1].price || slice[i - 1].close;
+      const curr = slice[i].price || slice[i].close;
+      if (prev > 0) {
+        sumAbsReturn += Math.abs((curr - prev) / prev);
+        count++;
+      }
+    }
+
+    if (count === 0) return 1.0;
+
+    const avgReturn = sumAbsReturn / count;
+    // Volatility factor: 1.0 = normal (0.5% avg move), scales up/down from there
+    return Math.max(0.5, Math.min(3.0, avgReturn / 0.005));
+  };
+
+  const recordExit = (pos, exitPrice, exitReason, priceEventTime, volatilityFactor = 1.0) => {
+    // Apply realistic slippage based on order type and market conditions
+    let actualExitPrice = exitPrice;
+
+    if (exitReason === 'TP') {
+      // TAKE_PROFIT_MARKET: fills slightly worse than trigger price
+      actualExitPrice = pos.isLong
+        ? exitPrice * (1 - EXIT_SLIPPAGE.TP)  // LONG TP: sell fills lower
+        : exitPrice * (1 + EXIT_SLIPPAGE.TP); // SHORT TP: buy fills higher
+    } else if (exitReason === 'SL') {
+      // STOP_MARKET: worse slippage, especially in volatile conditions
+      const slippageRate = volatilityFactor > 1.5 ? EXIT_SLIPPAGE.SL_VOLATILE : EXIT_SLIPPAGE.SL;
+      actualExitPrice = pos.isLong
+        ? exitPrice * (1 - slippageRate)  // LONG SL: sell fills even lower
+        : exitPrice * (1 + slippageRate); // SHORT SL: buy fills even higher
+    }
+    // EOD exits use actual exit price (no slippage)
+
+    // Calculate gross PnL before commissions
+    const grossPnl = pos.isLong
+      ? (actualExitPrice - pos.entryPrice) * pos.size
+      : (pos.entryPrice - actualExitPrice) * pos.size;
+
+    // Calculate commission costs
+    // Entry: mostly LIMIT (maker fee), some MARKET (taker fee)
+    // Exit: TP uses TAKE_PROFIT_MARKET (taker), SL uses STOP_MARKET (taker)
+    const notional = tradeSize * leverage;
+    const entryCommission = notional * (COMMISSION.MAKER_FEE * 0.9 + COMMISSION.TAKER_FEE * 0.1); // 90% LIMIT, 10% MARKET
+    const exitCommission = exitReason === 'EOD'
+      ? notional * COMMISSION.MAKER_FEE  // EOD might use LIMIT
+      : notional * COMMISSION.TAKER_FEE; // TP/SL use MARKET orders
+
+    // Apply fill multiplier for order chunking (PositionManager splits orders)
+    const totalCommission = (entryCommission + exitCommission) * COMMISSION.AVG_FILLS_PER_TRADE;
+
+    // Net PnL after commissions
+    const netPnl = grossPnl - totalCommission;
+
+    totalPnl += netPnl;
     completedTrades.push({
       symbol,
       side: pos.isLong ? 'LONG' : 'SHORT',
       entryPrice: pos.entryPrice,
-      exitPrice,
-      pnl,
+      exitPrice: actualExitPrice,
+      triggerPrice: exitPrice,  // Store original trigger price for comparison
+      slippage: Math.abs(actualExitPrice - exitPrice),
+      grossPnl,           // PnL before commissions
+      commission: totalCommission,  // Total commission cost
+      pnl: netPnl,        // Net PnL after commissions
       exitReason,
       duration: priceEventTime - pos.entryTime,
-      margin: tradeSize
+      margin: tradeSize,
+      volatilityFactor: exitReason === 'SL' ? volatilityFactor : null
     });
   };
 
-  const evaluatePositionsOnBar = priceBar => {
+  const evaluatePositionsOnBar = (priceBar, barIndex) => {
+    const volatilityFactor = calculateVolatilityFactor(barIndex);
+
     activePositions = activePositions.filter(pos => {
       let shouldExit = false;
       let exitReason = null;
       let exitPrice = null;
 
-      if (pos.isLong) {
-        if (priceBar.high >= pos.tpPrice) {
-          shouldExit = true;
-          exitReason = 'TP';
-          exitPrice = pos.tpPrice;
-        } else if (priceBar.low <= pos.slPrice) {
-          shouldExit = true;
-          exitReason = 'SL';
-          exitPrice = pos.slPrice;
+      // Check if both TP and SL were touched in this candle
+      const tpTouched = pos.isLong ? priceBar.high >= pos.tpPrice : priceBar.low <= pos.tpPrice;
+      const slTouched = pos.isLong ? priceBar.low <= pos.slPrice : priceBar.high >= pos.slPrice;
+
+      if (tpTouched && slTouched) {
+        // Both touched - determine which hit first based on distance from entry
+        const tpDistance = Math.abs(pos.tpPrice - pos.entryPrice);
+        const slDistance = Math.abs(pos.slPrice - pos.entryPrice);
+
+        // Probabilistic model: 70% of time, closer target hits first
+        // 30% of time, further target hits (price whipsaws)
+        const closerHitsFirst = Math.random() < 0.70;
+
+        if (closerHitsFirst) {
+          if (slDistance < tpDistance) {
+            // SL is closer - assume it hit first (more realistic)
+            exitReason = 'SL';
+            exitPrice = pos.slPrice;
+          } else {
+            // TP is closer - assume it hit first
+            exitReason = 'TP';
+            exitPrice = pos.tpPrice;
+          }
+        } else {
+          // Whipsaw scenario - further target hits
+          if (slDistance < tpDistance) {
+            exitReason = 'TP';
+            exitPrice = pos.tpPrice;
+          } else {
+            exitReason = 'SL';
+            exitPrice = pos.slPrice;
+          }
         }
-      } else {
-        if (priceBar.low <= pos.tpPrice) {
-          shouldExit = true;
-          exitReason = 'TP';
-          exitPrice = pos.tpPrice;
-        } else if (priceBar.high >= pos.slPrice) {
-          shouldExit = true;
-          exitReason = 'SL';
-          exitPrice = pos.slPrice;
-        }
+        shouldExit = true;
+      } else if (tpTouched) {
+        // Only TP touched
+        shouldExit = true;
+        exitReason = 'TP';
+        exitPrice = pos.tpPrice;
+      } else if (slTouched) {
+        // Only SL touched
+        shouldExit = true;
+        exitReason = 'SL';
+        exitPrice = pos.slPrice;
       }
 
       if (shouldExit) {
-        recordExit(pos, exitPrice, exitReason, priceBar.event_time);
+        recordExit(pos, exitPrice, exitReason, priceBar.event_time, volatilityFactor);
         return false;
       }
       return true;
@@ -1100,7 +1313,7 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
     // Check for position exits using ALL price data between last check and now
     while (priceIndex < allPrices.length && allPrices[priceIndex].event_time <= currentTime) {
       const priceBar = allPrices[priceIndex];
-      evaluatePositionsOnBar(priceBar);
+      evaluatePositionsOnBar(priceBar, priceIndex);
       priceIndex++;
     }
 
@@ -1108,7 +1321,25 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
     const cooldownElapsed = currentTime - lastEntryTime >= cooldownMs;
     const hunterCooldownElapsed = currentTime - lastHunterEntryTime >= hunterCooldownMs;
     if (windowVolume >= threshold && activePositions.length < maxPositions && cooldownElapsed && hunterCooldownElapsed) {
-      const entryPrice = currentEvent.price;
+      // Simulate LIMIT order non-fill probability (15% of orders don't fill)
+      if (Math.random() > LIMIT_FILL_RATE) {
+        // LIMIT order placed but never filled - skip this entry
+        if (!suppressLogs && Math.random() < 0.1) {  // Log 10% of non-fills to avoid spam
+          log(`   💨 LIMIT order did not fill (non-fill simulation)`);
+        }
+        continue;  // Skip to next liquidation event
+      }
+
+      // Simulate entry slippage (10% use MARKET fallback with slippage)
+      let entryPrice = currentEvent.price;
+      if (Math.random() < MARKET_FALLBACK_RATE) {
+        // MARKET order fallback - apply entry slippage
+        const isLong = side === 'SELL';
+        entryPrice = isLong
+          ? entryPrice * (1 + EXIT_SLIPPAGE.ENTRY_MARKET)  // BUY market: fills higher
+          : entryPrice * (1 - EXIT_SLIPPAGE.ENTRY_MARKET); // SELL market: fills lower
+      }
+
       const isLong = side === 'SELL'; // Buy on SELL liquidations, Sell on BUY liquidations
 
       const tpPrice = isLong
@@ -1133,7 +1364,7 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
 
   while (priceIndex < allPrices.length) {
     const priceBar = allPrices[priceIndex];
-    evaluatePositionsOnBar(priceBar);
+    evaluatePositionsOnBar(priceBar, priceIndex);
     priceIndex++;
   }
 
@@ -1253,6 +1484,9 @@ async function generateRecommendations(deployableCapital) {
         totalPnl: optimization.optimized.totalPnl,
         dailyPnl: optimization.optimized.dailyPnl
       },
+      optimizedScore: optimization.optimized.finalScore,
+      optimizedSharpe: optimization.optimized.sharpeRatio,
+      optimizedDrawdownScore: optimization.optimized.drawdownScore,
       optimizedConfig: optimization.optimized.config,
       spanDays: optimization.spanDays
     });
@@ -1264,11 +1498,9 @@ async function generateRecommendations(deployableCapital) {
   console.log('- VWAP protection disabled automatically where aggressive thresholds outperform');
   console.log();
 
-  const recommendedGlobalMax = recommendations.reduce((sum, _rec) => {
-    const longSlots = _rec.optimizedLongMaxPositions ?? 0;
-    const shortSlots = _rec.optimizedShortMaxPositions ?? 0;
-    return sum + Math.max(longSlots, shortSlots);
-  }, 0);
+  // In hedge mode, maxOpenPositions counts unique symbols (hedged pairs count as one)
+  // Each symbol can have LONG + SHORT positions, but counts as 1 for the global limit
+  const recommendedGlobalMax = recommendations.length;
 
   const recommendedGlobalRounded = Math.max(1, Math.ceil(recommendedGlobalMax));
 
@@ -1316,6 +1548,9 @@ function analyzeCapitalAllocation(balance, accountInfo, positions) {
     // Calculate true total account value
     const trueTotal = Math.max(totalMarginBalance, totalWalletBalance, balance.availableBalance + usedMargin);
     console.log(`   🎯 CALCULATED TOTAL: $${formatLargeNumber(trueTotal)}`);
+
+    // Store for later use
+    this.calculatedTotal = trueTotal;
   }
   console.log();
 
@@ -1393,7 +1628,7 @@ function analyzeCapitalAllocation(balance, accountInfo, positions) {
   console.log(`   Safe Range: ≤80% optimal, ≤95% acceptable`);
   console.log();
 
-  return { totalMaxAllocation, utilizationRate };
+  return { totalMaxAllocation, utilizationRate, calculatedTotal: this.calculatedTotal || 0 };
 }
 
 // Enhanced liquidation cascade analysis
@@ -1525,14 +1760,16 @@ async function analyzeRealTradingHistory(credentials) {
 }
 
 // Capital allocation optimizer
-function optimizeCapitalAllocation(balance, recommendations, symbolConfigs = config.symbols) {
+function optimizeCapitalAllocation(accountInfo, recommendations, symbolConfigs = config.symbols) {
   console.log('📊 CAPITAL ALLOCATION OPTIMIZER');
   console.log('================================\n');
 
-  const availableBalance = balance.availableBalance;
+  const totalWalletBalance = parseFloat(accountInfo?.totalWalletBalance ?? 0);
+  const availableBalance = parseFloat(accountInfo?.availableBalance ?? 0);
   const targetUtilization = 0.80; // 80% max utilization
-  const maxAllocation = availableBalance * targetUtilization;
+  const maxAllocation = totalWalletBalance * targetUtilization;
 
+  console.log(`💰 Total Wallet Balance: $${formatLargeNumber(totalWalletBalance)}`);
   console.log(`💰 Available Balance: $${formatLargeNumber(availableBalance)}`);
   console.log(`🎯 Target Utilization: ${(targetUtilization * 100).toFixed(0)}%`);
   console.log(`📈 Max Safe Allocation: $${formatLargeNumber(maxAllocation)}\n`);
@@ -1543,7 +1780,7 @@ function optimizeCapitalAllocation(balance, recommendations, symbolConfigs = con
     currentTotalAllocation += symbolConfig.maxPositionMarginUSDT || 100;
   }
 
-  console.log(`📊 Current Total Allocation: $${formatLargeNumber(currentTotalAllocation)} (${(currentTotalAllocation / availableBalance * 100).toFixed(1)}% of available)`);
+  console.log(`📊 Current Total Allocation: $${formatLargeNumber(currentTotalAllocation)} (${(currentTotalAllocation / totalWalletBalance * 100).toFixed(1)}% of total balance)`);
 
   if (currentTotalAllocation > maxAllocation) {
     console.log(`⚠️  OVERALLOCATED by $${formatLargeNumber(currentTotalAllocation - maxAllocation)}`);
@@ -1633,6 +1870,9 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
       console.log(`      Trade Size (L/S): $${_rec.currentTradeSize.toFixed(2)} → $${_rec.optimizedTradeSize.toFixed(2)} / $${_rec.currentShortTradeSize.toFixed(2)} → $${_rec.optimizedShortTradeSize.toFixed(2)}`);
       console.log(`      TP/SL: ${_rec.currentTp.toFixed(2)}%/${_rec.currentSl.toFixed(2)}% → ${_rec.optimizedTp.toFixed(2)}%/${_rec.optimizedSl.toFixed(2)}%`);
       console.log(`      Leverage: ${_rec.currentLeverage.toFixed(2)}x → ${_rec.optimizedLeverage.toFixed(2)}x`);
+      if (_rec.optimizedScore !== undefined) {
+        console.log(`      Score: ${_rec.optimizedScore.toFixed(2)} (PnL: 50%, Sharpe: 30%, Drawdown: 20%)`);
+      }
     }
   });
 
@@ -1732,6 +1972,12 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
             maxDrawdown: _rec.optimizedPerformance.short.maxDrawdown
           }
         }
+      },
+      scoring: {
+        finalScore: _rec.optimizedScore,
+        sharpeRatio: _rec.optimizedSharpe,
+        drawdownScore: _rec.optimizedDrawdownScore,
+        weights: { pnl: 0.5, sharpe: 0.3, drawdown: 0.2 }
       }
     })),
     capitalAllocation: capitalOptimization,
@@ -1818,7 +2064,7 @@ async function main() {
 
     // Core analyses
     const _avgGap = analyzePriceDataCoverage();
-    const _capitalInfo = analyzeCapitalAllocation(balance, accountInfo, positions);
+    const capitalInfo = analyzeCapitalAllocation(balance, accountInfo, positions);
     analyzeLiquidationCascades();
     analyzeCurrentConfig();
     await analyzeRealTradingHistory(config.api);
@@ -1826,13 +2072,12 @@ async function main() {
     rankSymbolProfitability();
 
     // Generate recommendations with backtest
-    const availableBalance = parseFloat(balance.availableBalance ?? 0);
-    const totalInitialMargin = parseFloat(accountInfo?.totalInitialMargin ?? 0);
-    const deployableCapital = availableBalance + totalInitialMargin;
+    // Use CALCULATED TOTAL for optimal capital allocation
+    const deployableCapital = capitalInfo.calculatedTotal || parseFloat(accountInfo?.totalWalletBalance ?? 0);
     const { recommendations, optimizedConfig, recommendedGlobalMax } = await generateRecommendations(deployableCapital);
 
     // Optimize capital allocation
-    const capitalOptimization = optimizeCapitalAllocation(balance, recommendations, optimizedConfig.symbols);
+    const capitalOptimization = optimizeCapitalAllocation(accountInfo, recommendations, optimizedConfig.symbols);
 
     // Generate final summary
     const optimizationResults = generateOptimizationSummary(recommendations, capitalOptimization, optimizedConfig, recommendedGlobalMax);

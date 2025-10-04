@@ -61,7 +61,13 @@ export function roundToTickSize(price: number, tickSize: string): number {
   const tick = parseFloat(tickSize);
   if (tick === 0) return price;
 
-  return Math.round(price / tick) * tick;
+  // Count decimal places in tickSize to determine precision
+  const decimalPlaces = (tickSize.split('.')[1] || '').replace(/0+$/, '').length;
+
+  // Round to nearest tick and use toFixed to avoid floating point errors
+  const numTicks = Math.round(price / tick);
+  const aligned = (numTicks * tick).toFixed(decimalPlaces);
+  return parseFloat(aligned);
 }
 
 // Round quantity to valid step size
@@ -69,7 +75,13 @@ export function roundToStepSize(quantity: number, stepSize: string): number {
   const step = parseFloat(stepSize);
   if (step === 0) return quantity;
 
-  return Math.round(quantity / step) * step;
+  // Count decimal places in stepSize to determine precision
+  const decimalPlaces = (stepSize.split('.')[1] || '').replace(/0+$/, '').length;
+
+  // Round to nearest step and use toFixed to avoid floating point errors
+  const numSteps = Math.round(quantity / step);
+  const aligned = (numSteps * step).toFixed(decimalPlaces);
+  return parseFloat(aligned);
 }
 
 // Calculate optimal limit order price based on order book

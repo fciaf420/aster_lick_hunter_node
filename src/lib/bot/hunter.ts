@@ -312,15 +312,21 @@ export class Hunter extends EventEmitter {
       if (shouldTrade && tradeSide) {
         // Check cooldown to prevent multiple trades from same window
         const now = Date.now();
-        const cooldownPeriod = 120000; // 2 minutes cooldown
         const symbolTrades = this.lastTradeTimestamps.get(liquidation.symbol) || { long: 0, short: 0 };
 
         const lastTradeTime = tradeSide === 'BUY' ? symbolTrades.long : symbolTrades.short;
         const timeSinceLastTrade = now - lastTradeTime;
 
-        if (timeSinceLastTrade < cooldownPeriod) {
-          const remainingCooldown = Math.ceil((cooldownPeriod - timeSinceLastTrade) / 1000);
-          console.log(`Hunter: ${tradeSide} trade cooldown active for ${liquidation.symbol} - ${remainingCooldown}s remaining`);
+        const thresholdCooldown = symbolConfig.thresholdCooldownMs ?? this.config.global?.thresholdCooldownMs ?? 30000;
+        if (timeSinceLastTrade < thresholdCooldown) {
+          const remainingThresholdCooldown = Math.ceil((thresholdCooldown - timeSinceLastTrade) / 1000);
+          console.log(`Hunter: ${tradeSide} trade blocked by threshold cooldown for ${liquidation.symbol} - ${remainingThresholdCooldown}s remaining`);
+          return;
+        }
+        const hunterCooldown = symbolConfig.hunterCooldownMs ?? this.config.global?.hunterCooldownMs ?? 120000;
+        if (timeSinceLastTrade < hunterCooldown) {
+          const remainingHunterCooldown = Math.ceil((hunterCooldown - timeSinceLastTrade) / 1000);
+          console.log(`Hunter: ${tradeSide} trade blocked by hunter cooldown for ${liquidation.symbol} - ${remainingHunterCooldown}s remaining`);
           return;
         }
 
