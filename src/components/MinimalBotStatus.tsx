@@ -1,11 +1,9 @@
 'use client';
 
 import { useBotStatus } from '@/hooks/useBotStatus';
-import { useWebSocketUrl } from '@/hooks/useWebSocketUrl';
 
 export default function MinimalBotStatus() {
-  const wsUrl = useWebSocketUrl();
-  const { status, isConnected } = useBotStatus(wsUrl || undefined);
+  const { status, isConnected } = useBotStatus();
 
   const _getStatusColor = () => {
     if (!isConnected) return 'bg-red-500';

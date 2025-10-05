@@ -27,6 +27,9 @@ export const symbolConfigSchema = z.object({
   vwapProtection: z.boolean().optional(),
   vwapTimeframe: z.string().optional(),
   vwapLookback: z.number().min(10).max(500).optional(),
+
+  // Threshold system settings
+  useThreshold: z.boolean().optional(),
 }).refine(data => {
   // Ensure we have either legacy or new volume thresholds
   return data.volumeThresholdUSDT !== undefined ||
@@ -44,6 +47,21 @@ export const serverConfigSchema = z.object({
   dashboardPassword: z.string().optional(),
   dashboardPort: z.number().optional(),
   websocketPort: z.number().optional(),
+  useRemoteWebSocket: z.boolean().optional(),
+  websocketHost: z.string().nullable().optional(),
+  envWebSocketHost: z.string().optional(), // For environment variable override
+}).optional();
+
+export const rateLimitConfigSchema = z.object({
+  maxRequestWeight: z.number().optional(),
+  maxOrderCount: z.number().optional(),
+  reservePercent: z.number().optional(),
+  enableBatching: z.boolean().optional(),
+  queueTimeout: z.number().optional(),
+  enableDeduplication: z.boolean().optional(),
+  deduplicationWindowMs: z.number().optional(),
+  parallelProcessing: z.boolean().optional(),
+  maxConcurrentRequests: z.number().min(1).max(10).optional(),
 }).optional();
 
 export const globalConfigSchema = z.object({
@@ -51,7 +69,9 @@ export const globalConfigSchema = z.object({
   paperMode: z.boolean(),
   positionMode: z.enum(['ONE_WAY', 'HEDGE']).optional(),
   maxOpenPositions: z.number().min(1).optional(),
+  useThresholdSystem: z.boolean().optional(),
   server: serverConfigSchema,
+  rateLimit: rateLimitConfigSchema,
 });
 
 export const configSchema = z.object({

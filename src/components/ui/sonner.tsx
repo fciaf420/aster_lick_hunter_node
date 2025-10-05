@@ -1,9 +1,11 @@
 "use client"
 
 import { useTheme } from "next-themes"
-import { Toaster as Sonner, ToasterProps } from "sonner"
-import { useEffect } from "react"
+import { Toaster as Sonner, ToasterProps, toast } from "sonner"
+import { useEffect, useState } from "react"
+import * as React from "react"
 import { gsap } from "gsap"
+import { X } from "lucide-react"
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()
@@ -76,34 +78,69 @@ const Toaster = ({ ...props }: ToasterProps) => {
   }, []);
 
   return (
-    <Sonner
-      theme={theme as ToasterProps["theme"]}
-      className="toaster group"
-      toastOptions={{
-        classNames: {
-          toast: "group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg",
-          description: "group-[.toast]:text-muted-foreground",
-          actionButton: "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground",
-          cancelButton: "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground",
-        },
-      }}
-      style={
-        {
-          "--normal-bg": "var(--popover)",
-          "--normal-text": "var(--popover-foreground)",
-          "--normal-border": "var(--border)",
-        } as React.CSSProperties
-      }
-      position="top-right"
-      expand={true}
-      richColors={true}
-      closeButton={true}
-      gap={16}
-      visibleToasts={10}
-      duration={5000}
-      {...props}
-    />
+    <>
+      <Sonner
+        theme={theme as ToasterProps["theme"]}
+        className="toaster group"
+        toastOptions={{
+          classNames: {
+            toast: "group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg",
+            description: "group-[.toast]:text-muted-foreground",
+            actionButton: "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground",
+            cancelButton: "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground",
+          },
+        }}
+        style={
+          {
+            "--normal-bg": "var(--popover)",
+            "--normal-text": "var(--popover-foreground)",
+            "--normal-border": "var(--border)",
+          } as React.CSSProperties
+        }
+        position="top-right"
+        expand={true}
+        richColors={true}
+        closeButton={true}
+        gap={16}
+        visibleToasts={10}
+        duration={5000}
+        {...props}
+      />
+
+      {/* Dismiss All Button - Fixed position */}
+      <DismissAllButton />
+    </>
   )
+}
+
+function DismissAllButton() {
+  const [hasToasts, setHasToasts] = useState(false);
+
+  useEffect(() => {
+    // Check for toasts periodically
+    const interval = setInterval(() => {
+      const toasterElement = document.querySelector('[data-sonner-toaster]');
+      const hasActiveToasts = (toasterElement?.querySelectorAll('[data-sonner-toast]').length ?? 0) > 0;
+      setHasToasts(hasActiveToasts);
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!hasToasts) {
+    return null;
+  }
+
+  return (
+    <button
+      onClick={() => toast.dismiss()}
+      className="fixed top-4 right-4 z-[100] bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2 transition-all duration-300 ease-in-out opacity-100"
+      aria-label="Dismiss all notifications"
+    >
+      <X className="h-4 w-4" />
+      Dismiss All
+    </button>
+  );
 }
 
 export { Toaster }

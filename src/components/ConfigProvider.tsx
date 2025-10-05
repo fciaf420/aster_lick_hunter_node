@@ -1,6 +1,7 @@
 'use client';
 
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect, useContext, useCallback } from 'react';
+import { usePathname } from 'next/navigation';
 import { Config } from '@/lib/types';
 import { OnboardingProvider } from './onboarding/OnboardingProvider';
 import { OnboardingModal } from './onboarding/OnboardingModal';
@@ -25,23 +26,75 @@ export const useConfig = () => useContext(ConfigContext);
 export default function ConfigProvider({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<Config | null>(null);
   const [loading, setLoading] = useState(true);
+  const pathname = usePathname();
+  const isLoginPage = pathname === '/login';
 
-  const loadConfig = async () => {
+  const createDefaultConfig = (): Config => ({
+    api: { apiKey: '', secretKey: '' },
+    symbols: {},
+    global: {
+      riskPercent: 90,
+      paperMode: true,
+      positionMode: "HEDGE",
+      maxOpenPositions: 5,
+      useThresholdSystem: false,
+      server: {
+        dashboardPassword: "",
+        dashboardPort: 3000,
+        websocketPort: 8080,
+        useRemoteWebSocket: false,
+        websocketHost: null
+      },
+      rateLimit: {
+        maxRequestWeight: 2400,
+        maxOrderCount: 1200,
+        reservePercent: 30,
+        enableBatching: true,
+        queueTimeout: 30000,
+        parallelProcessing: false,
+        maxConcurrentRequests: 3
+      }
+    },
+    version: "1.1.0"
+  });
+
+  const loadConfig = useCallback(async () => {
+    setLoading(true);
     try {
       const response = await fetch('/api/config');
+      const data = await response.json() as Partial<Config>;
+
       if (response.ok) {
-        const data = await response.json();
-        setConfig(data);
-      }
-    } catch (error) {
-      console.error('Failed to load config:', error);
-      // Initialize with default config
-      const defaultConfig: Config = {
-        api: {
-          apiKey: '',
-          secretKey: '',
-        },
-        symbols: {
+        const defaultConfig = createDefaultConfig();
+        
+        // Create merged config with proper type safety
+        const mergedConfig: Config = {
+          ...defaultConfig,
+          ...data,
+          api: {
+            ...defaultConfig.api,
+            ...(data.api || {})
+          },
+          global: {
+            ...defaultConfig.global,
+            ...(data.global || {}),
+            server: {
+              ...defaultConfig.global.server,
+              ...(data.global?.server || {})
+            },
+            rateLimit: {
+              ...defaultConfig.global.rateLimit,
+              ...(data.global?.rateLimit || {})
+            }
+          },
+          symbols: data.symbols || {}
+        };
+        
+        setConfig(mergedConfig);
+      } else if (response.status === 401) {
+        // Not authenticated, use default config with ASTERUSDT symbol
+        const defaultConfig = createDefaultConfig();
+        defaultConfig.symbols = {
           ASTERUSDT: {
             longVolumeThresholdUSDT: 1000,
             shortVolumeThresholdUSDT: 2500,
@@ -53,27 +106,22 @@ export default function ConfigProvider({ children }: { children: React.ReactNode
             slPercent: 20,
             vwapProtection: true,
             vwapTimeframe: "5m",
-            vwapLookback: 200
-          },
-        },
-        global: {
-          riskPercent: 90,
-          paperMode: true,
-          positionMode: "HEDGE",
-          maxOpenPositions: 5,
-          server: {
-            dashboardPassword: "",
-            dashboardPort: 3000,
-            websocketPort: 8080
+            vwapLookback: 200,
+            orderType: "LIMIT"
           }
-        },
-        version: "1.1.0"
-      };
-      setConfig(defaultConfig);
+        };
+        setConfig(defaultConfig);
+      } else {
+        throw new Error(`Failed to load config: ${response.status} ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error('Failed to load config:', error);
+      // Initialize with default config on error
+      setConfig(createDefaultConfig());
     } finally {
       setLoading(false);
     }
-  };
+  }, [setConfig, setLoading]);
 
   const updateConfig = async (newConfig: Config) => {
     try {
@@ -88,7 +136,8 @@ export default function ConfigProvider({ children }: { children: React.ReactNode
       if (response.ok) {
         setConfig(newConfig);
       } else {
-        throw new Error('Failed to save config');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`Failed to save config: ${response.status} ${response.statusText}${errorData.error ? ` - ${errorData.error}` : ''}`);
       }
     } catch (error) {
       console.error('Failed to save config:', error);
@@ -98,7 +147,7 @@ export default function ConfigProvider({ children }: { children: React.ReactNode
 
   useEffect(() => {
     loadConfig();
-  }, []);
+  }, [loadConfig]);
 
   // Listen for tutorial restart event
   useEffect(() => {
@@ -120,11 +169,15 @@ export default function ConfigProvider({ children }: { children: React.ReactNode
         reloadConfig: loadConfig,
       }}
     >
-      <OnboardingProvider>
-        {children}
-        <OnboardingModal />
-        <TutorialOverlay />
-      </OnboardingProvider>
+      {isLoginPage ? (
+        children
+      ) : (
+        <OnboardingProvider>
+          {children}
+          <OnboardingModal />
+          <TutorialOverlay />
+        </OnboardingProvider>
+      )}
     </ConfigContext.Provider>
   );
 }

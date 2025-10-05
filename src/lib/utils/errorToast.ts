@@ -123,6 +123,29 @@ function ClipboardButton({ text }: { text: string }) {
   );
 }
 
+// Determine auto-dismiss duration based on error type
+const getErrorDuration = (type: ErrorType, title: string): number => {
+  const lowerTitle = title.toLowerCase();
+
+  // Shorter duration for validation and balance errors
+  if (
+    lowerTitle.includes('insufficient balance') ||
+    lowerTitle.includes('precision') ||
+    lowerTitle.includes('notional') ||
+    lowerTitle.includes('validation')
+  ) {
+    return 5000; // 5 seconds
+  }
+
+  // Medium duration for API and config errors
+  if (type === 'api' || type === 'config') {
+    return 8000; // 8 seconds
+  }
+
+  // Default duration for other errors
+  return 12000; // 12 seconds
+};
+
 // Main error toast function
 export const showErrorToast = (options: ErrorToastOptions) => {
   const {
@@ -130,8 +153,11 @@ export const showErrorToast = (options: ErrorToastOptions) => {
     title,
     message,
     details,
-    duration = 12000, // 12 seconds default for errors
+    duration,
   } = options;
+
+  // Use provided duration or calculate based on error type
+  const finalDuration = duration ?? getErrorDuration(type, title);
 
   const errorText = formatErrorForClipboard(options);
   const Icon = getErrorIcon(type);
@@ -174,7 +200,7 @@ export const showErrorToast = (options: ErrorToastOptions) => {
       ]
     ),
     {
-      duration,
+      duration: finalDuration,
       style,
       className: 'error-toast',
     }
