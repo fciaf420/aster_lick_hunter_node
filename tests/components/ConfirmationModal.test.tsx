@@ -66,40 +66,42 @@ describe('ConfirmationModal', () => {
   });
 
   describe('Variants', () => {
+    // The dialog renders in a portal on document.body, so query baseElement rather than container.
+    // lucide-react renders AlertTriangle with its current name, TriangleAlert.
     it('should render default variant with info icon', () => {
-      const { container } = render(
+      const { baseElement } = render(
         <ConfirmationModal {...defaultProps} variant="default" />
       );
 
-      const icon = container.querySelector('.lucide-info');
+      const icon = baseElement.querySelector('.lucide-info');
       expect(icon).toBeInTheDocument();
     });
 
     it('should render destructive variant with warning icon', () => {
-      const { container } = render(
+      const { baseElement } = render(
         <ConfirmationModal {...defaultProps} variant="destructive" />
       );
 
-      const icon = container.querySelector('.lucide-alert-triangle');
+      const icon = baseElement.querySelector('.lucide-triangle-alert');
       expect(icon).toBeInTheDocument();
     });
 
     it('should render warning variant with warning icon', () => {
-      const { container } = render(
+      const { baseElement } = render(
         <ConfirmationModal {...defaultProps} variant="warning" />
       );
 
-      const icon = container.querySelector('.lucide-alert-triangle');
+      const icon = baseElement.querySelector('.lucide-triangle-alert');
       expect(icon).toBeInTheDocument();
     });
 
     it('should not show icon when showIcon is false', () => {
-      const { container } = render(
+      const { baseElement } = render(
         <ConfirmationModal {...defaultProps} showIcon={false} />
       );
 
-      const infoIcon = container.querySelector('.lucide-info');
-      const warningIcon = container.querySelector('.lucide-alert-triangle');
+      const infoIcon = baseElement.querySelector('.lucide-info');
+      const warningIcon = baseElement.querySelector('.lucide-triangle-alert');
       expect(infoIcon).not.toBeInTheDocument();
       expect(warningIcon).not.toBeInTheDocument();
     });
@@ -183,8 +185,9 @@ describe('ConfirmationModal', () => {
         <ConfirmationModal {...defaultProps} variant="destructive" />
       );
 
+      // Button variants are applied as Tailwind classes from buttonVariants
       const confirmButton = screen.getByText('Confirm');
-      expect(confirmButton).toHaveClass('destructive');
+      expect(confirmButton).toHaveClass('bg-destructive');
     });
 
     it('should use default button for warning variant', () => {
@@ -193,7 +196,7 @@ describe('ConfirmationModal', () => {
       );
 
       const confirmButton = screen.getByText('Confirm');
-      expect(confirmButton).toHaveClass('default');
+      expect(confirmButton).toHaveClass('bg-primary');
     });
 
     it('should use default button for default variant', () => {
@@ -202,7 +205,7 @@ describe('ConfirmationModal', () => {
       );
 
       const confirmButton = screen.getByText('Confirm');
-      expect(confirmButton).toHaveClass('default');
+      expect(confirmButton).toHaveClass('bg-primary');
     });
   });
 

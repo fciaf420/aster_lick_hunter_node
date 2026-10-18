@@ -1,3 +1,6 @@
+/**
+ * @jest-environment node
+ */
 import {
   getIncomeHistory,
   getTimeRangeIncome,
@@ -22,10 +25,32 @@ const mockCredentials = {
   secretKey: 'test-secret-key',
 };
 
+// The mock data generators use the current time and Math.random, so pin both:
+// midday UTC keeps "today minus a few hours" records on the same UTC day, and a
+// seeded generator makes the win/loss patterns reproducible
+const FIXED_NOW = new Date('2025-10-15T12:00:00.000Z');
+
+function seededRandom(seed: number): () => number {
+  // mulberry32
+  return () => {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 describe('Income API', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     clearIncomeCache(); // Clear cache before each test
+    jest.useFakeTimers({ now: FIXED_NOW, advanceTimers: true });
+    jest.spyOn(Math, 'random').mockImplementation(seededRandom(42));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
   });
 
   describe('getIncomeHistory', () => {
@@ -92,8 +117,11 @@ describe('Income API', () => {
     });
 
     it('should handle large datasets with pagination', async () => {
-      // First call returns 1000 records (max limit)
-      const oldRecords = MockIncomeDataGenerator.createLargeDataset().slice(0, 1000);
+      // First call returns the oldest 1000 records in the 30d window (max limit, oldest first like the API)
+      const windowStart = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const oldRecords = MockIncomeDataGenerator.createLargeDataset()
+        .filter(record => record.time >= windowStart)
+        .slice(0, 1000);
       // Second call returns recent data including today
       const recentRecords = MockIncomeDataGenerator.createIncomeRecordsForDateRange(
         new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),

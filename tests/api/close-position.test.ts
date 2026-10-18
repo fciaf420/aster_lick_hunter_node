@@ -1,3 +1,6 @@
+/**
+ * @jest-environment node
+ */
 import { POST } from '@/app/api/positions/[symbol]/[side]/close/route';
 import { NextRequest } from 'next/server';
 import { placeOrder, getPositions } from '@/lib/api/orders';

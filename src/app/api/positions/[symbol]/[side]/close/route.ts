@@ -144,12 +144,14 @@ export async function POST(
       const errorMsg = error.response.data.msg || error.response.data.message || 'Unknown API error';
 
       // Add more specific error messages for common issues
+      // Exchange messages vary in case and spacing (e.g. "Precision is over...", "ReduceOnly Order is rejected")
+      const normalizedMsg = String(errorMsg).toLowerCase();
       let enhancedError = errorMsg;
-      if (errorMsg.includes('precision')) {
+      if (normalizedMsg.includes('precision')) {
         enhancedError = `Quantity precision error: ${errorMsg}. The exchange requires specific decimal precision for this symbol.`;
-      } else if (errorMsg.includes('balance')) {
+      } else if (normalizedMsg.includes('balance')) {
         enhancedError = `Insufficient balance: ${errorMsg}`;
-      } else if (errorMsg.includes('reduce only')) {
+      } else if (/reduce.?only/.test(normalizedMsg)) {
         enhancedError = `Reduce-only order error: ${errorMsg}. The order settings may not match your position.`;
       }
 

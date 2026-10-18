@@ -390,7 +390,7 @@ export async function getTimeRangeIncome(
 
   try {
     const allRecords: IncomeRecord[] = [];
-    let currentEndTime = now;
+    let currentStartTime = startTime;
     let batchCount = 0;
     const maxBatches = 10; // Safety limit to prevent infinite loops
 
@@ -401,8 +401,8 @@ export async function getTimeRangeIncome(
       batchCount++;
 
       const params: IncomeHistoryParams = {
-        startTime: startTime,
-        endTime: currentEndTime,
+        startTime: currentStartTime,
+        endTime: now,
         limit: 1000,
       };
 
@@ -424,16 +424,14 @@ export async function getTimeRangeIncome(
         break;
       }
 
-      // Update endTime to the oldest record's time minus 1ms for next batch
-      // This ensures we don't re-fetch the same records
-      const oldestRecord = batch[batch.length - 1];
-      currentEndTime = oldestRecord.time - 1;
-
-      // Safety check: if we've gone past our startTime, stop
-      if (startTime && currentEndTime < startTime) {
-        console.log(`[Income API] Reached startTime boundary. Stopping pagination.`);
+      // Records come back oldest first, so page forward from the newest record in this batch.
+      // Its timestamp is requested again so records sharing it aren't skipped; duplicates are removed by tranId below
+      const newestTime = batch[batch.length - 1].time;
+      if (currentStartTime !== undefined && newestTime <= currentStartTime) {
+        console.warn(`[Income API] Batch ${batchCount} made no progress past ${newestTime}. Stopping pagination.`);
         break;
       }
+      currentStartTime = newestTime;
     }
 
     if (batchCount >= maxBatches) {

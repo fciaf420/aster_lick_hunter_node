@@ -25,5 +25,9 @@ module.exports = {
   testPathIgnorePatterns: [
     '/node_modules/',
     '/.next/',
+    // tsx-runner suites (run via `npm test`), not jest tests
+    '<rootDir>/tests/core/',
+    '<rootDir>/tests/integration/',
+    '<rootDir>/tests/old-tests/',
   ],
 };

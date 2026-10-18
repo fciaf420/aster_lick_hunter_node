@@ -16,7 +16,7 @@ jest.mock('@/components/ConfigProvider', () => {
   return {
     __esModule: true,
     default: ({ children }: any) => children,
-    useConfig: () => ({
+    useConfig: jest.fn(() => ({
       config: {
         api: {
           apiKey: 'test-key',
@@ -26,12 +26,13 @@ jest.mock('@/components/ConfigProvider', () => {
       loading: false,
       updateConfig: jest.fn(),
       reloadConfig: jest.fn(),
-    }),
+    })),
   };
 });
 
 // Mock websocket service
 jest.mock('@/lib/services/websocketService', () => ({
+  __esModule: true,
   default: {
     addMessageHandler: jest.fn(() => jest.fn()),
     connect: jest.fn(),
@@ -41,6 +42,7 @@ jest.mock('@/lib/services/websocketService', () => ({
 
 // Mock data store
 jest.mock('@/lib/services/dataStore', () => ({
+  __esModule: true,
   default: {
     fetchBalance: jest.fn(() => Promise.resolve({ totalBalance: 10000 })),
     on: jest.fn(),
@@ -75,7 +77,7 @@ jest.mock('recharts', () => {
 describe('PnLChart Component', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (global.fetch as jest.Mock).mockClear();
+    (global.fetch as jest.Mock).mockReset();
   });
 
   const renderComponent = (component: React.ReactElement) => {
@@ -129,7 +131,8 @@ describe('PnLChart Component', () => {
 
       renderComponent(<PnLChart />);
 
-      expect(screen.getByRole('status')).toBeInTheDocument(); // Skeleton loader
+      expect(screen.getByRole('progressbar')).toBeInTheDocument(); // Loading progress bar
+      expect(screen.getByText(/Loading performance data/i)).toBeInTheDocument();
     });
 
     it('should display empty state when no data', async () => {
@@ -146,18 +149,23 @@ describe('PnLChart Component', () => {
     });
 
     it('should display API keys required when not configured', async () => {
-      // Temporarily mock useConfig to return no API keys
-      const { useConfig } = require('@/components/ConfigProvider');
-      useConfig.mockReturnValueOnce({
+      // Temporarily mock useConfig to return no API keys (for every render, not just the first)
+      const useConfig = jest.requireMock('@/components/ConfigProvider').useConfig as jest.Mock;
+      const defaultUseConfig = useConfig.getMockImplementation();
+      useConfig.mockImplementation(() => ({
         config: { api: { apiKey: '', secretKey: '' } },
         loading: false,
-      });
+      }));
 
-      renderComponent(<PnLChart />);
+      try {
+        renderComponent(<PnLChart />);
 
-      await waitFor(() => {
-        expect(screen.getByText(/API keys required/i)).toBeInTheDocument();
-      });
+        await waitFor(() => {
+          expect(screen.getByText(/API keys required/i)).toBeInTheDocument();
+        });
+      } finally {
+        useConfig.mockImplementation(defaultUseConfig);
+      }
     });
   });
 
@@ -177,36 +185,29 @@ describe('PnLChart Component', () => {
         metrics: { totalPnl: 2000, winRate: 65 },
       };
 
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockData7d,
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ dailyPnL: [], metrics: {} }), // Balance API
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockData30d,
-        });
+      // On mount the component fetches income, realtime PnL and balance, so answer by URL
+      (global.fetch as jest.Mock).mockImplementation(async (url: string) => ({
+        ok: true,
+        json: async () => {
+          if (url === '/api/income?range=7d') return mockData7d;
+          if (url === '/api/income?range=30d') return mockData30d;
+          return {};
+        },
+      }));
 
       const { container } = renderComponent(<PnLChart />);
 
       // Wait for initial load
       await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith('/api/income?range=7d');
+        expect(container.querySelector('[data-testid="area-chart"]')).toBeInTheDocument();
       });
+      expect(global.fetch).toHaveBeenCalledWith('/api/income?range=7d');
 
       // Change time range to 30d
       const selectTrigger = container.querySelector('[role="combobox"]');
-      if (selectTrigger) {
-        fireEvent.click(selectTrigger);
-        await waitFor(() => {
-          const option30d = screen.getByRole('option', { name: '30d' });
-          fireEvent.click(option30d);
-        });
-      }
+      expect(selectTrigger).toBeInTheDocument();
+      fireEvent.click(selectTrigger!);
+      fireEvent.click(await screen.findByRole('option', { name: '30d' }));
 
       await waitFor(() => {
         expect(global.fetch).toHaveBeenCalledWith('/api/income?range=30d');
@@ -256,9 +257,9 @@ describe('PnLChart Component', () => {
         expect(container.querySelector('[data-testid="area-chart"]')).toBeInTheDocument();
       });
 
-      // Click on Daily tab
+      // Select the Daily tab (Radix Tabs activate on mousedown)
       const dailyTab = screen.getByRole('tab', { name: /Daily/i });
-      fireEvent.click(dailyTab);
+      fireEvent.mouseDown(dailyTab);
 
       await waitFor(() => {
         expect(container.querySelector('[data-testid="bar-chart"]')).toBeInTheDocument();
@@ -350,17 +351,23 @@ describe('PnLChart Component', () => {
         json: async () => mockData,
       });
 
-      renderComponent(<PnLChart />);
+      const { container } = renderComponent(<PnLChart />);
 
       await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledTimes(2); // Initial load + balance
+        expect(global.fetch).toHaveBeenCalledTimes(3); // Income + realtime PnL + balance
       });
 
-      const refreshButton = screen.getByRole('button', { name: /refresh/i });
-      fireEvent.click(refreshButton);
+      const incomeCalls = () =>
+        (global.fetch as jest.Mock).mock.calls.filter(([url]) => url === '/api/income?range=7d').length;
+      expect(incomeCalls()).toBe(1);
+
+      // The refresh button is icon-only, so find it by its icon
+      const refreshButton = container.querySelector('.lucide-refresh-cw')?.closest('button');
+      expect(refreshButton).toBeInTheDocument();
+      fireEvent.click(refreshButton!);
 
       await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith('/api/income?range=7d');
+        expect(incomeCalls()).toBe(2);
       });
     });
   });
@@ -460,7 +467,8 @@ describe('PnLChart Component', () => {
 describe('PerformanceCard Component', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (global.fetch as jest.Mock).mockClear();
+    (global.fetch as jest.Mock).mockReset();
+    (dataStore.fetchBalance as jest.Mock).mockResolvedValue({ totalBalance: 10000 });
   });
 
   describe('24-Hour Performance Display', () => {
@@ -550,9 +558,11 @@ describe('PerformanceCard Component', () => {
         metrics: { totalPnl: 150 },
       };
 
+      // The WebSocket-triggered refresh only accepts responses with a JSON content-type
+      const jsonHeaders = { get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null) };
       (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({ ok: true, json: async () => initialData })
-        .mockResolvedValueOnce({ ok: true, json: async () => updatedData });
+        .mockResolvedValueOnce({ ok: true, headers: jsonHeaders, json: async () => initialData })
+        .mockResolvedValueOnce({ ok: true, headers: jsonHeaders, json: async () => updatedData });
 
       let messageHandler: ((msg: any) => void) | null = null;
       (websocketService.addMessageHandler as jest.Mock).mockImplementation((handler) => {
@@ -642,7 +652,8 @@ describe('PerformanceCard Component', () => {
       render(<PerformanceCard />);
 
       await waitFor(() => {
-        expect(screen.getByText(/\$1,234,567.89/)).toBeInTheDocument();
+        // Shown for both the total and the realized PnL
+        expect(screen.getAllByText(/\$1,234,567.89/)).toHaveLength(2);
       });
     });
 
@@ -660,8 +671,10 @@ describe('PerformanceCard Component', () => {
       render(<PerformanceCard />);
 
       await waitFor(() => {
-        const profitElement = screen.getByText(/\$100.00/);
-        expect(profitElement).toHaveClass('text-green-500');
+        // Total and realized PnL are both $100.00
+        const profitElements = screen.getAllByText(/\$100.00/);
+        expect(profitElements).toHaveLength(2);
+        profitElements.forEach(el => expect(el).toHaveClass('text-green-500'));
       });
     });
 
@@ -679,8 +692,10 @@ describe('PerformanceCard Component', () => {
       render(<PerformanceCard />);
 
       await waitFor(() => {
-        const lossElement = screen.getByText(/-\$100.00/);
-        expect(lossElement).toHaveClass('text-red-500');
+        // Total and realized PnL are both -$100.00
+        const lossElements = screen.getAllByText(/-\$100.00/);
+        expect(lossElements).toHaveLength(2);
+        lossElements.forEach(el => expect(el).toHaveClass('text-red-500'));
       });
     });
 
