@@ -147,12 +147,12 @@ export default function PerformanceCardInline() {
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1">
             {isProfit ? (
-              <TrendingUp className="h-3.5 w-3.5 text-green-600" />
+              <TrendingUp className="h-3.5 w-3.5 text-profit" />
             ) : (
-              <TrendingDown className="h-3.5 w-3.5 text-red-600" />
+              <TrendingDown className="h-3.5 w-3.5 text-loss" />
             )}
             <span className={`text-lg font-semibold ${
-              isProfit ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+              isProfit ? 'text-profit' : 'text-loss'
             }`}>
               {formatCurrency(totalPnL)}
             </span>
@@ -161,7 +161,7 @@ export default function PerformanceCardInline() {
             variant={isProfit ? "outline" : "destructive"}
             className={`h-4 text-[10px] px-1 ${
               isProfit
-                ? 'border-green-600 text-green-600 dark:border-green-400 dark:text-green-400'
+                ? 'border-profit text-profit'
                 : ''
             }`}
           >

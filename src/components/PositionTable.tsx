@@ -443,7 +443,7 @@ export default function PositionTable({
                   <TableCell className="py-2">
                     <Badge
                       variant={position.side === 'LONG' ? 'outline' : 'destructive'}
-                      className={`h-5 text-xs px-1.5 ${position.side === 'LONG' ? 'border-green-600 text-green-600 dark:border-green-400 dark:text-green-400' : ''}`}
+                      className={`h-5 text-xs px-1.5 ${position.side === 'LONG' ? 'border-long text-long' : ''}`}
                     >
                       {position.side === 'LONG' ? (
                         <TrendingUp className="h-3 w-3 mr-0.5" />
@@ -486,9 +486,9 @@ export default function PositionTable({
                                   return (
                                     <>
                                       {(isNearLiquidation || isCritical) && (
-                                        <AlertTriangle className={`h-3 w-3 ${isCritical ? 'text-red-600 dark:text-red-400' : 'text-orange-600 dark:text-orange-400'}`} />
+                                        <AlertTriangle className={`h-3 w-3 ${isCritical ? 'text-destructive' : 'text-orange-600 dark:text-orange-400'}`} />
                                       )}
-                                      <span className={`text-sm font-mono ${isCritical ? 'text-red-600 dark:text-red-400' : isNearLiquidation ? 'text-orange-600 dark:text-orange-400' : ''}`}>
+                                      <span className={`text-sm font-mono ${isCritical ? 'text-destructive' : isNearLiquidation ? 'text-orange-600 dark:text-orange-400' : ''}`}>
                                         ${formatPriceWithCommas(position.symbol, position.liquidationPrice)}
                                       </span>
                                     </>
@@ -523,12 +523,12 @@ export default function PositionTable({
                   </TableCell>
                   <TableCell className="text-right py-2">
                     <div className="flex flex-col items-end gap-0.5">
-                      <span className={`text-sm font-semibold ${position.pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                      <span className={`text-sm font-semibold ${position.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                         {position.pnl >= 0 ? '+' : ''}${Math.abs(position.pnl).toFixed(2)}
                       </span>
                       <Badge
                         variant={position.pnl >= 0 ? "outline" : "destructive"}
-                        className={`h-3.5 text-[9px] px-1 ${position.pnl >= 0 ? 'border-green-600 text-green-600 dark:border-green-400 dark:text-green-400' : ''}`}
+                        className={`h-3.5 text-[9px] px-1 ${position.pnl >= 0 ? 'border-profit text-profit' : ''}`}
                       >
                         {position.pnlPercent >= 0 ? '+' : ''}{position.pnlPercent.toFixed(1)}%
                       </Badge>
@@ -542,8 +542,8 @@ export default function PositionTable({
                             <TooltipTrigger asChild>
                               <div className="flex gap-0.5">
                                 {position.hasStopLoss ? (
-                                  <Badge variant="outline" className="h-5 w-5 p-0 border-green-600">
-                                    <Shield className="h-3 w-3 text-green-600" />
+                                  <Badge variant="outline" className="h-5 w-5 p-0 border-profit">
+                                    <Shield className="h-3 w-3 text-profit" />
                                   </Badge>
                                 ) : (
                                   <Badge variant="outline" className="h-5 w-5 p-0">
@@ -565,7 +565,7 @@ export default function PositionTable({
                                     className={`h-5 w-5 p-0 ${
                                       (position.side === 'LONG' && vwap.position === 'below') ||
                                       (position.side === 'SHORT' && vwap.position === 'above')
-                                        ? 'border-green-600'
+                                        ? 'border-profit'
                                         : 'border-orange-600'
                                     }`}
                                   >
@@ -573,7 +573,7 @@ export default function PositionTable({
                                       className={`h-3 w-3 ${
                                         (position.side === 'LONG' && vwap.position === 'below') ||
                                         (position.side === 'SHORT' && vwap.position === 'above')
-                                          ? 'text-green-600'
+                                          ? 'text-profit'
                                           : 'text-orange-600'
                                       }`}
                                     />
@@ -666,7 +666,7 @@ export default function PositionTable({
                 <span className="text-sm font-medium">Side:</span>
                 <Badge
                   variant={closePositionModal.side === 'LONG' ? 'outline' : 'destructive'}
-                  className={`text-xs ${closePositionModal.side === 'LONG' ? 'border-green-600 text-green-600' : ''}`}
+                  className={`text-xs ${closePositionModal.side === 'LONG' ? 'border-long text-long' : ''}`}
                 >
                   {closePositionModal.side === 'LONG' ? (
                     <TrendingUp className="h-3 w-3 mr-1" />

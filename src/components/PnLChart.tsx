@@ -365,7 +365,7 @@ export default function PnLChart() {
         <div className="bg-background/95 backdrop-blur border rounded-md shadow-lg p-1.5">
           <p className="text-[10px] font-medium text-muted-foreground">{formatTooltipDate(label)}</p>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className={`text-sm font-semibold ${displayValue >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+            <span className={`text-sm font-semibold ${displayValue >= 0 ? 'text-profit' : 'text-loss'}`}>
               {formatTooltipValue(displayValue)}
             </span>
             {data.tradeCount > 0 && (
@@ -461,7 +461,7 @@ export default function PnLChart() {
                   </SelectContent>
                 </Select>
                 <Tabs value={chartType} onValueChange={(value) => setChartType(value as ChartType)}>
-                  <TabsList className="h-7">
+                  <TabsList className="group-data-[orientation=horizontal]/tabs:h-7">
                     <TabsTrigger value="daily" className="h-6 text-xs">Daily</TabsTrigger>
                     <TabsTrigger value="cumulative" className="h-6 text-xs">Total</TabsTrigger>
                   </TabsList>
@@ -570,7 +570,7 @@ export default function PnLChart() {
                 </SelectContent>
               </Select>
               <Tabs value={chartType} onValueChange={(value) => setChartType(value as ChartType)}>
-                <TabsList className="h-7">
+                <TabsList className="group-data-[orientation=horizontal]/tabs:h-7">
                   <TabsTrigger value="daily" className="h-6 text-xs">Daily</TabsTrigger>
                   <TabsTrigger value="cumulative" className="h-6 text-xs">Total</TabsTrigger>
                   <TabsTrigger value="breakdown" className="h-6 text-xs">Breakdown</TabsTrigger>
@@ -598,16 +598,16 @@ export default function PnLChart() {
           <div className="flex flex-wrap items-center gap-3 mb-3 pb-3 border-b">
             <div className="flex items-center gap-1.5">
               {safeMetrics.totalPnl >= 0 ? (
-                <TrendingUp className="h-3.5 w-3.5 text-green-600" />
+                <TrendingUp className="h-3.5 w-3.5 text-profit" />
               ) : (
-                <TrendingDown className="h-3.5 w-3.5 text-red-600" />
+                <TrendingDown className="h-3.5 w-3.5 text-loss" />
               )}
-              <span className={`text-sm font-semibold ${safeMetrics.totalPnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+              <span className={`text-sm font-semibold ${safeMetrics.totalPnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                 {formatTooltipValue(safeMetrics.totalPnl)}
               </span>
               <Badge
                 variant={safeMetrics.totalPnl >= 0 ? "outline" : "destructive"}
-                className={`h-4 text-[10px] px-1 ${safeMetrics.totalPnl >= 0 ? 'border-green-600 text-green-600 dark:border-green-400 dark:text-green-400' : ''}`}
+                className={`h-4 text-[10px] px-1 ${safeMetrics.totalPnl >= 0 ? 'border-profit text-profit' : ''}`}
               >
                 {pnlPercentage >= 0 ? '+' : ''}{pnlPercentage.toFixed(2)}%
               </Badge>
@@ -637,8 +637,8 @@ export default function PnLChart() {
             </div>
 
             <div className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span>Best: <span className="text-green-600">{safeMetrics.bestDay ? formatTooltipValue(safeMetrics.bestDay.netPnl) : '-'}</span></span>
-              <span>Worst: <span className="text-red-600">{safeMetrics.worstDay ? formatTooltipValue(safeMetrics.worstDay.netPnl) : '-'}</span></span>
+              <span>Best: <span className="text-profit">{safeMetrics.bestDay ? formatTooltipValue(safeMetrics.bestDay.netPnl) : '-'}</span></span>
+              <span>Worst: <span className="text-loss">{safeMetrics.worstDay ? formatTooltipValue(safeMetrics.worstDay.netPnl) : '-'}</span></span>
               <span>Avg: {formatTooltipValue(safeMetrics.avgDailyPnl)}</span>
             </div>
           </div>
@@ -670,13 +670,13 @@ export default function PnLChart() {
                 />
                 <YAxis tick={{ fontSize: 10 }} width={40} />
                 <Tooltip content={<CustomTooltip />} />
-                <ReferenceLine y={0} stroke="#666" />
+                <ReferenceLine y={0} stroke="var(--muted-foreground)" />
                 <Bar
                   dataKey="netPnl"
                   radius={[4, 4, 0, 0]}
                 >
                   {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.netPnl >= 0 ? '#10b981' : '#ef4444'} />
+                    <Cell key={`cell-${index}`} fill={entry.netPnl >= 0 ? 'var(--profit)' : 'var(--loss)'} />
                   ))}
                 </Bar>
               </BarChart>
@@ -692,12 +692,13 @@ export default function PnLChart() {
                 />
                 <YAxis tick={{ fontSize: 10 }} width={40} />
                 <Tooltip content={<CustomTooltip />} />
-                <ReferenceLine y={0} stroke="#666" />
+                <ReferenceLine y={0} stroke="var(--muted-foreground)" />
                 <Area
                   type="monotone"
                   dataKey="cumulativePnl"
-                  stroke={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "#10b981" : "#ef4444"}
-                  fill={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "#10b98140" : "#ef444440"}
+                  stroke={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "var(--profit)" : "var(--loss)"}
+                  fill={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "var(--profit)" : "var(--loss)"}
+                  fillOpacity={0.15}
                   strokeWidth={2}
                 />
               </AreaChart>

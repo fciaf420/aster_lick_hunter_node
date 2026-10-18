@@ -262,7 +262,7 @@ export default function PerSymbolPerformanceTable({ timeRange }: PerSymbolPerfor
                     variant={symbolPnl.winRate >= 50 ? "outline" : "secondary"}
                     className={`h-5 text-[10px] ${
                       symbolPnl.winRate >= 50
-                        ? 'border-green-600 text-green-600 dark:border-green-400 dark:text-green-400'
+                        ? 'border-profit text-profit'
                         : ''
                     }`}
                   >
@@ -272,8 +272,8 @@ export default function PerSymbolPerformanceTable({ timeRange }: PerSymbolPerfor
                 <TableCell className="text-right">
                   <span className={`font-semibold ${
                     symbolPnl.netPnl >= 0
-                      ? 'text-green-600 dark:text-green-400'
-                      : 'text-red-600 dark:text-red-400'
+                      ? 'text-profit'
+                      : 'text-loss'
                   }`}>
                     {formatCurrency(symbolPnl.netPnl)}
                   </span>
@@ -281,11 +281,11 @@ export default function PerSymbolPerformanceTable({ timeRange }: PerSymbolPerfor
                 <TableCell className="text-right text-sm">
                   {formatCurrency(symbolPnl.realizedPnl)}
                 </TableCell>
-                <TableCell className="text-right text-sm text-red-600 dark:text-red-400">
+                <TableCell className="text-right text-sm text-loss">
                   {formatCurrency(symbolPnl.commission)}
                 </TableCell>
                 <TableCell className="text-right text-sm">
-                  <span className={symbolPnl.fundingFee >= 0 ? 'text-green-600' : 'text-red-600'}>
+                  <span className={symbolPnl.fundingFee >= 0 ? 'text-profit' : 'text-loss'}>
                     {formatCurrency(symbolPnl.fundingFee)}
                   </span>
                 </TableCell>

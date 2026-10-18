@@ -101,26 +101,26 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
           <div className="space-y-0.5">
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-sm bg-green-500" />
+                <div className="w-2 h-2 rounded-sm bg-profit" />
                 <span className="text-xs">Realized PnL</span>
               </div>
-              <span className="text-xs font-semibold text-green-600">
+              <span className="text-xs font-semibold text-profit">
                 {formatCurrency(data['Realized PnL'])}
               </span>
             </div>
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-sm bg-red-500" />
+                <div className="w-2 h-2 rounded-sm bg-loss" />
                 <span className="text-xs">Commission</span>
               </div>
-              <span className="text-xs font-semibold text-red-600">
+              <span className="text-xs font-semibold text-loss">
                 {formatCurrency(data._originalCommission)}
               </span>
             </div>
             {data['Funding Fee'] !== 0 && (
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-blue-500" />
+                  <div className="w-2 h-2 rounded-sm bg-chart-1" />
                   <span className="text-xs">Funding Fee</span>
                 </div>
                 <span className={`text-xs font-semibold ${data['Funding Fee'] >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>
@@ -131,7 +131,7 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
             {data['Insurance'] !== 0 && (
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-orange-500" />
+                  <div className="w-2 h-2 rounded-sm bg-chart-2" />
                   <span className="text-xs">Insurance</span>
                 </div>
                 <span className="text-xs font-semibold text-orange-600">
@@ -142,7 +142,7 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
             {data['Rebates'] !== 0 && (
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-yellow-500" />
+                  <div className="w-2 h-2 rounded-sm bg-chart-3" />
                   <span className="text-xs">Rebates</span>
                 </div>
                 <span className="text-xs font-semibold text-yellow-600">
@@ -153,7 +153,7 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
             {data['USDF Rewards'] !== 0 && (
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-cyan-500" />
+                  <div className="w-2 h-2 rounded-sm bg-chart-4" />
                   <span className="text-xs">USDF Rewards</span>
                 </div>
                 <span className="text-xs font-semibold text-cyan-600">
@@ -164,7 +164,7 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
             {data['Rewards'] !== 0 && (
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-purple-500" />
+                  <div className="w-2 h-2 rounded-sm bg-chart-5" />
                   <span className="text-xs">Rewards</span>
                 </div>
                 <span className="text-xs font-semibold text-purple-600">
@@ -174,7 +174,7 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
             )}
             <div className="pt-1 mt-1 border-t flex items-center justify-between gap-4">
               <span className="text-xs font-semibold">Net PnL</span>
-              <span className={`text-xs font-semibold ${data._netPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              <span className={`text-xs font-semibold ${data._netPnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                 {formatCurrency(data._netPnl)}
               </span>
             </div>
@@ -218,14 +218,14 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
           iconType="square"
           iconSize={8}
         />
-        <Bar dataKey="Realized PnL" stackId="a" fill="#10b981" radius={[0, 0, 0, 0]} />
-        <Bar dataKey="Funding Fee" stackId="a" fill="#3b82f6" radius={[0, 0, 0, 0]} />
-        <Bar dataKey="Insurance" stackId="a" fill="#f97316" radius={[0, 0, 0, 0]} />
-        <Bar dataKey="Rebates" stackId="a" fill="#eab308" radius={[0, 0, 0, 0]} />
-        <Bar dataKey="USDF Rewards" stackId="a" fill="#06b6d4" radius={[0, 0, 0, 0]} />
-        <Bar dataKey="Rewards" stackId="a" fill="#a855f7" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="Realized PnL" stackId="a" fill="var(--profit)" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="Funding Fee" stackId="a" fill="var(--chart-1)" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="Insurance" stackId="a" fill="var(--chart-2)" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="Rebates" stackId="a" fill="var(--chart-3)" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="USDF Rewards" stackId="a" fill="var(--chart-4)" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="Rewards" stackId="a" fill="var(--chart-5)" radius={[4, 4, 0, 0]} />
         {/* Commission shown as negative overlay */}
-        <Bar dataKey="Commission" fill="#ef4444" opacity={0.7} radius={[4, 4, 0, 0]} />
+        <Bar dataKey="Commission" fill="var(--loss)" opacity={0.7} radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );

@@ -3,6 +3,11 @@
 import React from 'react';
 import { Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Progress } from '@/components/ui/progress';
+
+// Progress paints its indicator with bg-primary; the strength meter recolours
+// it per level through the indicator's data-slot. The class names are written
+// out in full (not built from a prefix) so Tailwind's scanner generates them.
 
 interface PasswordStrengthProps {
   password: string;
@@ -41,19 +46,19 @@ export function calculatePasswordStrength(password: string): PasswordStrength {
 
   if (score < 1) {
     label = 'Weak';
-    color = 'bg-red-500';
+    color = '[&>[data-slot=progress-indicator]]:bg-red-500';
   } else if (score < 2) {
     label = 'Fair';
-    color = 'bg-orange-500';
+    color = '[&>[data-slot=progress-indicator]]:bg-orange-500';
   } else if (score < 3) {
     label = 'Good';
-    color = 'bg-yellow-500';
+    color = '[&>[data-slot=progress-indicator]]:bg-yellow-500';
   } else if (score < 4) {
     label = 'Strong';
-    color = 'bg-green-500';
+    color = '[&>[data-slot=progress-indicator]]:bg-green-500';
   } else {
     label = 'Very Strong';
-    color = 'bg-green-600';
+    color = '[&>[data-slot=progress-indicator]]:bg-green-600';
   }
 
   return {
@@ -100,15 +105,14 @@ const PasswordStrengthIndicator: React.FC<PasswordStrengthProps> = ({
                 {isDefaultAdmin ? 'Default Password' : strength.label}
               </span>
             </div>
-            <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
-              <div
-                className={cn(
-                  'h-full transition-all duration-300',
-                  isDefaultAdmin ? 'bg-orange-500' : strength.color
-                )}
-                style={{ width: `${isDefaultAdmin ? 25 : strength.percentage}%` }}
-              />
-            </div>
+            <Progress
+              aria-label="Password strength"
+              value={isDefaultAdmin ? 25 : strength.percentage}
+              className={cn(
+                'bg-secondary',
+                isDefaultAdmin ? '[&>[data-slot=progress-indicator]]:bg-orange-500' : strength.color
+              )}
+            />
           </div>
 
           {/* Requirements List */}

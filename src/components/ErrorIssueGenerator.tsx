@@ -345,7 +345,7 @@ export default function ErrorIssueGenerator({
               id="issue-body"
               value={issueBody}
               onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setIssueBody(e.target.value)}
-              className="min-h-[300px] font-mono text-sm"
+              className="min-h-[300px] field-sizing-fixed font-mono text-sm"
             />
           </div>
 

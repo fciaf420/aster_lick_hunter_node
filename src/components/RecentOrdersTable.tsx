@@ -229,7 +229,7 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
     switch (status) {
       case OrderStatus.FILLED:
         return (
-          <Badge className="bg-green-600/10 text-green-600 border-green-600/20">
+          <Badge className="bg-profit/10 text-profit border-profit/20">
             <CheckCircle2 className="w-3 h-3 mr-1" />
             Filled
           </Badge>
@@ -252,7 +252,7 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
         );
       case OrderStatus.REJECTED:
         return (
-          <Badge className="bg-red-600/10 text-red-600 border-red-600/20">
+          <Badge className="bg-loss/10 text-loss border-loss/20">
             <AlertCircle className="w-3 h-3 mr-1" />
             Rejected
           </Badge>
@@ -268,9 +268,9 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
       [OrderType.MARKET]: 'bg-purple-600/10 text-purple-600 border-purple-600/20',
       [OrderType.LIMIT]: 'bg-blue-600/10 text-blue-600 border-blue-600/20',
       [OrderType.STOP_MARKET]: 'bg-orange-600/10 text-orange-600 border-orange-600/20',
-      [OrderType.TAKE_PROFIT_MARKET]: 'bg-green-600/10 text-green-600 border-green-600/20',
+      [OrderType.TAKE_PROFIT_MARKET]: 'bg-profit/10 text-profit border-profit/20',
       [OrderType.TRAILING_STOP_MARKET]: 'bg-yellow-600/10 text-yellow-600 border-yellow-600/20',
-      [OrderType.LIQUIDATION]: 'bg-red-600/10 text-red-600 border-red-600/20',
+      [OrderType.LIQUIDATION]: 'bg-loss/10 text-loss border-loss/20',
     };
 
     return (
@@ -317,8 +317,8 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
       'REDUCE': 'bg-yellow-600/10 text-yellow-600 border-yellow-600/20',
       'CLOSE': 'bg-gray-600/10 text-gray-600 border-gray-600/20',
       'CLOSE ALL': 'bg-gray-600/10 text-gray-600 border-gray-600/20',
-      'STOP LOSS': 'bg-red-600/10 text-red-600 border-red-600/20',
-      'TAKE PROFIT': 'bg-green-600/10 text-green-600 border-green-600/20',
+      'STOP LOSS': 'bg-loss/10 text-loss border-loss/20',
+      'TAKE PROFIT': 'bg-profit/10 text-profit border-profit/20',
     };
 
     return (
@@ -460,7 +460,7 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
           </div>
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground">Net PnL:</span>
-            <span className={`font-medium ${statistics.netPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <span className={`font-medium ${statistics.netPnL >= 0 ? 'text-profit' : 'text-loss'}`}>
               {statistics.netPnL >= 0 ? '+' : '-'}${Math.abs(statistics.netPnL).toFixed(2)}
             </span>
           </div>
@@ -538,7 +538,7 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
                         <TableCell>
                           <Badge
                             variant="outline"
-                            className={order.side === OrderSide.BUY ? 'text-green-600' : 'text-red-600'}
+                            className={order.side === OrderSide.BUY ? 'text-long' : 'text-short'}
                           >
                             {order.side === OrderSide.BUY ? (
                               <TrendingUp className="w-3 h-3 mr-1" />
@@ -562,7 +562,7 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
                         </TableCell>
                         <TableCell className="text-right font-mono">
                           {pnl && (
-                            <span className={pnl.value >= 0 ? 'text-green-600' : 'text-red-600'}>
+                            <span className={pnl.value >= 0 ? 'text-profit' : 'text-loss'}>
                               {pnl.formatted}
                             </span>
                           )}

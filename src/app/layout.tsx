@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { AuthProvider } from "@/components/AuthProvider";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import ConfigProvider from "@/components/ConfigProvider";
 import ErrorNotificationButton from "@/components/ErrorNotificationButton";
 import { WebSocketProvider } from "@/providers/WebSocketProvider";
@@ -44,11 +45,13 @@ export default function RootLayout({
           <AuthProvider>
             <ConfigProvider>
               <WebSocketProvider>
-                <PersistentErrorBanner />
-                {children}
-                <Toaster />
-                <ErrorNotificationButton />
-                <WebSocketErrorModal />
+                <TooltipProvider>
+                  <PersistentErrorBanner />
+                  {children}
+                  <Toaster />
+                  <ErrorNotificationButton />
+                  <WebSocketErrorModal />
+                </TooltipProvider>
               </WebSocketProvider>
             </ConfigProvider>
           </AuthProvider>
