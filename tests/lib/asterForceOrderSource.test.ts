@@ -54,6 +54,15 @@ async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void
   }
 }
 
+// Like waitFor, but polls with setImmediate so it still works while setTimeout is faked
+async function waitForIo(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) throw new Error('Timed out waiting for condition');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
 describe('parseForceOrderEvent', () => {
   it('maps a forceOrder frame to a LiquidationEvent', () => {
     expect(parseForceOrderEvent(FORCE_ORDER_FRAME)).toEqual(EXPECTED_EVENT);
@@ -159,6 +168,11 @@ describe('AsterForceOrderSource', () => {
     source.stop();
   });
 
+  // The old version of this test slept 300 ms, stopped the source and compared counters after a second sleep. When
+  // stop() landed while a retry was still connecting, that socket's close reported one more (final, reconnectDelayMs
+  // null) disconnect after the counters were read, so it failed now and then on a loaded machine. Here only the
+  // reconnect timer is faked and stepped by hand while the refused connections complete for real, so every attempt
+  // is counted exactly and nothing depends on how fast the machine is.
   it('an unreachable stream retries once per failure, not twice', async () => {
     const closedUrl = await new Promise<string>((resolve) => {
       const probe = new WebSocketServer({ port: 0, host: '127.0.0.1' });
@@ -167,21 +181,44 @@ describe('AsterForceOrderSource', () => {
         probe.close(() => resolve(`ws://127.0.0.1:${port}/ws/!forceOrder@arr`));
       });
     });
-    const source = new AsterForceOrderSource({ url: closedUrl, reconnectDelayMs: 20 });
-    let errors = 0;
-    const disconnects: (number | null)[] = [];
-    source.start(() => undefined, {
-      onError: () => errors++,
-      onDisconnected: ({ reconnectDelayMs }) => disconnects.push(reconnectDelayMs),
+    jest.useFakeTimers({
+      doNotFake: [
+        'Date', 'hrtime', 'nextTick', 'performance', 'queueMicrotask', 'requestAnimationFrame',
+        'cancelAnimationFrame', 'requestIdleCallback', 'cancelIdleCallback', 'setImmediate',
+        'clearImmediate', 'setInterval', 'clearInterval',
+      ],
     });
-    await new Promise(resolve => setTimeout(resolve, 300));
-    source.stop();
-    const attempts = disconnects.length;
-    // One error and one disconnect per attempt; with a doubled reconnect the attempts would grow exponentially
-    expect(attempts).toBeGreaterThan(1);
-    expect(errors).toBe(attempts);
-    expect(attempts).toBeLessThan(20);
-    await new Promise(resolve => setTimeout(resolve, 100));
-    expect(disconnects.length).toBe(attempts);   // nothing after stop()
+    try {
+      const source = new AsterForceOrderSource({ url: closedUrl, reconnectDelayMs: 20 });
+      let errors = 0;
+      const disconnects: (number | null)[] = [];
+      source.start(() => undefined, {
+        onError: () => errors++,
+        onDisconnected: ({ reconnectDelayMs }) => disconnects.push(reconnectDelayMs),
+      });
+
+      for (let failures = 1; failures <= 5; failures++) {
+        await waitForIo(() => disconnects.length === failures);
+        expect(errors).toBe(failures);                              // one error per failed attempt
+        expect(disconnects).toEqual(Array(failures).fill(20));      // and one scheduled retry per failure
+        expect(jest.getTimerCount()).toBe(1);                       // a single reconnect timer, not two
+        jest.advanceTimersByTime(20);                               // the retry fires: the next attempt starts
+      }
+
+      // The sixth attempt is still connecting. stop() abandons it: its close reports the final disconnect (no retry
+      // is scheduled) and its error is dropped
+      source.stop();
+      expect(jest.getTimerCount()).toBe(0);
+      await waitForIo(() => disconnects.length === 6);
+      expect(disconnects[5]).toBeNull();
+
+      // Nothing more happens after stop(), however far the clock moves
+      jest.advanceTimersByTime(60_000);
+      for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+      expect(errors).toBe(5);
+      expect(disconnects).toEqual([20, 20, 20, 20, 20, null]);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

@@ -69,6 +69,7 @@ jest.mock('recharts', () => {
     XAxis: () => <div data-testid="x-axis" />,
     YAxis: () => <div data-testid="y-axis" />,
     Tooltip: () => <div data-testid="tooltip" />,
+    Legend: () => <div data-testid="legend" />,
     ReferenceLine: () => <div data-testid="reference-line" />,
   };
 });
@@ -421,7 +422,7 @@ describe('PnLChart Component', () => {
 
       await waitFor(() => {
         const profitElement = screen.getByText(/\$95.00/);
-        expect(profitElement).toHaveClass('text-green-600');
+        expect(profitElement).toHaveClass('text-profit');
       });
     });
   });
@@ -674,7 +675,7 @@ describe('PerformanceCard Component', () => {
         // Total and realized PnL are both $100.00
         const profitElements = screen.getAllByText(/\$100.00/);
         expect(profitElements).toHaveLength(2);
-        profitElements.forEach(el => expect(el).toHaveClass('text-green-500'));
+        profitElements.forEach(el => expect(el).toHaveClass('text-profit'));
       });
     });
 
@@ -695,7 +696,7 @@ describe('PerformanceCard Component', () => {
         // Total and realized PnL are both -$100.00
         const lossElements = screen.getAllByText(/-\$100.00/);
         expect(lossElements).toHaveLength(2);
-        lossElements.forEach(el => expect(el).toHaveClass('text-red-500'));
+        lossElements.forEach(el => expect(el).toHaveClass('text-loss'));
       });
     });
 

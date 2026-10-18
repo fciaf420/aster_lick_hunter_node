@@ -480,14 +480,15 @@ Enable remote monitoring from other devices on your network:
 
 | Package | Purpose |
 |---------|---------|
-| `next` 15.5.4 | Web UI framework |
-| `react` 19.1.0 | UI components |
+| `next` 15.5.28 | Web UI framework |
+| `react` 19.3.1 | UI components |
 | `ws` | WebSocket client/server |
 | `axios` | HTTP client for REST API |
 | `tsx` | TypeScript execution with watch mode |
 | `concurrently` | Run web + bot simultaneously |
 | `@radix-ui/*` | UI component library |
-| `recharts` | Trading charts |
+| `recharts` 3 | Trading charts (via the shadcn `ChartContainer`) |
+| `@tanstack/react-table` 8 | Data tables (`src/components/data-table`) |
 | `tailwindcss` v4 | Styling |
 | `sqlite3` | Database for history and logs |
 | `better-sqlite3` | Synchronous SQLite |

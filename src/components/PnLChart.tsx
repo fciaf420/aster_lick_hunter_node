@@ -8,14 +8,20 @@ import {
   BarChart,
   Cell,
   CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
   XAxis,
   YAxis,
   ReferenceLine,
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from '@/components/ui/chart';
+import { cn } from '@/lib/utils';
+import { formatChartDate } from '@/lib/utils/chart-date';
 import {
   Select,
   SelectContent,
@@ -86,6 +92,15 @@ interface PnLData {
   recordCount?: number;
   error?: string;
 }
+
+// Series colours come from the theme tokens (profit/loss) through the chart
+// container, which exposes them as --color-profit / --color-loss.
+const pnlChartConfig = {
+  netPnl: { label: 'Net PnL' },
+  cumulativePnl: { label: 'Cumulative PnL' },
+  profit: { label: 'Profit', color: 'var(--profit)' },
+  loss: { label: 'Loss', color: 'var(--loss)' },
+} satisfies ChartConfig;
 
 export default function PnLChart() {
   const { config } = useConfig();
@@ -342,57 +357,51 @@ export default function PnLChart() {
     }).format(value);
   };
 
-  // Custom tooltip - more compact
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      const isDaily = chartType === 'daily';
-      const displayValue = isDaily ? data.netPnl : data.cumulativePnl;
+  // Tooltip body for the hovered day; the tooltip shell and the date label come from ChartTooltipContent
+  const renderTooltipBody = (_value: unknown, _name: unknown, item: { payload?: DailyPnL }) => {
+    const data = item.payload;
+    if (!data) return null;
+    const isDaily = chartType === 'daily';
+    const displayValue = (isDaily ? data.netPnl : data.cumulativePnl) ?? 0;
 
-      // Format date without timezone conversion
-      const formatTooltipDate = (dateStr: string) => {
-        const parts = dateStr.split('-');
-        if (parts.length === 3) {
-          const year = parseInt(parts[0], 10);
-          const month = parseInt(parts[1], 10);
-          const day = parseInt(parts[2], 10);
-          return `${month}/${day}/${year}`;
-        }
-        return dateStr;
-      };
-
-      return (
-        <div className="bg-background/95 backdrop-blur border rounded-md shadow-lg p-1.5">
-          <p className="text-[10px] font-medium text-muted-foreground">{formatTooltipDate(label)}</p>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className={`text-sm font-semibold ${displayValue >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-              {formatTooltipValue(displayValue)}
-            </span>
-            {data.tradeCount > 0 && (
-              <Badge variant="secondary" className="h-3.5 text-[9px] px-1">
-                {data.tradeCount} trades
-              </Badge>
-            )}
-          </div>
-          {isDaily && (
-            <div className="flex flex-col gap-0.5 mt-1 text-[10px] text-muted-foreground">
-              <div className="flex gap-2">
-                <span>Real: {formatTooltipValue(data.realizedPnl)}</span>
-                <span>Fee: {formatTooltipValue(data.commission + data.fundingFee)}</span>
-              </div>
-              {(data.insuranceClear !== 0 || data.marketMerchantReward !== 0) && (
-                <div className="flex gap-2">
-                  {data.insuranceClear !== 0 && <span>Ins: {formatTooltipValue(data.insuranceClear)}</span>}
-                  {data.marketMerchantReward !== 0 && <span>Reward: {formatTooltipValue(data.marketMerchantReward)}</span>}
-                </div>
-              )}
-            </div>
+    return (
+      <div className="flex w-full flex-col">
+        <div className="flex items-center gap-2">
+          <span className={cn('text-sm font-semibold', displayValue >= 0 ? 'text-profit' : 'text-loss')}>
+            {formatTooltipValue(displayValue)}
+          </span>
+          {data.tradeCount > 0 && (
+            <Badge variant="secondary" className="h-3.5 text-[9px] px-1">
+              {data.tradeCount} trades
+            </Badge>
           )}
         </div>
-      );
-    }
-    return null;
+        {isDaily && (
+          <div className="flex flex-col gap-0.5 mt-1 text-[10px] text-muted-foreground">
+            <div className="flex gap-2">
+              <span>Real: {formatTooltipValue(data.realizedPnl)}</span>
+              <span>Fee: {formatTooltipValue(data.commission + data.fundingFee)}</span>
+            </div>
+            {(data.insuranceClear !== 0 || data.marketMerchantReward !== 0) && (
+              <div className="flex gap-2">
+                {data.insuranceClear !== 0 && <span>Ins: {formatTooltipValue(data.insuranceClear)}</span>}
+                {data.marketMerchantReward !== 0 && <span>Reward: {formatTooltipValue(data.marketMerchantReward)}</span>}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
+
+  const tooltipContent = (
+    <ChartTooltipContent
+      className="min-w-0 gap-0.5 p-1.5 bg-background/95 backdrop-blur"
+      labelClassName="text-[10px] text-muted-foreground"
+      labelFormatter={(label) => (typeof label === 'string' ? formatChartDate(label) : label)}
+      formatter={renderTooltipBody}
+    />
+  );
 
   if (isLoading) {
     return (
@@ -461,7 +470,7 @@ export default function PnLChart() {
                   </SelectContent>
                 </Select>
                 <Tabs value={chartType} onValueChange={(value) => setChartType(value as ChartType)}>
-                  <TabsList className="h-7">
+                  <TabsList className="group-data-[orientation=horizontal]/tabs:h-7">
                     <TabsTrigger value="daily" className="h-6 text-xs">Daily</TabsTrigger>
                     <TabsTrigger value="cumulative" className="h-6 text-xs">Total</TabsTrigger>
                   </TabsList>
@@ -570,7 +579,7 @@ export default function PnLChart() {
                 </SelectContent>
               </Select>
               <Tabs value={chartType} onValueChange={(value) => setChartType(value as ChartType)}>
-                <TabsList className="h-7">
+                <TabsList className="group-data-[orientation=horizontal]/tabs:h-7">
                   <TabsTrigger value="daily" className="h-6 text-xs">Daily</TabsTrigger>
                   <TabsTrigger value="cumulative" className="h-6 text-xs">Total</TabsTrigger>
                   <TabsTrigger value="breakdown" className="h-6 text-xs">Breakdown</TabsTrigger>
@@ -598,16 +607,16 @@ export default function PnLChart() {
           <div className="flex flex-wrap items-center gap-3 mb-3 pb-3 border-b">
             <div className="flex items-center gap-1.5">
               {safeMetrics.totalPnl >= 0 ? (
-                <TrendingUp className="h-3.5 w-3.5 text-green-600" />
+                <TrendingUp className="h-3.5 w-3.5 text-profit" />
               ) : (
-                <TrendingDown className="h-3.5 w-3.5 text-red-600" />
+                <TrendingDown className="h-3.5 w-3.5 text-loss" />
               )}
-              <span className={`text-sm font-semibold ${safeMetrics.totalPnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+              <span className={`text-sm font-semibold ${safeMetrics.totalPnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                 {formatTooltipValue(safeMetrics.totalPnl)}
               </span>
               <Badge
                 variant={safeMetrics.totalPnl >= 0 ? "outline" : "destructive"}
-                className={`h-4 text-[10px] px-1 ${safeMetrics.totalPnl >= 0 ? 'border-green-600 text-green-600 dark:border-green-400 dark:text-green-400' : ''}`}
+                className={`h-4 text-[10px] px-1 ${safeMetrics.totalPnl >= 0 ? 'border-profit text-profit' : ''}`}
               >
                 {pnlPercentage >= 0 ? '+' : ''}{pnlPercentage.toFixed(2)}%
               </Badge>
@@ -637,8 +646,8 @@ export default function PnLChart() {
             </div>
 
             <div className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span>Best: <span className="text-green-600">{safeMetrics.bestDay ? formatTooltipValue(safeMetrics.bestDay.netPnl) : '-'}</span></span>
-              <span>Worst: <span className="text-red-600">{safeMetrics.worstDay ? formatTooltipValue(safeMetrics.worstDay.netPnl) : '-'}</span></span>
+              <span>Best: <span className="text-profit">{safeMetrics.bestDay ? formatTooltipValue(safeMetrics.bestDay.netPnl) : '-'}</span></span>
+              <span>Worst: <span className="text-loss">{safeMetrics.worstDay ? formatTooltipValue(safeMetrics.worstDay.netPnl) : '-'}</span></span>
               <span>Avg: {formatTooltipValue(safeMetrics.avgDailyPnl)}</span>
             </div>
           </div>
@@ -656,10 +665,10 @@ export default function PnLChart() {
           ) : chartType === 'symbols' ? (
             <PerSymbolPerformanceTable timeRange={timeRange} />
           ) : (
-            <ResponsiveContainer width="100%" height={200}>
+            <ChartContainer config={pnlChartConfig} className="aspect-auto h-[200px] w-full">
               {chartType === 'daily' ? (
               <BarChart data={chartData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   dataKey="date"
                   tick={{ fontSize: 10 }}
@@ -669,20 +678,20 @@ export default function PnLChart() {
                   minTickGap={chartData.length <= 10 ? 10 : 20}
                 />
                 <YAxis tick={{ fontSize: 10 }} width={40} />
-                <Tooltip content={<CustomTooltip />} />
-                <ReferenceLine y={0} stroke="#666" />
+                <ChartTooltip content={tooltipContent} />
+                <ReferenceLine y={0} stroke="var(--muted-foreground)" />
                 <Bar
                   dataKey="netPnl"
                   radius={[4, 4, 0, 0]}
                 >
                   {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.netPnl >= 0 ? '#10b981' : '#ef4444'} />
+                    <Cell key={`cell-${index}`} fill={entry.netPnl >= 0 ? 'var(--color-profit)' : 'var(--color-loss)'} />
                   ))}
                 </Bar>
               </BarChart>
             ) : (
               <AreaChart data={chartData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   dataKey="date"
                   tick={{ fontSize: 10 }}
@@ -691,18 +700,19 @@ export default function PnLChart() {
                   minTickGap={chartData.length <= 10 ? 10 : 20}
                 />
                 <YAxis tick={{ fontSize: 10 }} width={40} />
-                <Tooltip content={<CustomTooltip />} />
-                <ReferenceLine y={0} stroke="#666" />
+                <ChartTooltip content={tooltipContent} />
+                <ReferenceLine y={0} stroke="var(--muted-foreground)" />
                 <Area
                   type="monotone"
                   dataKey="cumulativePnl"
-                  stroke={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "#10b981" : "#ef4444"}
-                  fill={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "#10b98140" : "#ef444440"}
+                  stroke={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "var(--color-profit)" : "var(--color-loss)"}
+                  fill={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "var(--color-profit)" : "var(--color-loss)"}
+                  fillOpacity={0.25}
                   strokeWidth={2}
                 />
               </AreaChart>
             )}
-          </ResponsiveContainer>
+          </ChartContainer>
           )}
         </div>
 

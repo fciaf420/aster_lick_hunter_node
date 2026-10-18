@@ -8,6 +8,15 @@ if (typeof Element !== 'undefined') {
   Element.prototype.releasePointerCapture = Element.prototype.releasePointerCapture || function releasePointerCapture() {};
 }
 
+// jsdom has no ResizeObserver; Radix popper-based components (Tooltip, Select, Popover) need one
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}
+
 // Mock console methods to reduce noise in tests
 global.console = {
   ...console,

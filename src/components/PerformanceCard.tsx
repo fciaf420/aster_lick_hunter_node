@@ -168,20 +168,20 @@ export default function PerformanceCard() {
           <div className="flex items-baseline justify-between">
             <div className="flex items-center gap-2">
               {isProfit ? (
-                <TrendingUp className="h-5 w-5 text-green-500" />
+                <TrendingUp className="h-5 w-5 text-profit" />
               ) : (
-                <TrendingDown className="h-5 w-5 text-red-500" />
+                <TrendingDown className="h-5 w-5 text-loss" />
               )}
               <span className={cn(
                 "text-2xl font-bold",
-                isProfit ? "text-green-500" : "text-red-500"
+                isProfit ? "text-profit" : "text-loss"
               )}>
                 {formatCurrency(totalPnL)}
               </span>
             </div>
             <span className={cn(
               "text-sm font-medium",
-              isProfit ? "text-green-500" : "text-red-500"
+              isProfit ? "text-profit" : "text-loss"
             )}>
               {returnPercent >= 0 ? '+' : ''}{returnPercent.toFixed(2)}%
             </span>
@@ -193,7 +193,7 @@ export default function PerformanceCard() {
               <p className="text-muted-foreground">Realized</p>
               <p className={cn(
                 "font-medium",
-                totalRealizedPnL >= 0 ? "text-green-500" : "text-red-500"
+                totalRealizedPnL >= 0 ? "text-profit" : "text-loss"
               )}>
                 {formatCurrency(totalRealizedPnL)}
               </p>
@@ -202,7 +202,7 @@ export default function PerformanceCard() {
               <p className="text-muted-foreground">Fees</p>
               <p className={cn(
                 "font-medium",
-                (pnlData.metrics.totalCommission + pnlData.metrics.totalFundingFee) >= 0 ? "text-green-500" : "text-red-500"
+                (pnlData.metrics.totalCommission + pnlData.metrics.totalFundingFee) >= 0 ? "text-profit" : "text-loss"
               )}>
                 {formatCurrency(pnlData.metrics.totalCommission + pnlData.metrics.totalFundingFee)}
               </p>
@@ -215,7 +215,7 @@ export default function PerformanceCard() {
                     <p className="text-muted-foreground">Insurance</p>
                     <p className={cn(
                       "font-medium",
-                      pnlData.metrics.totalInsuranceClear >= 0 ? "text-green-500" : "text-red-500"
+                      pnlData.metrics.totalInsuranceClear >= 0 ? "text-profit" : "text-loss"
                     )}>
                       {formatCurrency(pnlData.metrics.totalInsuranceClear)}
                     </p>
@@ -226,7 +226,7 @@ export default function PerformanceCard() {
                     <p className="text-muted-foreground">Rewards</p>
                     <p className={cn(
                       "font-medium",
-                      pnlData.metrics.totalMarketMerchantReward >= 0 ? "text-green-500" : "text-red-500"
+                      pnlData.metrics.totalMarketMerchantReward >= 0 ? "text-profit" : "text-loss"
                     )}>
                       {formatCurrency(pnlData.metrics.totalMarketMerchantReward)}
                     </p>

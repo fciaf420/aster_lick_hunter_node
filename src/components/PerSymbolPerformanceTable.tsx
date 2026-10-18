@@ -1,16 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import type { ColumnDef } from '@tanstack/react-table';
 import { Badge } from '@/components/ui/badge';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { TrendingUp, TrendingDown, Target, RefreshCw } from 'lucide-react';
+import { DataTable } from '@/components/data-table/data-table';
+import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header';
+import { Target, RefreshCw } from 'lucide-react';
 import { useConfig } from '@/components/ConfigProvider';
 import websocketService from '@/lib/services/websocketService';
 
@@ -32,8 +27,128 @@ interface SymbolPnL {
   winRate: number;
 }
 
-type SortColumn = 'symbol' | 'trades' | 'pnl' | 'winRate' | 'commission' | 'funding';
-type SortDirection = 'asc' | 'desc';
+const ACCOUNT_REWARDS = 'Account Rewards';
+
+const formatCurrency = (value: number) => {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+};
+
+// Same order and sort keys as before: Symbol, Trades, Win Rate, Net PnL, Commission and Funding sort;
+// Realized does not.
+const symbolColumns: ColumnDef<SymbolPnL>[] = [
+  {
+    id: 'symbol',
+    accessorKey: 'symbol',
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Symbol" />,
+    sortingFn: (a, b) => a.original.symbol.localeCompare(b.original.symbol),
+    cell: ({ row }) => {
+      const symbolPnl = row.original;
+      const isAccountRewards = symbolPnl.symbol === ACCOUNT_REWARDS;
+      return (
+        <Badge
+          variant="outline"
+          className={`font-mono ${isAccountRewards ? 'border-yellow-600 text-yellow-700 dark:border-yellow-500 dark:text-yellow-400' : ''}`}
+          title={isAccountRewards ? 'Referral rebates and staking rewards (not tied to specific symbols)' : ''}
+        >
+          {symbolPnl.symbol}
+        </Badge>
+      );
+    },
+    meta: { cellClassName: 'font-medium' },
+  },
+  {
+    id: 'trades',
+    accessorKey: 'tradeCount',
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Trades" align="right" />,
+    cell: ({ row }) => {
+      const symbolPnl = row.original;
+      return (
+        <div className="flex flex-col items-end">
+          <span className="text-sm">{symbolPnl.tradeCount}</span>
+          {symbolPnl.tradeCount > 0 && (
+            <span className="text-[10px] text-muted-foreground">
+              {symbolPnl.winCount}W/{symbolPnl.lossCount}L
+            </span>
+          )}
+        </div>
+      );
+    },
+    meta: { headerClassName: 'text-right', cellClassName: 'text-right' },
+  },
+  {
+    id: 'winRate',
+    accessorKey: 'winRate',
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Win Rate" align="right" />,
+    cell: ({ row }) => {
+      const symbolPnl = row.original;
+      return (
+        <Badge
+          variant={symbolPnl.winRate >= 50 ? "outline" : "secondary"}
+          className={`h-5 text-[10px] ${
+            symbolPnl.winRate >= 50
+              ? 'border-profit text-profit'
+              : ''
+          }`}
+        >
+          {symbolPnl.winRate.toFixed(0)}%
+        </Badge>
+      );
+    },
+    meta: { headerClassName: 'text-right', cellClassName: 'text-right' },
+  },
+  {
+    id: 'pnl',
+    accessorKey: 'netPnl',
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Net PnL" align="right" />,
+    cell: ({ row }) => {
+      const symbolPnl = row.original;
+      return (
+        <span className={`font-semibold ${
+          symbolPnl.netPnl >= 0
+            ? 'text-profit'
+            : 'text-loss'
+        }`}>
+          {formatCurrency(symbolPnl.netPnl)}
+        </span>
+      );
+    },
+    meta: { headerClassName: 'text-right', cellClassName: 'text-right' },
+  },
+  {
+    id: 'realized',
+    accessorKey: 'realizedPnl',
+    header: 'Realized',
+    enableSorting: false,
+    cell: ({ row }) => formatCurrency(row.original.realizedPnl),
+    meta: { headerClassName: 'text-right', cellClassName: 'text-right text-sm' },
+  },
+  {
+    id: 'commission',
+    accessorKey: 'commission',
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Commission" align="right" />,
+    cell: ({ row }) => formatCurrency(row.original.commission),
+    meta: { headerClassName: 'text-right', cellClassName: 'text-right text-sm text-loss' },
+  },
+  {
+    id: 'funding',
+    accessorKey: 'fundingFee',
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Funding" align="right" />,
+    cell: ({ row }) => {
+      const symbolPnl = row.original;
+      return (
+        <span className={symbolPnl.fundingFee >= 0 ? 'text-profit' : 'text-loss'}>
+          {formatCurrency(symbolPnl.fundingFee)}
+        </span>
+      );
+    },
+    meta: { headerClassName: 'text-right', cellClassName: 'text-right text-sm' },
+  },
+];
 
 interface PerSymbolPerformanceTableProps {
   timeRange: TimeRange;
@@ -44,8 +159,6 @@ export default function PerSymbolPerformanceTable({ timeRange }: PerSymbolPerfor
   const [symbolData, setSymbolData] = useState<SymbolPnL[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [sortColumn, setSortColumn] = useState<SortColumn>('pnl');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
   const hasApiKeys = config?.api?.apiKey && config?.api?.secretKey;
 
@@ -93,78 +206,6 @@ export default function PerSymbolPerformanceTable({ timeRange }: PerSymbolPerfor
     return cleanup;
   }, [fetchData]);
 
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(value);
-  };
-
-  const handleSort = (column: SortColumn) => {
-    if (sortColumn === column) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortColumn(column);
-      setSortDirection('desc');
-    }
-  };
-
-  const sortedData = [...symbolData].sort((a, b) => {
-    let aVal: number | string;
-    let bVal: number | string;
-
-    switch (sortColumn) {
-      case 'symbol':
-        aVal = a.symbol;
-        bVal = b.symbol;
-        break;
-      case 'trades':
-        aVal = a.tradeCount;
-        bVal = b.tradeCount;
-        break;
-      case 'pnl':
-        aVal = a.netPnl;
-        bVal = b.netPnl;
-        break;
-      case 'winRate':
-        aVal = a.winRate;
-        bVal = b.winRate;
-        break;
-      case 'commission':
-        aVal = a.commission;
-        bVal = b.commission;
-        break;
-      case 'funding':
-        aVal = a.fundingFee;
-        bVal = b.fundingFee;
-        break;
-      default:
-        aVal = a.netPnl;
-        bVal = b.netPnl;
-    }
-
-    if (typeof aVal === 'string' && typeof bVal === 'string') {
-      return sortDirection === 'asc'
-        ? aVal.localeCompare(bVal)
-        : bVal.localeCompare(aVal);
-    }
-
-    return sortDirection === 'asc'
-      ? (aVal as number) - (bVal as number)
-      : (bVal as number) - (aVal as number);
-  });
-
-  const SortIcon = ({ column }: { column: SortColumn }) => {
-    if (sortColumn !== column) return null;
-    return sortDirection === 'asc' ? (
-      <TrendingUp className="h-3 w-3 inline ml-1" />
-    ) : (
-      <TrendingDown className="h-3 w-3 inline ml-1" />
-    );
-  };
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-[200px] text-muted-foreground">
@@ -208,93 +249,15 @@ export default function PerSymbolPerformanceTable({ timeRange }: PerSymbolPerfor
           <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       )}
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="cursor-pointer" onClick={() => handleSort('symbol')}>
-                Symbol <SortIcon column="symbol" />
-              </TableHead>
-              <TableHead className="cursor-pointer text-right" onClick={() => handleSort('trades')}>
-                Trades <SortIcon column="trades" />
-              </TableHead>
-              <TableHead className="cursor-pointer text-right" onClick={() => handleSort('winRate')}>
-                Win Rate <SortIcon column="winRate" />
-              </TableHead>
-              <TableHead className="cursor-pointer text-right" onClick={() => handleSort('pnl')}>
-                Net PnL <SortIcon column="pnl" />
-              </TableHead>
-              <TableHead className="text-right">Realized</TableHead>
-              <TableHead className="cursor-pointer text-right" onClick={() => handleSort('commission')}>
-                Commission <SortIcon column="commission" />
-              </TableHead>
-              <TableHead className="cursor-pointer text-right" onClick={() => handleSort('funding')}>
-                Funding <SortIcon column="funding" />
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sortedData.map((symbolPnl) => {
-              const isAccountRewards = symbolPnl.symbol === 'Account Rewards';
-              return (
-              <TableRow key={symbolPnl.symbol} className={isAccountRewards ? 'bg-yellow-50/50 dark:bg-yellow-950/20' : ''}>
-                <TableCell className="font-medium">
-                  <Badge
-                    variant="outline"
-                    className={`font-mono ${isAccountRewards ? 'border-yellow-600 text-yellow-700 dark:border-yellow-500 dark:text-yellow-400' : ''}`}
-                    title={isAccountRewards ? 'Referral rebates and staking rewards (not tied to specific symbols)' : ''}
-                  >
-                    {symbolPnl.symbol}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-right">
-                  <div className="flex flex-col items-end">
-                    <span className="text-sm">{symbolPnl.tradeCount}</span>
-                    {symbolPnl.tradeCount > 0 && (
-                      <span className="text-[10px] text-muted-foreground">
-                        {symbolPnl.winCount}W/{symbolPnl.lossCount}L
-                      </span>
-                    )}
-                  </div>
-                </TableCell>
-                <TableCell className="text-right">
-                  <Badge
-                    variant={symbolPnl.winRate >= 50 ? "outline" : "secondary"}
-                    className={`h-5 text-[10px] ${
-                      symbolPnl.winRate >= 50
-                        ? 'border-green-600 text-green-600 dark:border-green-400 dark:text-green-400'
-                        : ''
-                    }`}
-                  >
-                    {symbolPnl.winRate.toFixed(0)}%
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-right">
-                  <span className={`font-semibold ${
-                    symbolPnl.netPnl >= 0
-                      ? 'text-green-600 dark:text-green-400'
-                      : 'text-red-600 dark:text-red-400'
-                  }`}>
-                    {formatCurrency(symbolPnl.netPnl)}
-                  </span>
-                </TableCell>
-                <TableCell className="text-right text-sm">
-                  {formatCurrency(symbolPnl.realizedPnl)}
-                </TableCell>
-                <TableCell className="text-right text-sm text-red-600 dark:text-red-400">
-                  {formatCurrency(symbolPnl.commission)}
-                </TableCell>
-                <TableCell className="text-right text-sm">
-                  <span className={symbolPnl.fundingFee >= 0 ? 'text-green-600' : 'text-red-600'}>
-                    {formatCurrency(symbolPnl.fundingFee)}
-                  </span>
-                </TableCell>
-              </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </div>
+      <DataTable
+        columns={symbolColumns}
+        data={symbolData}
+        getRowId={(row) => row.symbol}
+        initialSorting={[{ id: 'pnl', desc: true }]}
+        sortDescFirst
+        sortingRemovable={false}
+        rowClassName={(row) => (row.symbol === ACCOUNT_REWARDS ? 'bg-yellow-50/50 dark:bg-yellow-950/20' : undefined)}
+      />
     </div>
   );
 }

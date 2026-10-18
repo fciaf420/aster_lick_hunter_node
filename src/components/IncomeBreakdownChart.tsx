@@ -4,14 +4,22 @@ import React, { useMemo } from 'react';
 import {
   Bar,
   BarChart,
+  Cell,
   CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
   XAxis,
   YAxis,
-  Legend,
 } from 'recharts';
 import { Badge } from '@/components/ui/badge';
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from '@/components/ui/chart';
+import { cn } from '@/lib/utils';
+import { formatChartDate } from '@/lib/utils/chart-date';
 
 interface DailyPnL {
   date: string;
@@ -29,6 +37,55 @@ interface DailyPnL {
 interface IncomeBreakdownChartProps {
   data: DailyPnL[];
   timeRange: string;
+}
+
+// One stacked-bar series per income type. The colours are theme tokens
+// (profit/loss and chart-1..5) exposed by the chart container as --color-<key>.
+// The realized PnL bars are coloured per day with profit/loss; realizedPnl is the colour of their legend swatch.
+const incomeChartConfig = {
+  profit: { label: 'Profit', color: 'var(--profit)' },
+  loss: { label: 'Loss', color: 'var(--loss)' },
+  realizedPnl: { label: 'Realized PnL', color: 'var(--profit)' },
+  fundingFee: { label: 'Funding Fee', color: 'var(--chart-1)' },
+  insurance: { label: 'Insurance', color: 'var(--chart-2)' },
+  rebates: { label: 'Rebates', color: 'var(--chart-3)' },
+  usdfRewards: { label: 'USDF Rewards', color: 'var(--chart-4)' },
+  rewards: { label: 'Rewards', color: 'var(--chart-5)' },
+  commission: { label: 'Commission', color: 'var(--loss)' },
+} satisfies ChartConfig;
+
+interface IncomeChartRow {
+  date: string;
+  realizedPnl: number;
+  commission: number;
+  fundingFee: number;
+  insurance: number;
+  rebates: number;
+  usdfRewards: number;
+  rewards: number;
+  originalCommission: number;
+  netPnl: number;
+  tradeCount: number;
+}
+
+type TooltipBodyRenderer = (value: unknown, name: unknown, item: { payload?: IncomeChartRow }) => React.ReactNode;
+
+// The tooltip describes the whole hovered day (every income type), not one series, so the body is
+// rendered once, for the first series in the payload, inside the standard chart tooltip shell.
+function IncomeTooltip({
+  renderBody,
+  ...props
+}: React.ComponentProps<typeof ChartTooltipContent> & { renderBody: TooltipBodyRenderer }) {
+  return (
+    <ChartTooltipContent
+      {...props}
+      payload={props.payload?.slice(0, 1)}
+      className="min-w-0 gap-1 p-2 bg-background/95 backdrop-blur"
+      labelClassName="text-[10px] text-muted-foreground"
+      labelFormatter={(label) => (typeof label === 'string' ? formatChartDate(label) : label)}
+      formatter={renderBody}
+    />
+  );
 }
 
 export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdownChartProps) {
@@ -70,126 +127,73 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
   };
 
   // Transform data for stacked bar chart
-  const chartData = useMemo(() => {
+  const chartData = useMemo<IncomeChartRow[]>(() => {
     return data.map(day => ({
       date: day.date,
-      'Realized PnL': day.realizedPnl,
-      'Commission': Math.abs(day.commission), // Show as positive for stacking
-      'Funding Fee': day.fundingFee,
-      'Insurance': day.insuranceClear || 0,
-      'Rebates': day.apolloxRebate || 0,
-      'USDF Rewards': day.usdfReward || 0,
-      'Rewards': day.marketMerchantReward || 0,
+      realizedPnl: day.realizedPnl,
+      commission: Math.abs(day.commission), // Show as positive for stacking
+      fundingFee: day.fundingFee,
+      insurance: day.insuranceClear || 0,
+      rebates: day.apolloxRebate || 0,
+      usdfRewards: day.usdfReward || 0,
+      rewards: day.marketMerchantReward || 0,
       // Store original values for tooltip
-      _originalCommission: day.commission,
-      _apolloxRebate: day.apolloxRebate || 0,
-      _usdfReward: day.usdfReward || 0,
-      _netPnl: day.netPnl,
-      _tradeCount: day.tradeCount,
+      originalCommission: day.commission,
+      netPnl: day.netPnl,
+      tradeCount: day.tradeCount,
     }));
   }, [data]);
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
+  // One tooltip line per income type; swatch colours use the same theme tokens as the bars
+  const tooltipLine = (label: string, swatchClass: string, value: string, valueClass: string) => (
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center gap-1.5">
+        <div className={cn('w-2 h-2 rounded-sm', swatchClass)} />
+        <span className="text-xs">{label}</span>
+      </div>
+      <span className={cn('text-xs font-semibold', valueClass)}>{value}</span>
+    </div>
+  );
 
-      return (
-        <div className="bg-background/95 backdrop-blur border rounded-md shadow-lg p-2">
-          <p className="text-[10px] font-medium text-muted-foreground mb-1">
-            {label.split('-').slice(1).reverse().join('/')}
-          </p>
-          <div className="space-y-0.5">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-sm bg-green-500" />
-                <span className="text-xs">Realized PnL</span>
-              </div>
-              <span className="text-xs font-semibold text-green-600">
-                {formatCurrency(data['Realized PnL'])}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-sm bg-red-500" />
-                <span className="text-xs">Commission</span>
-              </div>
-              <span className="text-xs font-semibold text-red-600">
-                {formatCurrency(data._originalCommission)}
-              </span>
-            </div>
-            {data['Funding Fee'] !== 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-blue-500" />
-                  <span className="text-xs">Funding Fee</span>
-                </div>
-                <span className={`text-xs font-semibold ${data['Funding Fee'] >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>
-                  {formatCurrency(data['Funding Fee'])}
-                </span>
-              </div>
-            )}
-            {data['Insurance'] !== 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-orange-500" />
-                  <span className="text-xs">Insurance</span>
-                </div>
-                <span className="text-xs font-semibold text-orange-600">
-                  {formatCurrency(data['Insurance'])}
-                </span>
-              </div>
-            )}
-            {data['Rebates'] !== 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-yellow-500" />
-                  <span className="text-xs">Rebates</span>
-                </div>
-                <span className="text-xs font-semibold text-yellow-600">
-                  {formatCurrency(data['Rebates'])}
-                </span>
-              </div>
-            )}
-            {data['USDF Rewards'] !== 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-cyan-500" />
-                  <span className="text-xs">USDF Rewards</span>
-                </div>
-                <span className="text-xs font-semibold text-cyan-600">
-                  {formatCurrency(data['USDF Rewards'])}
-                </span>
-              </div>
-            )}
-            {data['Rewards'] !== 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-purple-500" />
-                  <span className="text-xs">Rewards</span>
-                </div>
-                <span className="text-xs font-semibold text-purple-600">
-                  {formatCurrency(data['Rewards'])}
-                </span>
-              </div>
-            )}
-            <div className="pt-1 mt-1 border-t flex items-center justify-between gap-4">
-              <span className="text-xs font-semibold">Net PnL</span>
-              <span className={`text-xs font-semibold ${data._netPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {formatCurrency(data._netPnl)}
-              </span>
-            </div>
-            {data._tradeCount > 0 && (
-              <div className="flex items-center justify-center pt-0.5">
-                <Badge variant="secondary" className="h-3.5 text-[9px] px-1">
-                  {data._tradeCount} trades
-                </Badge>
-              </div>
-            )}
-          </div>
+  // Tooltip body for the hovered day; the tooltip shell and the date label come from ChartTooltipContent
+  const renderTooltipBody = (_value: unknown, _name: unknown, item: { payload?: IncomeChartRow }) => {
+    const row = item.payload;
+    if (!row) return null;
+
+    return (
+      <div className="w-full space-y-0.5">
+        {tooltipLine(
+          'Realized PnL',
+          row.realizedPnl >= 0 ? 'bg-profit' : 'bg-loss',
+          formatCurrency(row.realizedPnl),
+          row.realizedPnl >= 0 ? 'text-profit' : 'text-loss'
+        )}
+        {tooltipLine('Commission', 'bg-loss', formatCurrency(row.originalCommission), 'text-loss')}
+        {row.fundingFee !== 0 &&
+          tooltipLine('Funding Fee', 'bg-chart-1', formatCurrency(row.fundingFee), row.fundingFee >= 0 ? 'text-blue-600' : 'text-orange-600')}
+        {row.insurance !== 0 &&
+          tooltipLine('Insurance', 'bg-chart-2', formatCurrency(row.insurance), 'text-orange-600')}
+        {row.rebates !== 0 &&
+          tooltipLine('Rebates', 'bg-chart-3', formatCurrency(row.rebates), 'text-yellow-600')}
+        {row.usdfRewards !== 0 &&
+          tooltipLine('USDF Rewards', 'bg-chart-4', formatCurrency(row.usdfRewards), 'text-cyan-600')}
+        {row.rewards !== 0 &&
+          tooltipLine('Rewards', 'bg-chart-5', formatCurrency(row.rewards), 'text-purple-600')}
+        <div className="pt-1 mt-1 border-t flex items-center justify-between gap-4">
+          <span className="text-xs font-semibold">Net PnL</span>
+          <span className={cn('text-xs font-semibold', row.netPnl >= 0 ? 'text-profit' : 'text-loss')}>
+            {formatCurrency(row.netPnl)}
+          </span>
         </div>
-      );
-    }
-    return null;
+        {row.tradeCount > 0 && (
+          <div className="flex items-center justify-center pt-0.5">
+            <Badge variant="secondary" className="h-3.5 text-[9px] px-1">
+              {row.tradeCount} trades
+            </Badge>
+          </div>
+        )}
+      </div>
+    );
   };
 
   if (data.length === 0) {
@@ -201,9 +205,9 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
   }
 
   return (
-    <ResponsiveContainer width="100%" height={200}>
+    <ChartContainer config={incomeChartConfig} className="aspect-auto h-[200px] w-full">
       <BarChart data={chartData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
-        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+        <CartesianGrid strokeDasharray="3 3" />
         <XAxis
           dataKey="date"
           tick={{ fontSize: 10 }}
@@ -212,21 +216,23 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
           minTickGap={chartData.length <= 10 ? 10 : 20}
         />
         <YAxis tick={{ fontSize: 10 }} width={40} />
-        <Tooltip content={<CustomTooltip />} />
-        <Legend
-          wrapperStyle={{ fontSize: '10px' }}
-          iconType="square"
-          iconSize={8}
-        />
-        <Bar dataKey="Realized PnL" stackId="a" fill="#10b981" radius={[0, 0, 0, 0]} />
-        <Bar dataKey="Funding Fee" stackId="a" fill="#3b82f6" radius={[0, 0, 0, 0]} />
-        <Bar dataKey="Insurance" stackId="a" fill="#f97316" radius={[0, 0, 0, 0]} />
-        <Bar dataKey="Rebates" stackId="a" fill="#eab308" radius={[0, 0, 0, 0]} />
-        <Bar dataKey="USDF Rewards" stackId="a" fill="#06b6d4" radius={[0, 0, 0, 0]} />
-        <Bar dataKey="Rewards" stackId="a" fill="#a855f7" radius={[4, 4, 0, 0]} />
+        <ChartTooltip content={<IncomeTooltip renderBody={renderTooltipBody} />} />
+        {/* itemSorter={null} keeps the legend in series order (recharts 3 sorts it alphabetically by default) */}
+        <ChartLegend itemSorter={null} content={<ChartLegendContent className="text-[10px]" />} />
+        <Bar dataKey="realizedPnl" stackId="a" fill="var(--color-realizedPnl)" radius={[0, 0, 0, 0]}>
+          {/* A losing day is drawn in the loss colour, like the daily bars in PnLChart */}
+          {chartData.map((row, index) => (
+            <Cell key={`cell-${index}`} fill={row.realizedPnl >= 0 ? 'var(--color-profit)' : 'var(--color-loss)'} />
+          ))}
+        </Bar>
+        <Bar dataKey="fundingFee" stackId="a" fill="var(--color-fundingFee)" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="insurance" stackId="a" fill="var(--color-insurance)" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="rebates" stackId="a" fill="var(--color-rebates)" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="usdfRewards" stackId="a" fill="var(--color-usdfRewards)" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="rewards" stackId="a" fill="var(--color-rewards)" radius={[4, 4, 0, 0]} />
         {/* Commission shown as negative overlay */}
-        <Bar dataKey="Commission" fill="#ef4444" opacity={0.7} radius={[4, 4, 0, 0]} />
+        <Bar dataKey="commission" fill="var(--color-commission)" opacity={0.7} radius={[4, 4, 0, 0]} />
       </BarChart>
-    </ResponsiveContainer>
+    </ChartContainer>
   );
 }

@@ -108,8 +108,8 @@ export default function BotControls() {
                 <div className="text-sm text-muted-foreground">Total PnL</div>
                 <div className={`font-medium ${
                   (status?.totalPnL || 0) >= 0
-                    ? 'text-green-600 dark:text-green-400'
-                    : 'text-red-600 dark:text-red-400'
+                    ? 'text-profit'
+                    : 'text-loss'
                 }`}>
                   ${(status?.totalPnL || 0).toFixed(2)}
                 </div>

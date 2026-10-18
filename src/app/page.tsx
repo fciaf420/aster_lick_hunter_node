@@ -312,9 +312,9 @@ export default function DashboardPage() {
             {/* Unrealized PnL */}
             <div className="flex items-center gap-2">
               {liveAccountInfo.totalPnL >= 0 ? (
-                <TrendingUp className="h-4 w-4 text-green-600" />
+                <TrendingUp className="h-4 w-4 text-profit" />
               ) : (
-                <TrendingDown className="h-4 w-4 text-red-600" />
+                <TrendingDown className="h-4 w-4 text-loss" />
               )}
               <div className="flex flex-col">
                 <span className="text-xs text-muted-foreground">Unrealized PnL</span>
@@ -323,7 +323,7 @@ export default function DashboardPage() {
                 ) : (
                   <div className="flex items-center gap-2">
                     <span className={`text-lg font-semibold ${
-                      liveAccountInfo.totalPnL >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                      liveAccountInfo.totalPnL >= 0 ? 'text-profit' : 'text-loss'
                     }`}>
                       {formatCurrency(liveAccountInfo.totalPnL)}
                     </span>
@@ -331,7 +331,7 @@ export default function DashboardPage() {
                       variant={liveAccountInfo.totalPnL >= 0 ? "outline" : "destructive"}
                       className={`h-4 text-[10px] px-1 ${
                         liveAccountInfo.totalPnL >= 0
-                          ? 'border-green-600 text-green-600 dark:border-green-400 dark:text-green-400'
+                          ? 'border-profit text-profit'
                           : ''
                       }`}
                     >

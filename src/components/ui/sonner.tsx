@@ -1,11 +1,18 @@
 "use client"
 
+import {
+  CircleCheckIcon,
+  InfoIcon,
+  Loader2Icon,
+  OctagonXIcon,
+  TriangleAlertIcon,
+  X,
+} from "lucide-react"
 import { useTheme } from "next-themes"
-import { Toaster as Sonner, ToasterProps, toast } from "sonner"
+import { Toaster as Sonner, type ToasterProps, toast } from "sonner"
 import { useEffect, useState } from "react"
 import * as React from "react"
 import { gsap } from "gsap"
-import { X } from "lucide-react"
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()
@@ -82,6 +89,13 @@ const Toaster = ({ ...props }: ToasterProps) => {
       <Sonner
         theme={theme as ToasterProps["theme"]}
         className="toaster group"
+        icons={{
+          success: <CircleCheckIcon className="size-4" />,
+          info: <InfoIcon className="size-4" />,
+          warning: <TriangleAlertIcon className="size-4" />,
+          error: <OctagonXIcon className="size-4" />,
+          loading: <Loader2Icon className="size-4 animate-spin" />,
+        }}
         toastOptions={{
           classNames: {
             toast: "group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg",
@@ -95,6 +109,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
             "--normal-bg": "var(--popover)",
             "--normal-text": "var(--popover-foreground)",
             "--normal-border": "var(--border)",
+            "--border-radius": "var(--radius)",
           } as React.CSSProperties
         }
         position="top-right"
@@ -134,7 +149,7 @@ function DismissAllButton() {
   return (
     <button
       onClick={() => toast.dismiss()}
-      className="fixed top-4 right-4 z-[100] bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2 transition-all duration-300 ease-in-out opacity-100"
+      className="fixed top-4 right-4 z-[100] bg-destructive hover:bg-destructive/90 dark:bg-destructive/60 text-white px-3 py-1.5 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2 transition-all duration-300 ease-in-out opacity-100"
       aria-label="Dismiss all notifications"
     >
       <X className="h-4 w-4" />

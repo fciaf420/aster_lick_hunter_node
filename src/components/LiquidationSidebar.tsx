@@ -230,7 +230,7 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
   };
 
   const getProgressColor = (progress: number): string => {
-    if (progress >= 90) return 'text-red-400 font-bold';
+    if (progress >= 90) return 'text-destructive font-bold';
     if (progress >= 75) return 'text-orange-400 font-semibold';
     if (progress >= 50) return 'text-yellow-400 font-medium';
     if (progress >= 25) return 'text-blue-400';
@@ -238,7 +238,7 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
   };
 
   const getProgressBarColor = (progress: number): string => {
-    if (progress >= 90) return 'bg-red-500';
+    if (progress >= 90) return 'bg-destructive';
     if (progress >= 75) return 'bg-orange-500';
     if (progress >= 50) return 'bg-yellow-500';
     if (progress >= 25) return 'bg-blue-500';
@@ -327,7 +327,7 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
                       key={symbol}
                       className={`space-y-1 transition-all duration-300 rounded-md p-1.5 ${
                         isVeryHot
-                          ? 'bg-red-500/10 border border-red-500/20 shadow-sm'
+                          ? 'bg-destructive/10 border border-destructive/20 shadow-sm'
                           : isHot
                             ? 'bg-orange-500/8 border border-orange-500/15'
                             : hasRecentActivity
@@ -341,7 +341,7 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
                             {symbol.replace('USDT', '')}
                           </span>
                           {isVeryHot && (
-                            <Flame className="h-2.5 w-2.5 text-red-400 animate-pulse" />
+                            <Flame className="h-2.5 w-2.5 text-destructive animate-pulse" />
                           )}
                           {isHot && !isVeryHot && (
                             <Zap className="h-2.5 w-2.5 text-orange-400" />
@@ -351,7 +351,7 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
                           )}
                         </div>
                         <span className={`text-[10px] font-medium ${
-                          isVeryHot ? 'text-red-400' : isHot ? 'text-orange-400' : 'text-muted-foreground/70'
+                          isVeryHot ? 'text-loss' : isHot ? 'text-orange-400' : 'text-muted-foreground/70'
                         }`}>
                           {maxProgress.toFixed(0)}%
                         </span>
@@ -362,8 +362,8 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
                         <div className="space-y-0.5">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-1">
-                              <TrendingUp className="h-2.5 w-2.5 text-green-400" />
-                              <span className="text-[10px] text-green-400 font-medium">LONG</span>
+                              <TrendingUp className="h-2.5 w-2.5 text-long" />
+                              <span className="text-[10px] text-long font-medium">LONG</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <span className={`text-[10px] ${getProgressColor(status.longProgress || 0)}`}>
@@ -391,8 +391,8 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
                         <div className="space-y-0.5">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-1">
-                              <TrendingDown className="h-2.5 w-2.5 text-red-400" />
-                              <span className="text-[10px] text-red-400 font-medium">SHORT</span>
+                              <TrendingDown className="h-2.5 w-2.5 text-short" />
+                              <span className="text-[10px] text-short font-medium">SHORT</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <span className={`text-[10px] ${getProgressColor(status.shortProgress || 0)}`}>
@@ -442,12 +442,12 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
               // Dynamic background intensity based on volume
               const bgOpacity = intensity.bgIntensity;
               const bgColor = isLongLiquidation
-                ? `${intensity.glow} ${event.volume >= 100000 ? 'shadow-green-500/20' : ''}`
-                : `${intensity.glow} ${event.volume >= 100000 ? 'shadow-red-500/20' : ''}`;
+                ? `${intensity.glow} ${event.volume >= 100000 ? 'shadow-long/20' : ''}`
+                : `${intensity.glow} ${event.volume >= 100000 ? 'shadow-short/20' : ''}`;
 
               // Text colors remain fully readable
-              const textColor = isLongLiquidation ? 'text-green-400' : 'text-red-400';
-              const iconColor = isLongLiquidation ? 'text-green-500' : 'text-red-500';
+              const textColor = isLongLiquidation ? 'text-long' : 'text-short';
+              const iconColor = isLongLiquidation ? 'text-long' : 'text-short';
 
               return (
                 <LiquidationItem
@@ -812,9 +812,9 @@ function LiquidationItem({
           <AlertTriangle className="h-3 w-3 text-orange-400 animate-pulse" />
         )}
         {isLongLiquidation ? (
-          <TrendingDown className={`h-3 w-3 ${iconColor} ${event.volume >= 100000 ? 'drop-shadow-[0_0_2px_rgba(34,197,94,0.4)]' : ''}`} />
+          <TrendingDown className={`h-3 w-3 ${iconColor} ${event.volume >= 100000 ? 'drop-shadow-[0_0_2px_color-mix(in_oklab,var(--long)_40%,transparent)]' : ''}`} />
         ) : (
-          <TrendingUp className={`h-3 w-3 ${iconColor} ${event.volume >= 100000 ? 'drop-shadow-[0_0_2px_rgba(239,68,68,0.4)]' : ''}`} />
+          <TrendingUp className={`h-3 w-3 ${iconColor} ${event.volume >= 100000 ? 'drop-shadow-[0_0_2px_color-mix(in_oklab,var(--short)_40%,transparent)]' : ''}`} />
         )}
         <div className={`text-xs font-bold ${textColor} w-10 ${event.volume >= 500000 ? 'animate-pulse' : ''}`}>
           {positionType}

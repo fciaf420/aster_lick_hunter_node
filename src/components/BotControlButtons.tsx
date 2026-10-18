@@ -146,8 +146,8 @@ export default function BotControlButtons() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              variant="destructive"
               onClick={confirmStop}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Stop & Close All
             </AlertDialogAction>
