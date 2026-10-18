@@ -31,5 +31,6 @@
 
 ## Security & Configuration Tips
 - Never commit live secrets; `.env*` and `config.user.json` are ignored on purpose. Use `.env.local` for local overrides.
-- `patch-package` runs after installs (via `postinstall`) so proxy settings stay hardened (see `patches/`).
+- `patch-package` still runs after installs (via `postinstall`) but there are currently no patches. The old `proxy-from-env` patch was dropped because axios >= 1.20 depends on `proxy-from-env` 2.x, which already parses URLs with the WHATWG `URL` class instead of `url.parse`. Any new patch placed in `patches/` is applied automatically.
+- `package.json` carries an `overrides` entry that forces Next's bundled `postcss` (pinned to 8.4.31 upstream) up to 8.5.x for the security advisories. Remove it when upgrading to a Next release that ships a fixed `postcss`.
 - Back up config files before running optimizers; the script writes `config.user.backup-<timestamp>.json` automatically.

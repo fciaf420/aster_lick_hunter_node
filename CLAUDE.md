@@ -480,8 +480,8 @@ Enable remote monitoring from other devices on your network:
 
 | Package | Purpose |
 |---------|---------|
-| `next` 15.5.4 | Web UI framework |
-| `react` 19.1.0 | UI components |
+| `next` 15.5.28 | Web UI framework |
+| `react` 19.3.1 | UI components |
 | `ws` | WebSocket client/server |
 | `axios` | HTTP client for REST API |
 | `tsx` | TypeScript execution with watch mode |
