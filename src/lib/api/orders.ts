@@ -79,14 +79,25 @@ export async function placeOrder(params: {
   console.log('[ORDER DEBUG] Form data being sent:', formData.toString());
 
   const axios = getRateLimitedAxios();
-  const response: AxiosResponse = await axios.post(`${BASE_URL}/fapi/v1/order`, formData, {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'X-MBX-APIKEY': credentials.apiKey
-    },
-  });
+  try {
+    const response: AxiosResponse = await axios.post(`${BASE_URL}/fapi/v1/order`, formData, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-MBX-APIKEY': credentials.apiKey
+      },
+    });
 
-  return response.data;
+    return response.data;
+  } catch (error: any) {
+    // Log the detailed error response from the exchange
+    console.error('[ORDER ERROR] Detailed error response:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      headers: error.response?.headers
+    });
+    throw error;
+  }
 }
 
 // Define order params type

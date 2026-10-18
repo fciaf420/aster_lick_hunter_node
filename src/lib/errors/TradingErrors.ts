@@ -1,3 +1,5 @@
+import { symbolPrecision } from '../utils/symbolPrecision';
+
 export type ErrorSubCategory =
   | 'rate-limit'
   | 'authentication'
@@ -256,17 +258,21 @@ export function parseExchangeError(error: any, context?: { symbol?: string; quan
 
     case -1111:
       // BAD_PRECISION - Price precision error
-      // Try to extract tick size from error message if available
+      // Try to extract tick size from error message, else use loaded exchange filters
       const tickSizeMatch = msg.match(/tick size[\s:]*(\d+\.\d+)/i);
-      const tickSize = tickSizeMatch ? tickSizeMatch[1] : 'UNKNOWN';
+      const tickSize = tickSizeMatch
+        ? tickSizeMatch[1]
+        : (context?.symbol && symbolPrecision.getSymbolFilter(context.symbol)?.tickSize) || 'UNKNOWN';
       return new PricePrecisionError(context?.symbol || 'UNKNOWN', context?.price || 0, tickSize);
 
     case -1013:
       // INVALID_MESSAGE - Often quantity precision
       if (msg.includes('quantity')) {
-        // Try to extract step size from error message if available
+        // Try to extract step size from error message, else use loaded exchange filters
         const stepSizeMatch = msg.match(/step size[\s:]*(\d+\.\d+)/i);
-        const stepSize = stepSizeMatch ? stepSizeMatch[1] : 'UNKNOWN';
+        const stepSize = stepSizeMatch
+          ? stepSizeMatch[1]
+          : (context?.symbol && symbolPrecision.getSymbolFilter(context.symbol)?.stepSize) || 'UNKNOWN';
         return new QuantityPrecisionError(context?.symbol || 'UNKNOWN', context?.quantity || 0, stepSize);
       }
       return new TradingError(msg, code, context?.symbol);

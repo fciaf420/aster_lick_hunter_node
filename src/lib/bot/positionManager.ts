@@ -59,7 +59,7 @@ const BASE_URL = 'https://fapi.asterdex.com';
 
 // Position tracking interface for Hunter
 export interface PositionTracker {
-  getMarginUsage(symbol: string): number;
+  getMarginUsage(symbol: string, side?: 'LONG' | 'SHORT'): number;
   getTotalPositionCount(): number;
   getUniquePositionCount(isHedgeMode: boolean): number;
   getPositionsMap(): Map<string, ExchangePosition>;
@@ -782,7 +782,9 @@ logWithTimestamp(`PositionManager: Position ${previousKey} fully closed`);
           // Check if position size has changed
           const previousSize = this.previousPositionSizes.get(key);
           const currentSize = Math.abs(positionAmt);
-          const sizeChanged = previousSize !== undefined && Math.abs(previousSize - currentSize) > 0.00000001;
+          // Use a more reasonable threshold to avoid unnecessary adjustments from tiny rounding differences
+          // This prevents SL/TP order cancellation when closing other positions
+          const sizeChanged = previousSize !== undefined && Math.abs(previousSize - currentSize) > 0.001;
 
           if (sizeChanged) {
 logWithTimestamp(`PositionManager: Position size changed for ${key} from ${previousSize} to ${currentSize}`);
@@ -839,13 +841,16 @@ logErrorWithTimestamp(`PositionManager: Failed to adjust orders for ${key}:`, er
 logWithTimestamp(`PositionManager: Order adjustment already in progress for ${symbol}, will retry on next check`);
             }
           } else {
-            // Just ensure position is protected (async, don't await to avoid blocking)
-            // Add small delay to reduce race conditions with other protection logic
-            setTimeout(() => {
-              this.ensurePositionProtected(symbol, positionSide, positionAmt).catch(error => {
+            // Position size unchanged - only ensure protection if SL or TP isn't tracked yet
+            const existingOrders = this.positionOrders.get(key);
+            if (!existingOrders?.slOrderId || !existingOrders?.tpOrderId) {
+              // Add small delay to reduce race conditions with other protection logic
+              setTimeout(() => {
+                this.ensurePositionProtected(symbol, positionSide, positionAmt).catch(error => {
 logErrorWithTimestamp(`PositionManager: Failed to ensure protection for ${symbol}:`, error?.response?.data || error?.message);
-              });
-            }, 100);
+                });
+              }, 200);
+            }
           }
 
           // Broadcast to UI
@@ -2259,6 +2264,14 @@ logErrorWithTimestamp('PositionManager: Error during orphaned order cleanup:', e
 
   // Check and adjust all orders periodically
   private async checkAndAdjustOrders(): Promise<void> {
+    // Force a sync every time so positions missed by partial ACCOUNT_UPDATEs
+    // (or opened before bot startup) are tracked and protected
+    try {
+      await this.syncWithExchange();
+    } catch (error) {
+logErrorWithTimestamp('PositionManager: Failed to sync during periodic check:', error);
+    }
+
     if (this.currentPositions.size === 0) {
       return; // No positions to check
     }
@@ -2646,42 +2659,65 @@ logWithTimestamp(`PositionManager: Closed position ${symbol} ${side}`);
   // ===== Position Tracking Methods for Hunter =====
 
   // Calculate total margin usage for a symbol (position size × leverage × entry price)
-  public getMarginUsage(symbol: string): number {
+  // Optionally restrict to one side (LONG/SHORT) so each side's margin is counted separately
+  public getMarginUsage(symbol: string, side?: 'LONG' | 'SHORT'): number {
     let totalMargin = 0;
 
     for (const position of this.currentPositions.values()) {
-      if (position.symbol === symbol) {
-        const positionAmt = Math.abs(parseFloat(position.positionAmt));
-        if (positionAmt > 0) {
-          const entryPrice = parseFloat(position.entryPrice);
-          let leverage = parseFloat(position.leverage);
+      if (position.symbol !== symbol) {
+        continue;
+      }
 
-          // Handle invalid leverage (0, NaN, or undefined)
-          if (!leverage || leverage === 0 || isNaN(leverage)) {
-            // First try to use tracked leverage from ACCOUNT_CONFIG_UPDATE
-            const trackedLeverage = this.symbolLeverage.get(symbol);
-            if (trackedLeverage) {
-logWithTimestamp(`PositionManager: Using tracked leverage for ${symbol}: ${trackedLeverage}x`);
-              leverage = trackedLeverage;
-            } else {
-              // Then try to use configured leverage as fallback
-              const symbolConfig = this.config.symbols[symbol];
-              if (symbolConfig && symbolConfig.leverage) {
-logWithTimestamp(`PositionManager: Warning - No tracked leverage for ${symbol}, using configured leverage: ${symbolConfig.leverage}`);
-                leverage = symbolConfig.leverage;
-              } else {
-                // Last resort: assume leverage of 1 (no leverage)
-logWithTimestamp(`PositionManager: Warning - No tracked leverage for ${symbol} and no config found, defaulting to 1x`);
-                leverage = 1;
-              }
-            }
+      const rawPositionAmt = parseFloat(position.positionAmt);
+      if (!Number.isFinite(rawPositionAmt) || rawPositionAmt === 0) {
+        continue;
+      }
+
+      if (side) {
+        const positionSide = (position.positionSide || 'BOTH').toUpperCase();
+        if (positionSide === 'LONG' || positionSide === 'SHORT') {
+          // Hedge mode: the position side is explicit
+          if (positionSide !== side) {
+            continue;
           }
-
-          // Margin = (Position Size × Entry Price) / Leverage
-          const margin = (positionAmt * entryPrice) / leverage;
-          totalMargin += margin;
+        } else if ((side === 'LONG' && rawPositionAmt < 0) || (side === 'SHORT' && rawPositionAmt > 0)) {
+          // One-way mode (BOTH): direction comes from the sign of the amount
+          continue;
         }
       }
+
+      const positionAmt = Math.abs(rawPositionAmt);
+      const entryPrice = parseFloat(position.entryPrice);
+      if (!Number.isFinite(entryPrice) || entryPrice === 0) {
+        continue;
+      }
+
+      let leverage = parseFloat(position.leverage);
+
+      // Handle invalid leverage (0, NaN, or undefined)
+      if (!leverage || leverage === 0 || isNaN(leverage)) {
+        // First try to use tracked leverage from ACCOUNT_CONFIG_UPDATE
+        const trackedLeverage = this.symbolLeverage.get(symbol);
+        if (trackedLeverage) {
+logWithTimestamp(`PositionManager: Using tracked leverage for ${symbol}: ${trackedLeverage}x`);
+          leverage = trackedLeverage;
+        } else {
+          // Then try to use configured leverage as fallback
+          const symbolConfig = this.config.symbols[symbol];
+          if (symbolConfig && symbolConfig.leverage) {
+logWithTimestamp(`PositionManager: Warning - No tracked leverage for ${symbol}, using configured leverage: ${symbolConfig.leverage}`);
+            leverage = symbolConfig.leverage;
+          } else {
+            // Last resort: assume leverage of 1 (no leverage)
+logWithTimestamp(`PositionManager: Warning - No tracked leverage for ${symbol} and no config found, defaulting to 1x`);
+            leverage = 1;
+          }
+        }
+      }
+
+      // Margin = (Position Size × Entry Price) / Leverage
+      const margin = (positionAmt * entryPrice) / leverage;
+      totalMargin += margin;
     }
 
     return totalMargin;

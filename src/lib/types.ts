@@ -31,6 +31,7 @@ export interface SymbolConfig {
   useThreshold?: boolean;       // Enable threshold-based triggering for this symbol (default: false)
   thresholdTimeWindow?: number; // Time window in ms for volume accumulation (default: 60000)
   thresholdCooldown?: number;   // Cooldown period in ms between triggers (default: 30000)
+  hunterCooldownMs?: number;    // Minimum ms between threshold-triggered entries per side (default: global or 120000)
 }
 
 export interface ApiCredentials {
@@ -64,6 +65,7 @@ export interface GlobalConfig {
   positionMode?: 'ONE_WAY' | 'HEDGE'; // Position mode preference (optional)
   maxOpenPositions?: number; // Max number of open positions (hedged pairs count as one)
   useThresholdSystem?: boolean; // Enable 60-second rolling volume threshold system (default: false)
+  hunterCooldownMs?: number; // Minimum ms between threshold-triggered entries per symbol side (default: 120000)
   server?: ServerConfig;    // Optional server configuration
   rateLimit?: RateLimitConfig; // Rate limit configuration
 }

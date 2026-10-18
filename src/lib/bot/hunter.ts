@@ -511,6 +511,14 @@ logWithTimestamp(`Hunter: ${tradeSide} trade cooldown active for ${liquidation.s
           return;
         }
 
+        // Hunter cooldown: minimum spacing between threshold-triggered entries (default 2 minutes)
+        const hunterCooldown = symbolConfig.hunterCooldownMs ?? this.config.global.hunterCooldownMs ?? 120000;
+        if (timeSinceLastTrade < hunterCooldown) {
+          const remainingHunterCooldown = Math.ceil((hunterCooldown - timeSinceLastTrade) / 1000);
+logWithTimestamp(`Hunter: ${tradeSide} trade blocked by hunter cooldown for ${liquidation.symbol} - ${remainingHunterCooldown}s remaining (hunter cooldown: ${(hunterCooldown / 1000).toFixed(0)}s)`);
+          return;
+        }
+
 logWithTimestamp(`Hunter: ✓ Cooldown passed - Triggering ${tradeSide} trade for ${liquidation.symbol} based on 60s cumulative volume (cooldown: ${(cooldownPeriod / 1000).toFixed(0)}s)`);
 
         // Update last trade timestamp
@@ -570,7 +578,7 @@ logWithTimestamp(`Hunter: ✓ Cooldown passed - Triggering ${tradeSide} trade fo
     }
   }
 
-  private async analyzeAndTrade(liquidation: LiquidationEvent, symbolConfig: SymbolConfig, _forcedSide?: 'BUY' | 'SELL'): Promise<void> {
+  private async analyzeAndTrade(liquidation: LiquidationEvent, symbolConfig: SymbolConfig, forcedSide?: 'BUY' | 'SELL'): Promise<void> {
     try {
       // Get mark price and recent 1m kline
       const [markPriceData] = Array.isArray(await getMarkPrice(liquidation.symbol)) ?
@@ -581,9 +589,14 @@ logWithTimestamp(`Hunter: ✓ Cooldown passed - Triggering ${tradeSide} trade fo
 
       // Simple analysis: If SELL liquidation and price is > 0.99 * mark, buy
       // If BUY liquidation, sell
+      // A side forced by the cumulative threshold trigger skips the price-ratio check
       const priceRatio = liquidation.price / markPrice;
-      const triggerBuy = liquidation.side === 'SELL' && priceRatio < 1.01; // 1% below
-      const triggerSell = liquidation.side === 'BUY' && priceRatio > 0.99;  // 1% above
+      const triggerBuy = forcedSide
+        ? forcedSide === 'BUY'
+        : liquidation.side === 'SELL' && priceRatio < 1.01; // 1% below
+      const triggerSell = forcedSide
+        ? forcedSide === 'SELL'
+        : liquidation.side === 'BUY' && priceRatio > 0.99;  // 1% above
 
       // Check VWAP protection if enabled
       if (symbolConfig.vwapProtection) {
@@ -751,15 +764,17 @@ logWithTimestamp(`Hunter: Skipping trade - max positions reached (current: ${cur
 
         // Check symbol-specific margin limit
         if (symbolConfig.maxPositionMarginUSDT) {
-          const currentMargin = this.positionTracker.getMarginUsage(symbol);
+          // Margin limit applies per side (long and short tracked separately)
+          const positionSide = side === 'BUY' ? 'LONG' : 'SHORT';
+          const currentMargin = this.positionTracker.getMarginUsage(symbol, positionSide);
           const newTradeMargin = symbolConfig.tradeSize;
           const totalMargin = currentMargin + newTradeMargin;
 
           // Enhanced logging to debug margin issues
-logWithTimestamp(`Hunter: Margin check for ${symbol} - Current: ${currentMargin.toFixed(2)} USDT, New trade: ${newTradeMargin} USDT, Total: ${totalMargin.toFixed(2)} USDT, Max allowed: ${symbolConfig.maxPositionMarginUSDT} USDT`);
+logWithTimestamp(`Hunter: Margin check for ${symbol} (${positionSide}) - Current: ${currentMargin.toFixed(2)} USDT, New trade: ${newTradeMargin} USDT, Total: ${totalMargin.toFixed(2)} USDT, Max allowed: ${symbolConfig.maxPositionMarginUSDT} USDT`);
 
           if (totalMargin > symbolConfig.maxPositionMarginUSDT) {
-logWithTimestamp(`Hunter: Skipping trade - would exceed max margin for ${symbol} (${totalMargin.toFixed(2)}/${symbolConfig.maxPositionMarginUSDT} USDT)`);
+logWithTimestamp(`Hunter: Skipping trade - would exceed max margin for ${symbol} ${positionSide} (${totalMargin.toFixed(2)}/${symbolConfig.maxPositionMarginUSDT} USDT)`);
             return;
           }
         }

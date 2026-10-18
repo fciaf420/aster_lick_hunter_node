@@ -30,6 +30,7 @@ export const symbolConfigSchema = z.object({
 
   // Threshold system settings
   useThreshold: z.boolean().optional(),
+  hunterCooldownMs: z.number().min(0).optional(),
 }).refine(data => {
   // Ensure we have either legacy or new volume thresholds
   return data.volumeThresholdUSDT !== undefined ||
@@ -70,6 +71,7 @@ export const globalConfigSchema = z.object({
   positionMode: z.enum(['ONE_WAY', 'HEDGE']).optional(),
   maxOpenPositions: z.number().min(1).optional(),
   useThresholdSystem: z.boolean().optional(),
+  hunterCooldownMs: z.number().min(0).optional(),
   server: serverConfigSchema,
   rateLimit: rateLimitConfigSchema,
 });

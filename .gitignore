@@ -50,6 +50,8 @@ config.user*
 config.user.backup*.json
 config.json
 data/optimizer-jobs.json
+# optimizer output includes the full config (API keys)
+optimization-results.json
 
 # claude code local settings and agents
 .claude/settings.local.json
