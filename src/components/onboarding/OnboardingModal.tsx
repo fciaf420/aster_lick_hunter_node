@@ -18,6 +18,7 @@ import type { VenueId } from '@/lib/exchange/types';
 import { getVenueEntry } from '@/lib/exchange/catalog';
 import { hasLighterCredentials } from '@/components/LighterSettings';
 import { lighterHedgeState } from '@/lib/config/types';
+import { GLOBAL_SETTING_DEFAULTS } from '@/lib/config/defaults';
 import { WelcomeStep } from './steps/WelcomeStep';
 import { PasswordSetup } from './steps/PasswordSetup';
 import { ApiKeyStep, type VenueStepSettings } from './steps/ApiKeyStep';
@@ -49,25 +50,22 @@ export function OnboardingModal() {
   };
 
   const handlePasswordSetup = async (password: string) => {
-    console.log('🔍 handlePasswordSetup - DEBUG START');
-    console.log('Password received:', password);
-    console.log('Current config exists:', !!config);
-
     if (!config) {
-      console.error('❌ Config not loaded yet');
+      console.error('Onboarding: config not loaded yet');
       return;
     }
 
-    // Ensure we have all required fields with defaults if missing
-    const updatedConfig = {
-      // Ensure API exists with empty strings if not present
+    // Set the password and keep everything else the config already holds; only missing required settings get
+    // their defaults. Nothing here is logged: the config carries the password and the exchange keys.
+    const updatedConfig: Config = {
+      ...config,
       api: {
         apiKey: config.api?.apiKey || '',
         secretKey: config.api?.secretKey || ''
       },
       // Ensure symbols exist with at least one default symbol if empty
-      symbols: config.symbols && Object.keys(config.symbols).length > 0 
-        ? config.symbols 
+      symbols: config.symbols && Object.keys(config.symbols).length > 0
+        ? config.symbols
         : {
             'BTCUSDT': {
               tradeSize: 0.001,
@@ -85,12 +83,12 @@ export function OnboardingModal() {
               vwapLookback: 200
             }
           },
-      // Ensure global config has all required fields
       global: {
-        riskPercent: config.global?.riskPercent || 5,
+        ...config.global,
+        riskPercent: config.global?.riskPercent ?? 5,
         paperMode: config.global?.paperMode ?? true,
         positionMode: config.global?.positionMode || 'ONE_WAY',
-        maxOpenPositions: config.global?.maxOpenPositions || 10,
+        maxOpenPositions: config.global?.maxOpenPositions ?? GLOBAL_SETTING_DEFAULTS.maxOpenPositions,
         useThresholdSystem: config.global?.useThresholdSystem ?? false,
         exchange: config.global?.exchange ?? 'aster',
         liquidationSource: config.global?.liquidationSource ?? 'aster',
@@ -108,32 +106,17 @@ export function OnboardingModal() {
         server: {
           ...config.global?.server,
           dashboardPassword: password,
-          dashboardPort: config.global?.server?.dashboardPort || 3000,
-          websocketPort: config.global?.server?.websocketPort || 3001,
+          dashboardPort: config.global?.server?.dashboardPort ?? GLOBAL_SETTING_DEFAULTS.dashboardPort,
+          websocketPort: config.global?.server?.websocketPort ?? GLOBAL_SETTING_DEFAULTS.websocketPort,
           useRemoteWebSocket: config.global?.server?.useRemoteWebSocket ?? false,
           websocketHost: config.global?.server?.websocketHost || null
         }
       },
-      // Keep venue settings and credentials (Lighter) entered earlier
-      ...(config.venues ? { venues: config.venues } : {}),
       version: config.version || '1.2.0'
     };
 
-    console.log('📋 Config structure check:', {
-      hasApi: !!updatedConfig.api,
-      hasSymbols: !!updatedConfig.symbols && Object.keys(updatedConfig.symbols).length > 0,
-      hasGlobal: !!updatedConfig.global,
-      apiKeysPresent: !!(updatedConfig.api.apiKey && updatedConfig.api.secretKey),
-      globalRiskPercent: updatedConfig.global.riskPercent,
-      globalPaperMode: updatedConfig.global.paperMode
-    });
-
-    console.log('📤 Config to be sent:', JSON.stringify(updatedConfig, null, 2));
-    console.log('🔍 handlePasswordSetup - DEBUG END');
-
     try {
       await updateConfig(updatedConfig);
-      console.log('✅ Config saved successfully');
       completeStep('password-setup');
       nextStep();
     } catch (error) {

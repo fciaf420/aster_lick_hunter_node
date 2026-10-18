@@ -47,14 +47,14 @@ let updateConfig: jest.Mock;
 let nextStep: jest.Mock;
 let completeStep: jest.Mock;
 
-function renderModal(config: Config = CONFIG) {
+function renderModal(config: Config = CONFIG, currentStep = 2) {
   updateConfig = jest.fn(async () => {});
   nextStep = jest.fn();
   completeStep = jest.fn();
   (useConfig as jest.Mock).mockReturnValue({ config, loading: false, updateConfig, reloadConfig: jest.fn() });
   (useOnboarding as jest.Mock).mockReturnValue({
     isOnboarding: true,
-    currentStep: 2,
+    currentStep,
     steps: STEPS,
     nextStep,
     previousStep: jest.fn(),
@@ -147,5 +147,65 @@ describe('OnboardingModal: saving the exchange step', () => {
     ));
     expect(JSON.stringify((toast.error as jest.Mock).mock.calls)).not.toContain(PRIVATE_KEY);
     expect(nextStep).not.toHaveBeenCalled();
+  });
+});
+
+describe('OnboardingModal: saving the password step', () => {
+  const PASSWORD = 'correct-horse-battery';
+  const SAVED: Config = {
+    ...CONFIG,
+    api: { apiKey: API_KEY, secretKey: SECRET_KEY },
+    symbols: { ETHUSDT: { tradeSize: 0.01, leverage: 3, tpPercent: 1, slPercent: 1, longVolumeThresholdUSDT: 5000, shortVolumeThresholdUSDT: 5000 } },
+    global: {
+      ...CONFIG.global,
+      riskPercent: 0,
+      exchange: 'lighter',
+      liquidationSource: 'lighter',
+      liquidationRetentionDays: 30,
+      server: { dashboardPassword: '', useRemoteWebSocket: true, websocketHost: '10.0.0.5' },
+    },
+    venues: { lighter: { profile: 'mainnet', accountIndex: 12345, apiKeyIndex: 3, apiKeyPrivateKey: PRIVATE_KEY, apiKeyPublicKey: PUBLIC_KEY } },
+  };
+
+  function setPassword() {
+    fireEvent.change(screen.getByLabelText('Dashboard Password'), { target: { value: PASSWORD } });
+    fireEvent.change(screen.getByLabelText('Confirm Password'), { target: { value: PASSWORD } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set Password' }));
+  }
+
+  it('sets the password and keeps every other setting the config holds', async () => {
+    renderModal(SAVED, 1);
+    setPassword();
+    await waitFor(() => expect(nextStep).toHaveBeenCalledTimes(1));
+    expect(completeStep).toHaveBeenCalledWith('password-setup');
+    const saved = updateConfig.mock.calls[0][0] as Config;
+    expect(saved.global.server.dashboardPassword).toBe(PASSWORD);
+    expect(saved.api).toEqual(SAVED.api);
+    expect(saved.symbols).toEqual(SAVED.symbols);
+    expect(saved.venues).toEqual(SAVED.venues);
+    expect(saved.global).toMatchObject({
+      riskPercent: 0,
+      exchange: 'lighter',
+      liquidationSource: 'lighter',
+      liquidationRetentionDays: 30,
+      positionMode: 'ONE_WAY',
+    });
+    // Missing server settings get the real defaults (the WebSocket server listens on 8080)
+    expect(saved.global.server).toMatchObject({ dashboardPort: 3000, websocketPort: 8080, useRemoteWebSocket: true, websocketHost: '10.0.0.5' });
+  });
+
+  it('never logs the password or the keys', async () => {
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const info = jest.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      renderModal(SAVED, 1);
+      setPassword();
+      await waitFor(() => expect(nextStep).toHaveBeenCalledTimes(1));
+      const logged = JSON.stringify([log.mock.calls, info.mock.calls, (console.error as jest.Mock).mock?.calls ?? []]);
+      for (const secret of [PASSWORD, SECRET_KEY, PRIVATE_KEY]) expect(logged).not.toContain(secret);
+    } finally {
+      log.mockRestore();
+      info.mockRestore();
+    }
   });
 });
