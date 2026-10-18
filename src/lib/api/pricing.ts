@@ -1,9 +1,7 @@
 import { getOrderBook, getBookTicker, getExchangeInfo } from './market';
 
-interface OrderBookEntry {
-  price: string;
-  quantity: string;
-}
+// Depth levels come back as [price, quantity] pairs
+type OrderBookEntry = [price: string, quantity: string];
 
 interface OrderBookData {
   lastUpdateId: number;
@@ -256,11 +254,11 @@ export async function analyzeOrderBookDepth(
     let weightedPriceSum = 0;
     let totalQuantity = 0;
 
-    const firstPrice = parseFloat(orders[0]?.price || '0');
+    const firstPrice = parseFloat(orders[0]?.[0] || '0');
 
-    for (const order of orders) {
-      const price = parseFloat(order.price);
-      const quantity = parseFloat(order.quantity);
+    for (const [priceStr, quantityStr] of orders) {
+      const price = parseFloat(priceStr);
+      const quantity = parseFloat(quantityStr);
       const notional = price * quantity;
 
       if (cumulativeNotional + notional >= targetNotional) {
@@ -270,6 +268,7 @@ export async function analyzeOrderBookDepth(
 
         weightedPriceSum += price * remainingQuantity;
         totalQuantity += remainingQuantity;
+        cumulativeNotional += remainingNotional;
         break;
       }
 

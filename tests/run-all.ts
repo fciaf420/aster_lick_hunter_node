@@ -58,6 +58,8 @@ async function main() {
     { file: 'tests/core/position-mode-sync.test.ts', name: 'Position Mode Sync' },
     { file: 'tests/core/cross-symbol-test.ts', name: 'Cross-Symbol TP/SL' },
     { file: 'tests/core/multi-position.test.ts', name: 'Multi-Position' },
+    { file: 'tests/core/exchange-golden.test.ts', name: 'Exchange Golden Requests' },
+    { file: 'tests/core/exchange-registry.test.ts', name: 'Exchange Registry' },
     { file: 'tests/integration/trading-flow.test.ts', name: 'Integration' }
   ];
 

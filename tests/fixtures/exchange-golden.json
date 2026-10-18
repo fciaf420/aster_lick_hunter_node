@@ -1,0 +1,816 @@
+{
+  "hunter: MARKET entry (one-way)": [
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v4/account",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/exchangeInfo",
+      "query": {},
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/premiumIndex",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/leverage",
+      "query": {},
+      "body": {
+        "leverage": "5",
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>"
+      },
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/premiumIndex",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {},
+      "body": {
+        "positionSide": "BOTH",
+        "quantity": "0.002",
+        "recvWindow": "<recvWindow>",
+        "side": "BUY",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>",
+        "type": "MARKET"
+      },
+      "apiKeyHeader": "<apiKey>"
+    }
+  ],
+  "hunter: LIMIT entry (one-way)": [
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v4/account",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/ticker/bookTicker",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/depth",
+      "query": {
+        "limit": "20",
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/leverage",
+      "query": {},
+      "body": {
+        "leverage": "5",
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>"
+      },
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {},
+      "body": {
+        "positionSide": "BOTH",
+        "price": "50000",
+        "quantity": "0.002",
+        "recvWindow": "<recvWindow>",
+        "side": "SELL",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timeInForce": "GTC",
+        "timestamp": "<timestamp>",
+        "type": "LIMIT"
+      },
+      "apiKeyHeader": "<apiKey>"
+    }
+  ],
+  "hunter: -4061 position-mode retry": [
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v4/account",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/premiumIndex",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/leverage",
+      "query": {},
+      "body": {
+        "leverage": "5",
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>"
+      },
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/premiumIndex",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {},
+      "body": {
+        "positionSide": "BOTH",
+        "quantity": "0.002",
+        "recvWindow": "<recvWindow>",
+        "side": "BUY",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>",
+        "type": "MARKET"
+      },
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/positionSide/dual",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/premiumIndex",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {},
+      "body": {
+        "positionSide": "LONG",
+        "quantity": "0.002",
+        "recvWindow": "<recvWindow>",
+        "side": "BUY",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>",
+        "type": "MARKET"
+      },
+      "apiKeyHeader": "<apiKey>"
+    }
+  ],
+  "positionManager: sync places SL+TP for a new position": [
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v2/positionRisk",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/openOrders",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/openOrders",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/ticker/price",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/batchOrders",
+      "query": {},
+      "body": {
+        "batchOrders": [
+          {
+            "positionSide": "BOTH",
+            "priceProtect": "TRUE",
+            "quantity": "0.005",
+            "reduceOnly": "true",
+            "side": "SELL",
+            "stopPrice": "49500",
+            "symbol": "BTCUSDT",
+            "type": "STOP_MARKET",
+            "workingType": "MARK_PRICE"
+          },
+          {
+            "positionSide": "BOTH",
+            "priceProtect": "TRUE",
+            "quantity": "0.005",
+            "reduceOnly": "true",
+            "side": "SELL",
+            "stopPrice": "51000",
+            "symbol": "BTCUSDT",
+            "type": "TAKE_PROFIT_MARKET",
+            "workingType": "MARK_PRICE"
+          }
+        ],
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "apiKeyHeader": "<apiKey>"
+    }
+  ],
+  "positionManager: size change re-sizes SL/TP": [
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v2/positionRisk",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/openOrders",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "DELETE",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {
+        "orderId": "1000",
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "DELETE",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {
+        "orderId": "1001",
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/openOrders",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/ticker/price",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/batchOrders",
+      "query": {},
+      "body": {
+        "batchOrders": [
+          {
+            "positionSide": "BOTH",
+            "priceProtect": "TRUE",
+            "quantity": "0.008",
+            "reduceOnly": "true",
+            "side": "SELL",
+            "stopPrice": "49500",
+            "symbol": "BTCUSDT",
+            "type": "STOP_MARKET",
+            "workingType": "MARK_PRICE"
+          },
+          {
+            "positionSide": "BOTH",
+            "priceProtect": "TRUE",
+            "quantity": "0.008",
+            "reduceOnly": "true",
+            "side": "SELL",
+            "stopPrice": "51000",
+            "symbol": "BTCUSDT",
+            "type": "TAKE_PROFIT_MARKET",
+            "workingType": "MARK_PRICE"
+          }
+        ],
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "apiKeyHeader": "<apiKey>"
+    }
+  ],
+  "positionManager: closePosition cancels SL/TP and closes at market": [
+    {
+      "instance": "rateLimited",
+      "method": "DELETE",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {
+        "orderId": "1002",
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "DELETE",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {
+        "orderId": "1003",
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/premiumIndex",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {},
+      "body": {
+        "positionSide": "BOTH",
+        "quantity": "0.008",
+        "recvWindow": "<recvWindow>",
+        "reduceOnly": "true",
+        "side": "SELL",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>",
+        "type": "MARKET"
+      },
+      "apiKeyHeader": "<apiKey>"
+    }
+  ],
+  "positionManager: cancel of an order that is already gone (-2011)": [
+    {
+      "instance": "rateLimited",
+      "method": "DELETE",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {
+        "orderId": "999999",
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    }
+  ],
+  "positionManager: past-TP position is closed at market": [
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v2/positionRisk",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/openOrders",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/openOrders",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/ticker/price",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/premiumIndex",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {},
+      "body": {
+        "newClientOrderId": "<clientOrderId>",
+        "positionSide": "BOTH",
+        "quantity": "0.005",
+        "recvWindow": "<recvWindow>",
+        "reduceOnly": "true",
+        "side": "SELL",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>",
+        "type": "MARKET"
+      },
+      "apiKeyHeader": "<apiKey>"
+    }
+  ],
+  "positionManager: periodic check protects an untracked position": [
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v2/positionRisk",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/openOrders",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/openOrders",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/ticker/price",
+      "query": {
+        "symbol": "ETHUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/batchOrders",
+      "query": {},
+      "body": {
+        "batchOrders": [
+          {
+            "positionSide": "BOTH",
+            "priceProtect": "TRUE",
+            "quantity": "0.5",
+            "reduceOnly": "true",
+            "side": "BUY",
+            "stopPrice": "3060",
+            "symbol": "ETHUSDT",
+            "type": "STOP_MARKET",
+            "workingType": "MARK_PRICE"
+          },
+          {
+            "positionSide": "BOTH",
+            "priceProtect": "TRUE",
+            "quantity": "0.5",
+            "reduceOnly": "true",
+            "side": "BUY",
+            "stopPrice": "2910",
+            "symbol": "ETHUSDT",
+            "type": "TAKE_PROFIT_MARKET",
+            "workingType": "MARK_PRICE"
+          }
+        ],
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "plain",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/openOrders",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/premiumIndex",
+      "query": {
+        "symbol": "ETHUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    }
+  ],
+  "close route: user closes a LONG position (one-way)": [
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/exchangeInfo",
+      "query": {},
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v2/positionRisk",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/positionSide/dual",
+      "query": {
+        "recvWindow": "<recvWindow>",
+        "signature": "<signature>",
+        "timestamp": "<timestamp>"
+      },
+      "body": null,
+      "apiKeyHeader": "<apiKey>"
+    },
+    {
+      "instance": "rateLimited",
+      "method": "GET",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/premiumIndex",
+      "query": {
+        "symbol": "BTCUSDT"
+      },
+      "body": null,
+      "apiKeyHeader": null
+    },
+    {
+      "instance": "rateLimited",
+      "method": "POST",
+      "host": "fapi.asterdex.com",
+      "path": "/fapi/v1/order",
+      "query": {},
+      "body": {
+        "positionSide": "BOTH",
+        "quantity": "0.005",
+        "recvWindow": "<recvWindow>",
+        "reduceOnly": "true",
+        "side": "SELL",
+        "signature": "<signature>",
+        "symbol": "BTCUSDT",
+        "timestamp": "<timestamp>",
+        "type": "MARKET"
+      },
+      "apiKeyHeader": "<apiKey>"
+    }
+  ]
+}
