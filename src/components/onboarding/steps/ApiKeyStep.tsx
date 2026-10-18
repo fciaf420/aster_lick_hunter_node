@@ -6,14 +6,20 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { VenueSelector } from '@/components/VenueSelector';
+import { getVenueEntry } from '@/lib/exchange/catalog';
+import type { VenueId } from '@/lib/exchange/types';
 
 interface ApiKeyStepProps {
-  onNext: (apiKey: string, secretKey: string) => void;
+  onNext: (apiKey: string, secretKey: string, venue: VenueId) => void;
+  initialVenue?: VenueId;
   onBack: () => void;
   onSkip: () => void;
 }
 
-export function ApiKeyStep({ onNext, onBack }: ApiKeyStepProps) {
+export function ApiKeyStep({ onNext, onBack, initialVenue }: ApiKeyStepProps) {
+  const [venue, setVenue] = useState<VenueId>(getVenueEntry(initialVenue).id);
+  const venueEntry = getVenueEntry(venue);
   const [apiKey, setApiKey] = useState('');
   const [secretKey, setSecretKey] = useState('');
   const [showSecretKey, setShowSecretKey] = useState(false);
@@ -26,11 +32,11 @@ export function ApiKeyStep({ onNext, onBack }: ApiKeyStepProps) {
   };
 
   const handleSubmit = () => {
-    onNext(apiKey, secretKey);
+    onNext(apiKey, secretKey, venue);
   };
 
   const handlePaperMode = () => {
-    onNext('', '');
+    onNext('', '', venue);
   };
 
   return (
@@ -44,6 +50,8 @@ export function ApiKeyStep({ onNext, onBack }: ApiKeyStepProps) {
           Set up API access to start trading or use Paper Mode for testing
         </p>
       </div>
+
+      <VenueSelector venue={venue} onVenueChange={setVenue} showLiquidationSource={false} showDetails={false} />
 
       <Tabs defaultValue="guide" className="w-full">
         <TabsList className="grid w-full grid-cols-2">
@@ -59,15 +67,15 @@ export function ApiKeyStep({ onNext, onBack }: ApiKeyStepProps) {
                 <Badge variant="outline">Required</Badge>
               </div>
               <p className="text-sm text-muted-foreground">
-                You need an AsterDex account to get API keys
+                You need an account on {venueEntry.name} to get API keys
               </p>
               <Button
                 variant="default"
                 className="w-full"
-                onClick={() => window.open('https://www.asterdex.com/en/referral/3TixB2', '_blank')}
+                onClick={() => window.open(venueEntry.signupUrl, '_blank')}
               >
                 <ExternalLink className="mr-2 h-4 w-4" />
-                Open AsterDex (Sign Up / API Management)
+                Open {venueEntry.name} (Sign Up / API Management)
               </Button>
             </div>
 

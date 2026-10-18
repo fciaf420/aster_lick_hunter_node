@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { useOnboarding } from './OnboardingProvider';
 import { useConfig } from '@/components/ConfigProvider';
 import type { Config, SymbolConfig } from '@/lib/types';
+import type { VenueId } from '@/lib/exchange/types';
 import { WelcomeStep } from './steps/WelcomeStep';
 import { PasswordSetup } from './steps/PasswordSetup';
 import { ApiKeyStep } from './steps/ApiKeyStep';
@@ -87,6 +88,8 @@ export function OnboardingModal() {
         positionMode: config.global?.positionMode || 'ONE_WAY',
         maxOpenPositions: config.global?.maxOpenPositions || 10,
         useThresholdSystem: config.global?.useThresholdSystem ?? false,
+        exchange: config.global?.exchange ?? 'aster',
+        liquidationSource: config.global?.liquidationSource ?? 'aster',
         rateLimit: config.global?.rateLimit || {
           maxRequestWeight: 2400,
           maxOrderCount: 1200,
@@ -107,7 +110,7 @@ export function OnboardingModal() {
           websocketHost: config.global?.server?.websocketHost || null
         }
       },
-      version: config.version || '1.1.0'
+      version: config.version || '1.2.0'
     };
 
     console.log('📋 Config structure check:', {
@@ -139,7 +142,7 @@ export function OnboardingModal() {
     nextStep();
   };
 
-  const handleApiKeyNext = async (apiKey: string, secretKey: string) => {
+  const handleApiKeyNext = async (apiKey: string, secretKey: string, venue: VenueId) => {
     setApiKeys({ apiKey, secretKey });
     const paperMode = !apiKey && !secretKey;
     setIsPaperMode(paperMode);
@@ -152,6 +155,8 @@ export function OnboardingModal() {
         global: {
           ...config.global,
           paperMode,
+          exchange: venue,
+          liquidationSource: config.global?.liquidationSource ?? 'aster',
           // Ensure all required global config properties are present
           riskPercent: config.global?.riskPercent ?? 2,
           positionMode: config.global?.positionMode ?? 'ONE_WAY',
@@ -279,7 +284,7 @@ export function OnboardingModal() {
       case 1:
         return <PasswordSetup onComplete={handlePasswordSetup} onSkip={handlePasswordSkip} />;
       case 2:
-        return <ApiKeyStep onNext={handleApiKeyNext} onBack={previousStep} onSkip={handleSkip} />;
+        return <ApiKeyStep onNext={handleApiKeyNext} onBack={previousStep} onSkip={handleSkip} initialVenue={config?.global?.exchange} />;
       case 3:
         return <SymbolConfigStep onNext={handleSymbolConfigNext} onBack={previousStep} isPaperMode={isPaperMode} />;
       case 4:

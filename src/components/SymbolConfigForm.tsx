@@ -12,11 +12,13 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { VenueSelector } from '@/components/VenueSelector';
+import { getVenueEntry } from '@/lib/exchange/catalog';
+import type { LiquidationSourceId, VenueId } from '@/lib/exchange/types';
 import {
   Plus,
   Trash2,
   Save,
-  Key,
   Eye,
   EyeOff,
   Shield,
@@ -24,6 +26,8 @@ import {
   AlertCircle,
   Settings2,
   BarChart3,
+  Landmark,
+  RotateCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -49,6 +53,8 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
           positionMode: 'HEDGE',
           maxOpenPositions: 10,
           useThresholdSystem: false,
+          exchange: 'aster',
+          liquidationSource: 'aster',
           server: {
             dashboardPassword: '',
             dashboardPort: 3000,
@@ -90,6 +96,8 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
         positionMode: 'HEDGE',
         maxOpenPositions: 10,
         useThresholdSystem: false,
+        exchange: 'aster',
+        liquidationSource: 'aster',
         server: {
           dashboardPassword: 'admin',
           dashboardPort: 3000,
@@ -108,7 +116,7 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
         }
       },
       symbols: {},
-      version: '1.1.0'
+      version: '1.2.0'
     };
   };
 
@@ -152,6 +160,21 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
       global: {
         ...config.global,
         [field]: value,
+      },
+    });
+  };
+
+  const handleVenueChange = (venue: VenueId) => {
+    const entry = getVenueEntry(venue);
+    setConfig({
+      ...config,
+      global: {
+        ...config.global,
+        exchange: venue,
+        // Venues without hedge mode can only run one-way positions
+        positionMode: !entry.supportsHedgeMode && config.global.positionMode === 'HEDGE'
+          ? 'ONE_WAY'
+          : config.global.positionMode,
       },
     });
   };
@@ -339,13 +362,15 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
     return Math.max(minFromNotional, minFromQuantity);
   };
 
+  const venueEntry = getVenueEntry(config.global.exchange);
+
   return (
     <div className="space-y-6">
       <Tabs defaultValue="api" className="space-y-4">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="api" className="flex items-center gap-2">
-            <Key className="h-4 w-4" />
-            API Keys
+            <Landmark className="h-4 w-4" />
+            Exchange
           </TabsTrigger>
           <TabsTrigger value="global" className="flex items-center gap-2">
             <Shield className="h-4 w-4" />
@@ -360,47 +385,72 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
         <TabsContent value="api" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>API Configuration</CardTitle>
+              <CardTitle>Exchange</CardTitle>
               <CardDescription>
-                Connect your exchange API for live trading or leave empty for paper mode
+                Choose where the bot trades and where its liquidation signals come from
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="apiKey">API Key</Label>
-                <Input
-                  id="apiKey"
-                  type="text"
-                  value={config.api?.apiKey || ''} 
-                  onChange={(e) => handleApiChange('apiKey', e.target.value)}
-                  placeholder="Enter your API key (optional for paper mode)"
-                  className="font-mono"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Your API key for exchange authentication
-                </p>
-              </div>
+              <VenueSelector
+                venue={config.global.exchange}
+                onVenueChange={handleVenueChange}
+                liquidationSource={config.global.liquidationSource}
+                onLiquidationSourceChange={(source: LiquidationSourceId) => handleGlobalChange('liquidationSource', source)}
+              />
+              <Alert>
+                <RotateCcw className="h-4 w-4" />
+                <AlertDescription>
+                  Changing the trading venue or liquidation source takes effect after the bot restarts.
+                  Only switch venues when you have no open positions.
+                </AlertDescription>
+              </Alert>
+            </CardContent>
+          </Card>
 
-              <div className="space-y-2">
-                <Label htmlFor="secretKey">Secret Key</Label>
-                <div className="relative">
+          {venueEntry.id === 'aster' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>API Configuration</CardTitle>
+                <CardDescription>
+                  Connect your {venueEntry.name} API for live trading or leave empty for paper mode
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="apiKey">API Key</Label>
                   <Input
-                    id="secretKey"
-                    type={showApiSecret ? 'text' : 'password'}
-                    value={config.api?.secretKey || ''} 
-                    onChange={(e) => handleApiChange('secretKey', e.target.value)}
-                    placeholder="Enter your secret key (optional for paper mode)"
-                    className="font-mono pr-10"
+                    id="apiKey"
+                    type="text"
+                    value={config.api?.apiKey || ''} 
+                    onChange={(e) => handleApiChange('apiKey', e.target.value)}
+                    placeholder="Enter your API key (optional for paper mode)"
+                    className="font-mono"
                   />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-                    onClick={() => setShowApiSecret(!showApiSecret)}
-                  >
-                    {showApiSecret ? (
-                      <EyeOff className="h-4 w-4" />
+                  <p className="text-xs text-muted-foreground">
+                    Your API key for exchange authentication
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="secretKey">Secret Key</Label>
+                  <div className="relative">
+                    <Input
+                      id="secretKey"
+                      type={showApiSecret ? 'text' : 'password'}
+                      value={config.api?.secretKey || ''} 
+                      onChange={(e) => handleApiChange('secretKey', e.target.value)}
+                      placeholder="Enter your secret key (optional for paper mode)"
+                      className="font-mono pr-10"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                      onClick={() => setShowApiSecret(!showApiSecret)}
+                    >
+                      {showApiSecret ? (
+                        <EyeOff className="h-4 w-4" />
                     ) : (
                       <Eye className="h-4 w-4" />
                     )}
@@ -421,6 +471,14 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
               )}
             </CardContent>
           </Card>
+          ) : (
+            <div className="rounded-lg bg-muted p-4">
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <AlertCircle className="h-4 w-4" />
+                Credentials for {venueEntry.name} can be entered once it is supported.
+              </p>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="global" className="space-y-4">
@@ -493,11 +551,18 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <option value="ONE_WAY">One-way Mode (BOTH)</option>
-                  <option value="HEDGE">Hedge Mode (LONG/SHORT)</option>
+                  <option value="HEDGE" disabled={!venueEntry.supportsHedgeMode}>
+                    Hedge Mode (LONG/SHORT){venueEntry.supportsHedgeMode ? '' : ` - not supported on ${venueEntry.name}`}
+                  </option>
                 </select>
                 <p className="text-xs text-muted-foreground">
                   One-way: All positions use BOTH | Hedge: Separate LONG and SHORT positions
                 </p>
+                {!venueEntry.supportsHedgeMode && (
+                  <p className="text-xs text-yellow-600 dark:text-yellow-500">
+                    {venueEntry.name} only supports one-way positions
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
