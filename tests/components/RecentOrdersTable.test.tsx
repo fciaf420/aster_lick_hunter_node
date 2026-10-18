@@ -212,6 +212,29 @@ describe('RecentOrdersTable', () => {
       ]);
     });
 
+    it('keeps orders from different symbols that share an orderId as separate rows', async () => {
+      const errorSpy = jest.spyOn(console, 'error');
+      try {
+        // The order store dedupes on symbol + orderId, so two symbols can legitimately reuse an orderId
+        await renderTable([
+          order({ symbol: 'BTCUSDT', orderId: 77, price: '100' }),
+          order({ symbol: 'ETHUSDT', orderId: 77, price: '300' }),
+          order({ symbol: 'SOLUSDT', orderId: 78, price: '200' }),
+        ]);
+
+        expect(symbolOrder()).toEqual(['BTC', 'ETH', 'SOL']);
+        sortBy('Price');
+        expect(symbolOrder()).toEqual(['ETH', 'SOL', 'BTC']);
+        sortBy('Price');
+        expect(symbolOrder()).toEqual(['BTC', 'SOL', 'ETH']);
+
+        const duplicateKeyWarnings = errorSpy.mock.calls.filter(([message]) => String(message).includes('same key'));
+        expect(duplicateKeyWarnings).toEqual([]);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
     it('scales price and quantity precision to the magnitude and dashes missing values', async () => {
       await renderTable([
         order({ symbol: 'AAAUSDT', price: '0.00001234', origQty: '0.0004', executedQty: '0' }),
@@ -518,6 +541,61 @@ describe('RecentOrdersTable', () => {
           jest.advanceTimersByTime(2000);
         });
         expect(rowOf('FRS')).not.toHaveClass('animate-pulse');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('flashes only the order of the symbol that arrived when another symbol reuses its orderId', async () => {
+      jest.useFakeTimers();
+      try {
+        const btc = order({ symbol: 'BTCUSDT', orderId: 77 });
+        await renderTable([btc, order({ symbol: 'ETHUSDT', orderId: 77 })]);
+        const rowOf = (name: string) => screen.getByText(name).closest('tr')!;
+
+        await emit('order:new', btc);
+
+        expect(rowOf('BTC')).toHaveClass('animate-pulse');
+        expect(rowOf('ETH')).not.toHaveClass('animate-pulse');
+        await act(async () => {
+          jest.advanceTimersByTime(2000);
+        });
+        expect(rowOf('BTC')).not.toHaveClass('animate-pulse');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('re-evaluates the relative times every minute even when no new data arrives', async () => {
+      jest.useFakeTimers();
+      try {
+        await renderTable([order({ symbol: 'AAAUSDT', updateTime: Date.now() - 30 * 1000 })]);
+        const time = () => cells(bodyRows()[0])[0].textContent;
+        expect(time()).toBe('Just now');
+
+        await act(async () => {
+          jest.advanceTimersByTime(MINUTE);
+        });
+        expect(time()).toBe('1m ago');
+
+        await act(async () => {
+          jest.advanceTimersByTime(HOUR);
+        });
+        expect(time()).toBe('1h ago');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('stops the minute tick when the table unmounts', async () => {
+      jest.useFakeTimers();
+      try {
+        const { unmount } = await renderTable([order()]);
+        expect(jest.getTimerCount()).toBe(1);
+
+        unmount();
+
+        expect(jest.getTimerCount()).toBe(0);
       } finally {
         jest.useRealTimers();
       }

@@ -4,6 +4,7 @@ import React, { useMemo } from 'react';
 import {
   Bar,
   BarChart,
+  Cell,
   CartesianGrid,
   XAxis,
   YAxis,
@@ -18,6 +19,7 @@ import {
   type ChartConfig,
 } from '@/components/ui/chart';
 import { cn } from '@/lib/utils';
+import { formatChartDate } from '@/lib/utils/chart-date';
 
 interface DailyPnL {
   date: string;
@@ -39,7 +41,10 @@ interface IncomeBreakdownChartProps {
 
 // One stacked-bar series per income type. The colours are theme tokens
 // (profit/loss and chart-1..5) exposed by the chart container as --color-<key>.
+// The realized PnL bars are coloured per day with profit/loss; realizedPnl is the colour of their legend swatch.
 const incomeChartConfig = {
+  profit: { label: 'Profit', color: 'var(--profit)' },
+  loss: { label: 'Loss', color: 'var(--loss)' },
   realizedPnl: { label: 'Realized PnL', color: 'var(--profit)' },
   fundingFee: { label: 'Funding Fee', color: 'var(--chart-1)' },
   insurance: { label: 'Insurance', color: 'var(--chart-2)' },
@@ -77,9 +82,7 @@ function IncomeTooltip({
       payload={props.payload?.slice(0, 1)}
       className="min-w-0 gap-1 p-2 bg-background/95 backdrop-blur"
       labelClassName="text-[10px] text-muted-foreground"
-      labelFormatter={(label) =>
-        typeof label === 'string' ? label.split('-').slice(1).reverse().join('/') : label
-      }
+      labelFormatter={(label) => (typeof label === 'string' ? formatChartDate(label) : label)}
       formatter={renderBody}
     />
   );
@@ -159,7 +162,12 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
 
     return (
       <div className="w-full space-y-0.5">
-        {tooltipLine('Realized PnL', 'bg-profit', formatCurrency(row.realizedPnl), 'text-profit')}
+        {tooltipLine(
+          'Realized PnL',
+          row.realizedPnl >= 0 ? 'bg-profit' : 'bg-loss',
+          formatCurrency(row.realizedPnl),
+          row.realizedPnl >= 0 ? 'text-profit' : 'text-loss'
+        )}
         {tooltipLine('Commission', 'bg-loss', formatCurrency(row.originalCommission), 'text-loss')}
         {row.fundingFee !== 0 &&
           tooltipLine('Funding Fee', 'bg-chart-1', formatCurrency(row.fundingFee), row.fundingFee >= 0 ? 'text-blue-600' : 'text-orange-600')}
@@ -199,7 +207,7 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
   return (
     <ChartContainer config={incomeChartConfig} className="aspect-auto h-[200px] w-full">
       <BarChart data={chartData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
-        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+        <CartesianGrid strokeDasharray="3 3" />
         <XAxis
           dataKey="date"
           tick={{ fontSize: 10 }}
@@ -211,7 +219,12 @@ export default function IncomeBreakdownChart({ data, timeRange }: IncomeBreakdow
         <ChartTooltip content={<IncomeTooltip renderBody={renderTooltipBody} />} />
         {/* itemSorter={null} keeps the legend in series order (recharts 3 sorts it alphabetically by default) */}
         <ChartLegend itemSorter={null} content={<ChartLegendContent className="text-[10px]" />} />
-        <Bar dataKey="realizedPnl" stackId="a" fill="var(--color-realizedPnl)" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="realizedPnl" stackId="a" fill="var(--color-realizedPnl)" radius={[0, 0, 0, 0]}>
+          {/* A losing day is drawn in the loss colour, like the daily bars in PnLChart */}
+          {chartData.map((row, index) => (
+            <Cell key={`cell-${index}`} fill={row.realizedPnl >= 0 ? 'var(--color-profit)' : 'var(--color-loss)'} />
+          ))}
+        </Bar>
         <Bar dataKey="fundingFee" stackId="a" fill="var(--color-fundingFee)" radius={[0, 0, 0, 0]} />
         <Bar dataKey="insurance" stackId="a" fill="var(--color-insurance)" radius={[0, 0, 0, 0]} />
         <Bar dataKey="rebates" stackId="a" fill="var(--color-rebates)" radius={[0, 0, 0, 0]} />

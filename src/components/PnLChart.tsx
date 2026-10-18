@@ -21,6 +21,7 @@ import {
   type ChartConfig,
 } from '@/components/ui/chart';
 import { cn } from '@/lib/utils';
+import { formatChartDate } from '@/lib/utils/chart-date';
 import {
   Select,
   SelectContent,
@@ -356,18 +357,6 @@ export default function PnLChart() {
     }).format(value);
   };
 
-  // Tooltip label: the hovered date as M/D/YYYY (parsed from the string, no timezone conversion)
-  const formatTooltipDate = (dateStr: string) => {
-    const parts = dateStr.split('-');
-    if (parts.length === 3) {
-      const year = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10);
-      const day = parseInt(parts[2], 10);
-      return `${month}/${day}/${year}`;
-    }
-    return dateStr;
-  };
-
   // Tooltip body for the hovered day; the tooltip shell and the date label come from ChartTooltipContent
   const renderTooltipBody = (_value: unknown, _name: unknown, item: { payload?: DailyPnL }) => {
     const data = item.payload;
@@ -409,7 +398,7 @@ export default function PnLChart() {
     <ChartTooltipContent
       className="min-w-0 gap-0.5 p-1.5 bg-background/95 backdrop-blur"
       labelClassName="text-[10px] text-muted-foreground"
-      labelFormatter={(label) => (typeof label === 'string' ? formatTooltipDate(label) : label)}
+      labelFormatter={(label) => (typeof label === 'string' ? formatChartDate(label) : label)}
       formatter={renderTooltipBody}
     />
   );
@@ -679,7 +668,7 @@ export default function PnLChart() {
             <ChartContainer config={pnlChartConfig} className="aspect-auto h-[200px] w-full">
               {chartType === 'daily' ? (
               <BarChart data={chartData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   dataKey="date"
                   tick={{ fontSize: 10 }}
@@ -702,7 +691,7 @@ export default function PnLChart() {
               </BarChart>
             ) : (
               <AreaChart data={chartData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   dataKey="date"
                   tick={{ fontSize: 10 }}

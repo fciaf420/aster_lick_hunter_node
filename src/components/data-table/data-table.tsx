@@ -90,7 +90,8 @@ const DEFAULT_PAGE_SIZE = 10
  * client-side sorting, optional text filter, column visibility menu and
  * pagination. Live data is fine: sorting, filter and page state live in the
  * table and survive `data` updates, and the page index is not reset when
- * rows change (it is clamped if the data shrinks).
+ * rows change (it is clamped if the data shrinks, and back on the first page
+ * when no rows are left).
  */
 function DataTable<TData>({
   columns,
@@ -152,14 +153,16 @@ function DataTable<TData>({
     sortDescFirst,
   })
 
-  // Rows that vanish (live data, a narrower filter) must not leave the pager on an empty page
-  const paginated = Boolean(pagination)
-  const pageCount = paginated ? table.getPageCount() : 0
-  React.useEffect(() => {
-    if (paginated && pageCount > 0 && pageIndex > pageCount - 1) {
-      setPageIndex(pageCount - 1)
+  // Rows that vanish (live data, a narrower filter) must not leave the pager on a page that no longer
+  // exists: it moves to the last page, or back to the first one when no rows are left. The state is
+  // adjusted while rendering so React re-renders before anything is committed; an effect would
+  // commit the empty page first.
+  if (pagination) {
+    const lastPageIndex = Math.max(table.getPageCount() - 1, 0)
+    if (pageIndex > lastPageIndex) {
+      setPageIndex(lastPageIndex)
     }
-  }, [paginated, pageCount, pageIndex])
+  }
 
   const visibleColumnCount = table.getVisibleLeafColumns().length
   const rows = table.getRowModel().rows

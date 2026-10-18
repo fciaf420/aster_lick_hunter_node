@@ -119,8 +119,8 @@ describe('PnLChart chart wiring', () => {
       render(<PnLChart />);
       await screen.findByTestId('area-chart');
 
-      // Date label is M/D/YYYY, parsed without timezone conversion
-      expect(screen.getByText('9/1/2025')).toBeInTheDocument();
+      // Date label is "MMM D, YYYY", parsed without timezone conversion
+      expect(screen.getByText('Sep 1, 2025')).toBeInTheDocument();
       const value = screen.getAllByText('$95.00').find((el) => el.className.includes('text-sm'));
       expect(value).toHaveClass('text-profit');
       expect(screen.getByText('1 trades')).toBeInTheDocument();
@@ -138,7 +138,7 @@ describe('PnLChart chart wiring', () => {
       render(<PnLChart />);
       await screen.findByTestId('area-chart');
 
-      expect(screen.getByText('9/2/2025')).toBeInTheDocument();
+      expect(screen.getByText('Sep 2, 2025')).toBeInTheDocument();
       const value = screen.getByText('-$30.00');
       expect(value).toHaveClass('text-loss');
       // A day without trades shows no trade-count badge
@@ -208,7 +208,7 @@ describe('PnLChart chart wiring', () => {
 
       await openDaily();
 
-      expect(screen.getByText('9/1/2025')).toBeInTheDocument();
+      expect(screen.getByText('Sep 1, 2025')).toBeInTheDocument();
       expect(screen.getByText('$94.50')).toHaveClass('text-profit');
       expect(screen.getByText('4 trades')).toBeInTheDocument();
       expect(screen.getByText('Real: $100.00')).toBeInTheDocument();
@@ -291,8 +291,8 @@ describe('IncomeBreakdownChart chart wiring', () => {
   it('renders the day tooltip once with every non-zero income line, the net PnL and the trade count', () => {
     render(<IncomeBreakdownChart data={[richDay as any]} timeRange="7d" />);
 
-    // Label keeps the existing day/month format
-    expect(screen.getByText('01/09')).toBeInTheDocument();
+    // Same "MMM D, YYYY" date label as the PnL chart
+    expect(screen.getByText('Sep 1, 2025')).toBeInTheDocument();
 
     // Even though the payload holds one entry per series, the day body appears only once
     expect(screen.getAllByText('Realized PnL')).toHaveLength(1);
@@ -308,6 +308,37 @@ describe('IncomeBreakdownChart chart wiring', () => {
     const net = screen.getByText('Net PnL').parentElement as HTMLElement;
     expect(within(net).getByText('$118.75')).toHaveClass('text-profit');
     expect(screen.getByText('6 trades')).toBeInTheDocument();
+  });
+
+  it('colours each realized PnL bar by the sign of the day', () => {
+    const days = [
+      day({ date: '2025-09-01', realizedPnl: 120, netPnl: 120 }),
+      day({ date: '2025-09-02', realizedPnl: -40, netPnl: -40 }),
+      day({ date: '2025-09-03', realizedPnl: 0, fundingFee: 1, netPnl: 1 }),
+    ];
+    render(<IncomeBreakdownChart data={days as any[]} timeRange="7d" />);
+
+    const [realizedBar, ...otherBars] = screen.getAllByTestId('bar');
+    expect(realizedBar).toHaveAttribute('data-key', 'realizedPnl');
+    // The series keeps its own colour (the legend swatch); each day's cell picks profit or loss
+    expect(realizedBar).toHaveAttribute('data-fill', 'var(--color-realizedPnl)');
+    expect(within(realizedBar).getAllByTestId('cell').map((cell) => cell.getAttribute('data-fill'))).toEqual([
+      'var(--color-profit)',
+      'var(--color-loss)',
+      'var(--color-profit)',
+    ]);
+    // No other series is split by sign
+    otherBars.forEach((bar) => expect(within(bar).queryAllByTestId('cell')).toHaveLength(0));
+  });
+
+  it('shows a negative realized PnL with the loss swatch and colour in the tooltip', () => {
+    const losing = day({ date: '2025-09-02', realizedPnl: -40, commission: -3, netPnl: -43, tradeCount: 2 });
+    render(<IncomeBreakdownChart data={[losing as any]} timeRange="7d" />);
+
+    const line = screen.getByText('Realized PnL').closest('div')!.parentElement as HTMLElement;
+    expect(within(line).getByText('-$40.00')).toHaveClass('text-loss');
+    expect(line.querySelector('.bg-loss')).toBeInTheDocument();
+    expect(line.querySelector('.bg-profit')).not.toBeInTheDocument();
   });
 
   it('hides zero-valued optional lines but always shows realized PnL and commission', () => {

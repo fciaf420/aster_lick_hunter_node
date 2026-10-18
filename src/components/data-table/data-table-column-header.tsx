@@ -19,13 +19,15 @@ interface DataTableColumnHeaderProps<TData, TValue>
 /**
  * Column header that toggles sorting when clicked (shadcn Data Table pattern).
  * Renders the plain title for columns that cannot be sorted. The sort state is
- * announced through aria-sort on the enclosing header cell by `DataTable`.
+ * announced through aria-sort on the enclosing header cell by `DataTable`. A
+ * caller's `onClick` runs in addition to the toggle, not instead of it.
  */
 function DataTableColumnHeader<TData, TValue>({
   column,
   title,
   align = "left",
   className,
+  onClick,
   ...props
 }: DataTableColumnHeaderProps<TData, TValue>) {
   if (!column.getCanSort()) {
@@ -49,8 +51,12 @@ function DataTableColumnHeader<TData, TValue>({
         align === "center" && "mx-auto",
         className
       )}
-      onClick={column.getToggleSortingHandler()}
       {...props}
+      onClick={(event) => {
+        // A caller's onClick runs first and can call event.preventDefault() to skip the sort toggle
+        onClick?.(event)
+        if (!event.defaultPrevented) column.getToggleSortingHandler()?.(event)
+      }}
     >
       <span>{title}</span>
       <Icon

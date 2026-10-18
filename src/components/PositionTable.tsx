@@ -54,6 +54,8 @@ export default function PositionTable({
 }: PositionTableProps) {
   const [realPositions, setRealPositions] = useState<Position[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // Why the last positions fetch failed; cleared by the next successful fetch or update
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [markPrices, setMarkPrices] = useState<Record<string, number>>({});
   const [vwapData, setVwapData] = useState<Record<string, VWAPData>>({});
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -125,15 +127,23 @@ export default function PositionTable({
       // Load initial data from data store
       dataStore.fetchPositions().then((data) => {
         setRealPositions(data);
+        setLoadError(null);
         setIsLoading(false);
       }).catch((error) => {
         console.error('[PositionTable] Failed to load positions:', error);
+        setLoadError(error instanceof Error ? error.message : String(error));
         setIsLoading(false);
       });
 
       // Subscribe to data store events
       const handlePositionsUpdate = (data: Position[]) => {
         setRealPositions(data);
+        setLoadError(null);
+      };
+
+      // Also covers refreshes the data store runs after websocket updates
+      const handlePositionsError = (message: string) => {
+        setLoadError(message);
       };
 
       const handleMarkPricesUpdate = (prices: Record<string, number>) => {
@@ -141,6 +151,7 @@ export default function PositionTable({
       };
 
       dataStore.on('positions:update', handlePositionsUpdate);
+      dataStore.on('positions:error', handlePositionsError);
       dataStore.on('markPrices:update', handleMarkPricesUpdate);
 
       // Load initial mark prices
@@ -152,6 +163,7 @@ export default function PositionTable({
       // Clean up data store listeners
       const cleanupDataStore = () => {
         dataStore.off('positions:update', handlePositionsUpdate);
+        dataStore.off('positions:error', handlePositionsError);
         dataStore.off('markPrices:update', handleMarkPricesUpdate);
       };
 
@@ -278,6 +290,7 @@ export default function PositionTable({
         // Always refresh positions data after successful close
         dataStore.fetchPositions().then((data) => {
           setRealPositions(data);
+          setLoadError(null);
         }).catch((error) => {
           console.error('[PositionTable] Failed to refresh positions after close:', error);
           toast.error('Failed to refresh positions', {
@@ -715,12 +728,23 @@ export default function PositionTable({
             rowClassName="h-12"
             headerRowClassName="h-8"
             emptyState={
-              <div className="flex flex-col items-center gap-1">
-                <span className="text-sm text-muted-foreground">No open positions</span>
-                <Badge variant="secondary" className="h-4 text-[10px] px-1.5">
-                  Waiting for trades
-                </Badge>
-              </div>
+              loadError ? (
+                // An outage must not look like a flat book
+                <div role="alert" className="flex flex-col items-center gap-1">
+                  <span className="flex items-center gap-1 text-sm text-destructive">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    Couldn&apos;t load positions — retrying
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">{loadError}</span>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-sm text-muted-foreground">No open positions</span>
+                  <Badge variant="secondary" className="h-4 text-[10px] px-1.5">
+                    Waiting for trades
+                  </Badge>
+                </div>
+              )
             }
           />
         </CardContent>

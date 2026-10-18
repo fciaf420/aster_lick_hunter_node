@@ -30,6 +30,12 @@ import { Order, OrderStatus, OrderSide, OrderType } from '@/lib/types/order';
 import { useConfig } from '@/components/ConfigProvider';
 import websocketService from '@/lib/services/websocketService';
 
+// Orders are unique per symbol and orderId (the order store dedupes on both), so the pair keys rows and flashes
+const orderKey = (order: Order) => `${order.symbol}-${order.orderId}`;
+
+// How often the relative times ("5m ago") are re-evaluated
+const TIME_TICK_MS = 60 * 1000;
+
 // Format time
 const formatTime = (timestamp: number) => {
   const date = new Date(timestamp);
@@ -296,7 +302,9 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
   const [statusFilter, setStatusFilter] = useState<string>('FILLED');
   const [symbolFilter, setSymbolFilter] = useState<string>('ALL');
   const [showMore, setShowMore] = useState(false);
-  const [flashingOrders, setFlashingOrders] = useState<Set<number>>(new Set());
+  const [flashingOrders, setFlashingOrders] = useState<Set<string>>(new Set());
+  // Relative times are worked out while rendering; the tick re-renders once a minute so they keep up without new data
+  const [, setTimeTick] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [currentLimit, setCurrentLimit] = useState(50); // Start with 50 orders
   const LOAD_MORE_INCREMENT = 50; // Load 50 more each time
@@ -308,6 +316,11 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
     orders.forEach(order => symbolSet.add(order.symbol));
     return Array.from(symbolSet).sort();
   }, [orders]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setTimeTick(tick => tick + 1), TIME_TICK_MS);
+    return () => clearInterval(timer);
+  }, []);
 
   // Load initial orders
   const loadOrders = useCallback(async (force = false, isLoadMore = false) => {
@@ -391,11 +404,11 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
 
     const handleNewOrder = (order: Order) => {
       // Flash animation for all new orders
-      setFlashingOrders(prev => new Set(prev).add(order.orderId));
+      setFlashingOrders(prev => new Set(prev).add(orderKey(order)));
       setTimeout(() => {
         setFlashingOrders(prev => {
           const next = new Set(prev);
-          next.delete(order.orderId);
+          next.delete(orderKey(order));
           return next;
         });
       }, 2000);
@@ -596,11 +609,11 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
             <DataTable
               columns={orderColumns}
               data={orders}
-              getRowId={(order) => String(order.orderId)}
+              getRowId={orderKey}
               // Show More reveals every loaded order; sorting applies to all of them before the cut
               pagination={{ pageSize: showMore ? Math.max(orders.length, 1) : 10, controls: false }}
               rowClassName={(order) =>
-                `${flashingOrders.has(order.orderId) ? 'animate-pulse bg-blue-500/5' : ''} transition-colors duration-200`
+                `${flashingOrders.has(orderKey(order)) ? 'animate-pulse bg-blue-500/5' : ''} transition-colors duration-200`
               }
             />
 

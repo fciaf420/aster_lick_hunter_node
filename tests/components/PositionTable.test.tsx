@@ -431,12 +431,97 @@ describe('PositionTable', () => {
       expect(screen.queryByRole('link')).not.toBeInTheDocument();
     });
 
-    it('falls back to the empty state when loading positions fails', async () => {
-      (dataStore.fetchPositions as jest.Mock).mockRejectedValue(new Error('boom'));
+    describe('when loading positions fails', () => {
+      const OUTAGE = "Couldn't load positions — retrying";
 
-      await renderTable();
+      it('shows a distinct outage state with the error muted, not the "no open positions" state', async () => {
+        (dataStore.fetchPositions as jest.Mock).mockRejectedValue(new Error('Positions API failed: 502'));
 
-      expect(await screen.findByText('No open positions')).toBeInTheDocument();
+        await renderTable();
+
+        expect(await screen.findByText(OUTAGE)).toBeInTheDocument();
+        expect(screen.getByText('Positions API failed: 502')).toHaveClass('text-muted-foreground');
+        expect(screen.getByRole('alert')).toHaveTextContent(OUTAGE);
+        expect(screen.queryByText('No open positions')).not.toBeInTheDocument();
+        expect(screen.queryByText('Waiting for trades')).not.toBeInTheDocument();
+        // The placeholder rows are gone and the outage fills one full-width row
+        expect(document.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(0);
+        expect(screen.getByText(OUTAGE).closest('td')).toHaveAttribute('colspan', '8');
+      });
+
+      it('shows the rejection as text when it is not an Error', async () => {
+        (dataStore.fetchPositions as jest.Mock).mockRejectedValue('network down');
+
+        await renderTable();
+
+        expect(await screen.findByText('network down')).toBeInTheDocument();
+      });
+
+      it('recovers when the next positions update arrives', async () => {
+        (dataStore.fetchPositions as jest.Mock).mockRejectedValue(new Error('boom'));
+        await renderTable();
+        await screen.findByText(OUTAGE);
+
+        await emit('positions:update', [btc]);
+
+        expect(await screen.findByRole('link', { name: 'BTCUSDT' })).toBeInTheDocument();
+        expect(screen.queryByText(OUTAGE)).not.toBeInTheDocument();
+        expect(screen.queryByText('boom')).not.toBeInTheDocument();
+      });
+
+      it('returns to the plain empty state when the recovering update has no positions', async () => {
+        (dataStore.fetchPositions as jest.Mock).mockRejectedValue(new Error('boom'));
+        await renderTable();
+        await screen.findByText(OUTAGE);
+
+        await emit('positions:update', []);
+
+        expect(await screen.findByText('No open positions')).toBeInTheDocument();
+        expect(screen.queryByText(OUTAGE)).not.toBeInTheDocument();
+      });
+
+      it('also shows the outage when a later refresh fails while no position is open', async () => {
+        loadPositions([]);
+        await renderTable();
+        await screen.findByText('No open positions');
+
+        await emit('positions:error', 'Positions API failed: 500');
+
+        expect(screen.getByText(OUTAGE)).toBeInTheDocument();
+        expect(screen.getByText('Positions API failed: 500')).toBeInTheDocument();
+        expect(screen.queryByText('No open positions')).not.toBeInTheDocument();
+
+        await emit('positions:update', []);
+        expect(screen.getByText('No open positions')).toBeInTheDocument();
+        expect(screen.queryByText(OUTAGE)).not.toBeInTheDocument();
+      });
+
+      it('clears the error when a later fetch succeeds', async () => {
+        mockFetch({ '/api/positions/': () => ({ success: true }) });
+        await renderTable();
+        await screen.findByRole('link', { name: 'BTCUSDT' });
+        // A failed refresh keeps the last known positions on screen...
+        await emit('positions:error', 'Positions API failed: 500');
+        expect(screen.getByRole('link', { name: 'BTCUSDT' })).toBeInTheDocument();
+        expect(screen.queryByText(OUTAGE)).not.toBeInTheDocument();
+
+        // ...and the next successful fetch (here the refresh after a close) must not leave the error behind
+        loadPositions([]);
+        fireEvent.click(within(rowFor('BTCUSDT')).getByRole('button', { name: /Close/ }));
+        fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close Position' }));
+
+        expect(await screen.findByText('No open positions')).toBeInTheDocument();
+        expect(screen.queryByText(OUTAGE)).not.toBeInTheDocument();
+      });
+
+      it('unsubscribes from the error event on unmount', async () => {
+        const { unmount } = await renderTable();
+        await screen.findByRole('link', { name: 'BTCUSDT' });
+
+        unmount();
+
+        expect(dataStore.off).toHaveBeenCalledWith('positions:error', expect.any(Function));
+      });
     });
 
     it('collapses and expands the table from the title', async () => {
@@ -609,6 +694,101 @@ describe('PositionTable', () => {
         expect.objectContaining({ symbol: 'BTCUSDT', component: 'PositionTable' })
       );
       expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+  });
+
+  describe('hedge mode (one symbol held long and short)', () => {
+    const hedgeLong = {
+      symbol: 'BTCUSDT',
+      side: 'LONG' as const,
+      quantity: 0.5,
+      entryPrice: 50000,
+      markPrice: 51000,
+      pnl: 500,
+      pnlPercent: 2,
+      margin: 2500,
+      leverage: 10,
+    };
+    const hedgeShort = {
+      symbol: 'BTCUSDT',
+      side: 'SHORT' as const,
+      quantity: 0.2,
+      entryPrice: 52000,
+      markPrice: 51000,
+      pnl: 200,
+      pnlPercent: 1.9,
+      margin: 1000,
+      leverage: 10,
+    };
+
+    const bodyRows = () => screen.getAllByRole('row').slice(1);
+    const sides = () => bodyRows().map((row) => within(row).getAllByRole('cell')[1].textContent);
+    const rowOfSide = (side: 'L' | 'S') => bodyRows().find((row) => within(row).queryByText(side)) as HTMLElement;
+
+    beforeEach(() => {
+      loadPositions([hedgeLong, hedgeShort]);
+    });
+
+    it('keeps the long and short rows of the same symbol distinct', async () => {
+      const errorSpy = jest.spyOn(console, 'error');
+      try {
+        await renderTable();
+        await screen.findAllByRole('link', { name: 'BTCUSDT' });
+
+        // Rows are keyed symbol-side: one symbol on two rows must not collapse or warn about duplicate keys
+        expect(sides()).toEqual(['L', 'S']);
+        expect(screen.getByText('2')).toBeInTheDocument(); // position count badge
+        sortBy('PnL');
+        sortBy('PnL');
+        expect(sides()).toEqual(['S', 'L']);
+        expect(errorSpy.mock.calls.filter(([message]) => String(message).includes('same key'))).toEqual([]);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    it('prices each side from the shared mark price, in the right colour', async () => {
+      await renderTable();
+      await screen.findAllByRole('link', { name: 'BTCUSDT' });
+
+      // Mark 49000: the long loses (49000 - 50000) * 0.5 = -500, the short wins (52000 - 49000) * 0.2 = +600
+      await emit('markPrices:update', { BTCUSDT: 49000 });
+
+      const long = within(rowOfSide('L'));
+      expect(long.getByText('$500.00')).toHaveClass('text-loss');
+      expect(long.getByText('-2.0%').closest('[data-slot="badge"]')).toHaveAttribute('data-variant', 'destructive');
+      expect(long.queryByText('+$500.00')).not.toBeInTheDocument();
+
+      const short = within(rowOfSide('S'));
+      expect(short.getByText('+$600.00')).toHaveClass('text-profit');
+      expect(short.getByText('+5.8%').closest('[data-slot="badge"]')).toHaveClass('border-profit', 'text-profit');
+      expect(short.queryByText('$600.00')).not.toBeInTheDocument();
+    });
+
+    it('closes the right side after sorting by PnL', async () => {
+      mockFetch({ '/api/positions/': () => ({ success: true }) });
+      await renderTable();
+      await screen.findAllByRole('link', { name: 'BTCUSDT' });
+      await emit('markPrices:update', { BTCUSDT: 49000 });
+      const closeUrls = () =>
+        (global.fetch as jest.Mock).mock.calls.map(([url]) => url).filter((url) => String(url).includes('/close'));
+
+      sortBy('PnL'); // best first: the short (+600), then the long (-500)
+      expect(sides()).toEqual(['S', 'L']);
+      fireEvent.click(within(bodyRows()[0]).getByRole('button', { name: /Close/ }));
+      expect(within(screen.getByRole('dialog')).getByText('SHORT')).toBeInTheDocument();
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close Position' }));
+      await waitFor(() => expect(closeUrls()).toEqual(['/api/positions/BTCUSDT/SHORT/close']));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+      sortBy('PnL'); // worst first: the long on top
+      expect(sides()).toEqual(['L', 'S']);
+      fireEvent.click(within(bodyRows()[0]).getByRole('button', { name: /Close/ }));
+      expect(within(screen.getByRole('dialog')).getByText('LONG')).toBeInTheDocument();
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close Position' }));
+      await waitFor(() =>
+        expect(closeUrls()).toEqual(['/api/positions/BTCUSDT/SHORT/close', '/api/positions/BTCUSDT/LONG/close'])
+      );
     });
   });
 });

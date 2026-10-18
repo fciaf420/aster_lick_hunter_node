@@ -253,6 +253,51 @@ describe('DataTable', () => {
     });
   });
 
+  describe('column header', () => {
+    const headerWith = (onClick: React.MouseEventHandler<HTMLButtonElement>): ColumnDef<Row>[] => [
+      {
+        id: 'name',
+        accessorKey: 'name',
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Name" onClick={onClick} />,
+      },
+    ];
+
+    it('runs a caller onClick in addition to toggling the sort', () => {
+      const onClick = jest.fn();
+      render(<DataTable columns={headerWith(onClick)} data={rows} />);
+
+      fireEvent.click(sortButton('Name'));
+
+      expect(onClick).toHaveBeenCalledTimes(1);
+      expect(header('Name')).toHaveAttribute('aria-sort', 'ascending');
+      expect(bodyNames()).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta']);
+    });
+
+    it('lets the caller skip the sort toggle with preventDefault', () => {
+      const onClick = jest.fn((event: React.MouseEvent) => event.preventDefault());
+      render(<DataTable columns={headerWith(onClick)} data={rows} />);
+
+      fireEvent.click(sortButton('Name'));
+
+      expect(onClick).toHaveBeenCalledTimes(1);
+      expect(header('Name')).toHaveAttribute('aria-sort', 'none');
+      expect(bodyNames()).toEqual(['Bravo', 'Alpha', 'Charlie', 'Delta']);
+    });
+
+    it('passes other button props through', () => {
+      const columnsWithProps: ColumnDef<Row>[] = [
+        {
+          id: 'name',
+          accessorKey: 'name',
+          header: ({ column }) => <DataTableColumnHeader column={column} title="Name" data-testid="name-sort" />,
+        },
+      ];
+      render(<DataTable columns={columnsWithProps} data={rows} />);
+
+      expect(screen.getByTestId('name-sort')).toBe(sortButton('Name'));
+    });
+  });
+
   describe('filter', () => {
     it('is hidden unless a filter column is set', () => {
       render(<DataTable columns={columns} data={rows} />);
@@ -400,6 +445,55 @@ describe('DataTable', () => {
       rerender(<DataTable columns={columns} data={many.slice(0, 12)} pagination={{ pageSize: 10 }} />);
       expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
       expect(bodyNames()).toEqual(['Row 11', 'Row 12']);
+    });
+
+    it('returns to the first page when every row disappears, so rows that come back start there', () => {
+      const { rerender } = render(<DataTable columns={columns} data={many} pagination={{ pageSize: 10 }} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
+      expect(screen.getByText('Page 3 of 3')).toBeInTheDocument();
+
+      rerender(<DataTable columns={columns} data={[]} pagination={{ pageSize: 10 }} />);
+      expect(screen.getByText('No results.')).toBeInTheDocument();
+      expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
+      expect(screen.getByText('0 row(s)')).toBeInTheDocument();
+
+      rerender(<DataTable columns={columns} data={many.slice(0, 12)} pagination={{ pageSize: 10 }} />);
+      expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+      expect(bodyNames()[0]).toBe('Row 01');
+    });
+
+    it('never commits an empty page while the pager moves back after the rows shrank or came back', () => {
+      // Snapshot the committed table body after every commit (Profiler runs once the DOM is updated)
+      const commits: string[] = [];
+      const record = () => {
+        const body = Array.from(document.querySelectorAll('tbody tr')).map((row) => row.textContent);
+        commits.push(body.join('|'));
+      };
+      const table = (data: Row[]) => (
+        <React.Profiler id="table" onRender={record}>
+          <DataTable columns={columns} data={data} pagination={{ pageSize: 10 }} />
+        </React.Profiler>
+      );
+      const { rerender } = render(table(many));
+      fireEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
+
+      // Fewer rows than the current page needs
+      commits.length = 0;
+      rerender(table(many.slice(0, 12)));
+      expect(commits.length).toBeGreaterThan(0);
+      commits.forEach((body) => expect(body).not.toContain('No results.'));
+      expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+
+      // No rows at all, then rows again
+      rerender(table([]));
+      commits.length = 0;
+      rerender(table(many.slice(0, 12)));
+      expect(commits.length).toBeGreaterThan(0);
+      commits.forEach((body) => expect(body).not.toContain('No results.'));
+      expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+      expect(bodyNames()[0]).toBe('Row 01');
     });
 
     it('returns to the first page when the filter changes', () => {
