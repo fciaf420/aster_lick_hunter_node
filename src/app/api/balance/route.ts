@@ -152,7 +152,8 @@ export const GET = withAuth(async (request: NextRequest, _user) => {
     let totalPnL = 0;
 
     if (balanceData && Array.isArray(balanceData)) {
-      const usdtAsset = balanceData.find((a: any) => a.asset === 'USDT');
+      // The venue's margin asset: USDT on Aster, USDC on Lighter
+      const usdtAsset = balanceData.find((a: any) => a.asset === exchange.capabilities.marginAsset);
       if (usdtAsset) {
         // balance is the wallet balance
         totalBalance = parseFloat(usdtAsset.balance || '0');

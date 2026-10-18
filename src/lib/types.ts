@@ -1,4 +1,5 @@
-import type { LiquidationSourceId, VenueId } from './exchange/types';
+import type { LiquidationSourceId, OrderId, VenueId } from './exchange/types';
+import type { LighterProfileName } from './exchange/lighter/profiles';
 
 export interface SymbolConfig {
   // Volume thresholds
@@ -74,9 +75,26 @@ export interface GlobalConfig {
   rateLimit?: RateLimitConfig; // Rate limit configuration
 }
 
+// Lighter settings and credentials (config.venues.lighter; validated by lighterVenueConfigSchema)
+export interface LighterVenueConfig {
+  profile?: LighterProfileName;    // Network (default 'testnet'); Robinhood profiles are gated
+  accountIndex?: number;
+  apiKeyIndex?: number;            // 0..254
+  apiKeyPrivateKey?: string;       // 40 bytes hex
+  apiKeyPublicKey?: string;        // As registered on the exchange (checked at startup)
+  liquidationsLive?: boolean;      // false (default) = shadow mode: Lighter liquidations are logged, not traded
+  sltpSlippagePct?: number;        // SL/TP worst-price slippage after trigger, percent (default 1)
+  sendTxPerMin?: number;           // Client-side sendTx limit (default 60)
+  symbolOverrides?: Record<string, string | { market: string; multiplier?: number }>;
+}
+
+export type VenueSettings = Partial<Record<Exclude<VenueId, 'lighter'>, Record<string, string>>> & {
+  lighter?: LighterVenueConfig;
+};
+
 export interface Config {
   api: ApiCredentials;     // Aster credentials
-  venues?: Partial<Record<VenueId, Record<string, string>>>; // Credentials for other trading venues
+  venues?: VenueSettings;  // Settings and credentials for other trading venues
   symbols: Record<string, SymbolConfig>; // key: symbol like "BTCUSDT"
   global: GlobalConfig;
   version?: string; // Optional version field for config schema versioning
@@ -103,7 +121,7 @@ export interface LiquidationEvent {
 
 export interface Order {
   symbol: string;
-  orderId: string;
+  orderId: OrderId;   // number when exactly representable (Aster returns numbers), else a decimal string
   clientOrderId?: string;
   side: 'BUY' | 'SELL';
   type: string;

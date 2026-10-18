@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { loadConfig } from '@/lib/bot/config';
 import { symbolPrecision } from '@/lib/utils/symbolPrecision';
 import { invalidateIncomeCache } from '@/lib/api/income';
-import { createExchangeAdapter } from '@/lib/exchange/registry';
+import { createExchangeAdapter, getConfiguredVenue } from '@/lib/exchange/registry';
+
+// Lighter orders are signed by a native library that only loads in the bot process, never inside Next.js.
+// The bot's WebSocket server has no client authentication, so a close command is not routed through it either.
+const LIGHTER_CLOSE_UNSUPPORTED_MESSAGE =
+  'Closing Lighter positions from the dashboard is not supported: Lighter orders can only be signed by the bot process. ' +
+  'Close the position on the Lighter exchange (app.lighter.xyz), or let the bot\'s stop loss / take profit close it.';
 
 export async function POST(
   request: NextRequest,
@@ -20,6 +26,15 @@ export async function POST(
     }
 
     const config = await loadConfig();
+
+    // Live Lighter closes need the bot's signer (paper mode still simulates below)
+    if (getConfiguredVenue(config) === 'lighter' && !config.global.paperMode) {
+      return NextResponse.json(
+        { error: LIGHTER_CLOSE_UNSUPPORTED_MESSAGE, success: false, venue: 'lighter' },
+        { status: 409 }
+      );
+    }
+
     const exchange = createExchangeAdapter(config);
 
     // If no API key is configured, return simulation mode

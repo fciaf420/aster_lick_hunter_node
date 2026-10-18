@@ -3,7 +3,18 @@ import { ASTER_SIGNUP_URL } from './aster/constants';
 
 // Client-safe description of each venue and liquidation source (no secrets, no Node-only imports)
 
-export type CatalogStatus = 'available' | 'coming_soon';
+// 'available': implemented and verified. 'beta': implemented and selectable, but not yet proven with live funds
+// (the UI shows a Beta badge and BETA_WARNING). 'coming_soon': listed only, cannot be selected.
+export type CatalogStatus = 'available' | 'beta' | 'coming_soon';
+
+export const BETA_WARNING =
+  'Beta: untested with live funds. It defaults to the testnet network; start in paper mode or on testnet, ' +
+  'and keep the Lighter liquidation feed in shadow mode until you have checked its logs.';
+
+// Whether a venue or liquidation source can be chosen in the config and started by the bot
+export function isSelectableStatus(status: CatalogStatus): boolean {
+  return status === 'available' || status === 'beta';
+}
 
 export interface CredentialField {
   key: string;
@@ -61,13 +72,15 @@ export const VENUE_CATALOG: VenueCatalogEntry[] = [
     id: 'lighter',
     name: 'Lighter',
     chain: 'Ethereum (zk rollup)',
-    status: 'coming_soon',
-    description: 'Zero-knowledge order book perps with low fees.',
-    signupUrl: 'https://lighter.xyz',
+    status: 'beta',
+    description: 'Zero-knowledge order book perps on an Ethereum zk-rollup, USDC collateral. Choose the network ' +
+      '(testnet by default, or mainnet); Robinhood stays disabled until it is verified.',
+    signupUrl: 'https://app.lighter.xyz',
     credentialFields: [
       { key: 'accountIndex', label: 'Account Index', secret: false },
       { key: 'apiKeyIndex', label: 'API Key Index', secret: false },
-      { key: 'apiPrivateKey', label: 'API Private Key', secret: true },
+      { key: 'apiKeyPrivateKey', label: 'API Private Key', secret: true },
+      { key: 'apiKeyPublicKey', label: 'API Public Key', secret: false },
     ],
     supportsHedgeMode: false,
   },
@@ -119,6 +132,14 @@ export const LIQUIDATION_SOURCE_CATALOG: LiquidationSourceCatalogEntry[] = [
     name: 'Binance liquidations',
     status: 'coming_soon',
     description: 'Binance public forceOrder stream (at most one liquidation per symbol per second).',
+    requiresApiKey: false,
+  },
+  {
+    id: 'lighter',
+    name: 'Lighter liquidations',
+    status: 'beta',
+    description: 'Lighter public trade stream, liquidation fills only (per configured market, on the selected ' +
+      'Lighter network). Starts in shadow mode: liquidations are logged but not traded until you switch it live.',
     requiresApiKey: false,
   },
 ];

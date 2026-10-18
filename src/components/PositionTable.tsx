@@ -587,8 +587,8 @@ export default function PositionTable({
                             </TooltipTrigger>
                             <TooltipContent>
                               <div className="text-xs space-y-1">
-                                <p>Stop Loss: {position.hasStopLoss ? '✅ Active' : '❌ Inactive'}</p>
-                                <p>Take Profit: {position.hasTakeProfit ? '✅ Active' : '❌ Inactive'}</p>
+                                <p>Stop Loss: {position.hasStopLoss === undefined ? '❔ Unknown (managed by the bot)' : position.hasStopLoss ? '✅ Active' : '❌ Inactive'}</p>
+                                <p>Take Profit: {position.hasTakeProfit === undefined ? '❔ Unknown (managed by the bot)' : position.hasTakeProfit ? '✅ Active' : '❌ Inactive'}</p>
                                 {hasVwapProtection && vwap && (
                                   <>
                                     <p>VWAP: ${formatPrice(position.symbol, vwap.value)}</p>

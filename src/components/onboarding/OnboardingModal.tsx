@@ -14,9 +14,11 @@ import { useOnboarding } from './OnboardingProvider';
 import { useConfig } from '@/components/ConfigProvider';
 import type { Config, SymbolConfig } from '@/lib/types';
 import type { VenueId } from '@/lib/exchange/types';
+import { getVenueEntry } from '@/lib/exchange/catalog';
+import { hasLighterCredentials } from '@/components/LighterSettings';
 import { WelcomeStep } from './steps/WelcomeStep';
 import { PasswordSetup } from './steps/PasswordSetup';
-import { ApiKeyStep } from './steps/ApiKeyStep';
+import { ApiKeyStep, type VenueStepSettings } from './steps/ApiKeyStep';
 import { SymbolConfigStep } from './steps/SymbolConfigStep';
 import { DashboardTourStep } from './steps/DashboardTourStep';
 import { CompletionStep } from './steps/CompletionStep';
@@ -110,6 +112,8 @@ export function OnboardingModal() {
           websocketHost: config.global?.server?.websocketHost || null
         }
       },
+      // Keep venue settings and credentials (Lighter) entered earlier
+      ...(config.venues ? { venues: config.venues } : {}),
       version: config.version || '1.2.0'
     };
 
@@ -142,9 +146,11 @@ export function OnboardingModal() {
     nextStep();
   };
 
-  const handleApiKeyNext = async (apiKey: string, secretKey: string, venue: VenueId) => {
+  const handleApiKeyNext = async (apiKey: string, secretKey: string, venue: VenueId, venueSettings?: VenueStepSettings) => {
     setApiKeys({ apiKey, secretKey });
-    const paperMode = !apiKey && !secretKey;
+    // Lighter keeps its credentials under venues.lighter; Aster uses the API key pair
+    const lighter = venueSettings?.lighter;
+    const paperMode = venue === 'lighter' ? !hasLighterCredentials(lighter) : !apiKey && !secretKey;
     setIsPaperMode(paperMode);
 
     // Update config with API keys
@@ -152,6 +158,7 @@ export function OnboardingModal() {
       const updatedConfig: Config = {
         ...config,
         api: { apiKey, secretKey },
+        ...(lighter ? { venues: { ...config.venues, lighter: { ...config.venues?.lighter, ...lighter } } } : {}),
         global: {
           ...config.global,
           paperMode,
@@ -159,7 +166,8 @@ export function OnboardingModal() {
           liquidationSource: config.global?.liquidationSource ?? 'aster',
           // Ensure all required global config properties are present
           riskPercent: config.global?.riskPercent ?? 2,
-          positionMode: config.global?.positionMode ?? 'ONE_WAY',
+          // Venues without hedge mode (Lighter) only run one-way positions
+          positionMode: getVenueEntry(venue).supportsHedgeMode ? (config.global?.positionMode ?? 'ONE_WAY') : 'ONE_WAY',
           maxOpenPositions: config.global?.maxOpenPositions ?? 10,
           useThresholdSystem: config.global?.useThresholdSystem ?? false,
           server: {
@@ -284,7 +292,15 @@ export function OnboardingModal() {
       case 1:
         return <PasswordSetup onComplete={handlePasswordSetup} onSkip={handlePasswordSkip} />;
       case 2:
-        return <ApiKeyStep onNext={handleApiKeyNext} onBack={previousStep} onSkip={handleSkip} initialVenue={config?.global?.exchange} />;
+        return (
+          <ApiKeyStep
+            onNext={handleApiKeyNext}
+            onBack={previousStep}
+            onSkip={handleSkip}
+            initialVenue={config?.global?.exchange}
+            initialLighter={config?.venues?.lighter}
+          />
+        );
       case 3:
         return <SymbolConfigStep onNext={handleSymbolConfigNext} onBack={previousStep} isPaperMode={isPaperMode} />;
       case 4:

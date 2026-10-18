@@ -27,7 +27,9 @@
     "test:errors": "tsx tests/core/error-logging.test.ts",
     "test:integration": "tsx tests/integration/trading-flow.test.ts",
     "test:watch": "tsx watch tests/**/*.test.ts",
-    "optimize:ui": "node optimize-config.js"
+    "optimize:ui": "node optimize-config.js",
+    "lighter:signer": "node scripts/lighter-signer.js",
+    "lighter:check": "tsx scripts/lighter-live-check.ts"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -53,6 +55,7 @@
     "clsx": "^2.1.1",
     "ethers": "^6.15.0",
     "gsap": "^3.13.0",
+    "koffi": "3.3.2",
     "lucide-react": "^0.544.0",
     "next": "15.5.4",
     "next-auth": "^4.24.11",

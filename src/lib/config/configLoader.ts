@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { z } from 'zod';
-import { Config, configSchema } from './types';
+import { Config, configSchema, lighterCredentialProblems } from './types';
 import { DEFAULT_CONFIG, DEFAULT_CONFIG_VERSION } from './defaults';
 import { migrateConfig, needsMigration, addMissingFields } from './migrator';
 
@@ -75,8 +75,13 @@ export class ConfigLoader {
       // Validate the final config
       const validated = configSchema.parse(userConfig);
 
-      // Validate API keys only if not in paper mode
-      if (!validated.global.paperMode) {
+      // Validate the trading venue's credentials only if not in paper mode
+      if (!validated.global.paperMode && validated.global.exchange === 'lighter') {
+        const problems = lighterCredentialProblems(validated.venues?.lighter);
+        if (problems.length > 0) {
+          throw new Error(`Lighter credentials are required when not in paper mode: ${problems.join('; ')}`);
+        }
+      } else if (!validated.global.paperMode) {
         if (!validated.api.apiKey || !validated.api.secretKey) {
           throw new Error('API keys are required when not in paper mode');
         }

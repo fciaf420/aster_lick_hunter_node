@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createExchangeAdapter } from '@/lib/exchange/registry';
+import { isLighterReadOnlyError } from '@/lib/exchange/lighter/runtime';
 import { loadConfig } from '@/lib/bot/config';
 import { withAuth } from '@/lib/auth/with-auth';
 
@@ -37,10 +38,14 @@ export const GET = withAuth(async (request: NextRequest, _user) => {
       return NextResponse.json([]);
     }
 
-    // Get positions and open orders from exchange
+    // Get positions and open orders from exchange. Lighter open orders need an auth token, which only the
+    // bot process can sign: there the SL/TP flags are left unknown instead of failing the whole list.
     const [positions, openOrders] = await Promise.all([
       exchange.getPositions(),
-      exchange.getOpenOrders()
+      exchange.getOpenOrders().catch((error: unknown) => {
+        if (isLighterReadOnlyError(error)) return null;
+        throw error;
+      })
     ]);
 
     // Filter out positions with zero amount and format for UI
@@ -57,15 +62,15 @@ export const GET = withAuth(async (request: NextRequest, _user) => {
         const currentNotionalValue = quantity * markPrice;
         const side = positionAmt > 0 ? 'LONG' : 'SHORT';
 
-        // Check for active SL/TP orders for this position
-        const hasStopLoss = openOrders.some(order =>
+        // Check for active SL/TP orders for this position (undefined when open orders are unavailable)
+        const hasStopLoss = openOrders?.some(order =>
           order.symbol === pos.symbol &&
           (order.type === 'STOP_MARKET' || order.type === 'STOP') &&
           order.reduceOnly === true &&
           ((side === 'LONG' && order.side === 'SELL') || (side === 'SHORT' && order.side === 'BUY'))
         );
 
-        const hasTakeProfit = openOrders.some(order =>
+        const hasTakeProfit = openOrders?.some(order =>
           order.symbol === pos.symbol &&
           (order.type === 'TAKE_PROFIT_MARKET' || order.type === 'TAKE_PROFIT' ||
            (order.type === 'LIMIT' && order.reduceOnly === true)) &&

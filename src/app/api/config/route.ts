@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { configLoader } from '@/lib/config/configLoader';
 import { configSchema } from '@/lib/config/types';
-import { getLiquidationSourceEntry, getVenueEntry } from '@/lib/exchange/catalog';
+import { getLiquidationSourceEntry, getVenueEntry, isSelectableStatus } from '@/lib/exchange/catalog';
+import { PROFILES } from '@/lib/exchange/lighter/profiles';
 
 
 export async function GET() {
@@ -58,14 +59,23 @@ export async function POST(request: Request) {
     // Validate config
     const validatedConfig = configSchema.parse(body);
 
-    // Only implemented venues and liquidation sources can be selected
+    // Only implemented (available or beta) venues and liquidation sources can be selected
     const unavailable = [
       getVenueEntry(validatedConfig.global.exchange),
       getLiquidationSourceEntry(validatedConfig.global.liquidationSource),
-    ].find(entry => entry.status !== 'available');
+    ].find(entry => !isSelectableStatus(entry.status));
     if (unavailable) {
       return NextResponse.json(
         { error: 'Config validation failed', details: `${unavailable.name} is not supported yet` },
+        { status: 400 }
+      );
+    }
+
+    // Gated Lighter networks (Robinhood) cannot be selected until they are verified
+    const lighterProfile = validatedConfig.venues?.lighter?.profile;
+    if (lighterProfile && PROFILES[lighterProfile].gated) {
+      return NextResponse.json(
+        { error: 'Config validation failed', details: `${PROFILES[lighterProfile].label} is not available yet. ${PROFILES[lighterProfile].gatedReason ?? ''}`.trim() },
         { status: 400 }
       );
     }

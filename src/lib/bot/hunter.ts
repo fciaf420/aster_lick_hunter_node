@@ -1,10 +1,11 @@
-import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import { Config, LiquidationEvent, SymbolConfig } from '../types';
 import { calculateOptimalPrice, validateOrderParams, analyzeOrderBookDepth, getSymbolFilters } from '../api/pricing';
 import { getPositionSide } from '../api/positionMode';
 import type { ExchangeAdapter } from '../exchange/types';
-import { createExchangeAdapter, getConfiguredLiquidationSource, getLiquidationStreamUrl } from '../exchange/registry';
+import { createExchangeAdapter, createLiquidationSource } from '../exchange/registry';
+import type { LiquidationSource } from '../liquidation/types';
+import { parseForceOrderEvent } from '../liquidation/asterForceOrderSource';
 import { PositionTracker } from './positionManager';
 import { liquidationStorage } from '../services/liquidationStorage';
 import { vwapService } from '../services/vwapService';
@@ -23,27 +24,35 @@ import {
 } from '../errors/TradingErrors';
 import { errorLogger } from '../services/errorLogger';
 import { logWithTimestamp, logErrorWithTimestamp, logWarnWithTimestamp } from '../utils/timestamp';
+import { orderMayExist, orderMayExistUntil } from '../exchange/orderErrors';
 
 export class Hunter extends EventEmitter {
-  private ws: WebSocket | null = null;
+  // How long a symbol stays blocked after an entry that may exist when the venue gives no bound (longer than a
+  // Lighter tx's 10-minute ExpiredAt)
+  static readonly UNCONFIRMED_BLOCK_MS = 11 * 60 * 1000;
   private config: Config;
   private isRunning = false;
   private statusBroadcaster: any; // Will be injected
   private isHedgeMode: boolean;
   private positionTracker: PositionTracker | null = null;
-  private pendingOrders: Map<string, { symbol: string, side: 'BUY' | 'SELL', timestamp: number }> = new Map(); // Track orders placed but not yet filled
+  // Track orders placed but not yet filled. blockUntil: an entry that may exist on the exchange stays until then
+  // instead of the usual 5 minutes.
+  private pendingOrders: Map<string, { symbol: string, side: 'BUY' | 'SELL', timestamp: number, blockUntil?: number }> = new Map();
   private lastTradeTimestamps: Map<string, { long: number; short: number }> = new Map(); // Track last trade per symbol/side
   private cleanupInterval: NodeJS.Timeout | null = null; // Periodic cleanup timer
   private syncInterval: NodeJS.Timeout | null = null; // Position mode sync timer
   private lastModeSync: number = Date.now(); // Track last mode sync time
   private readonly exchange: ExchangeAdapter;
+  private liquidationSource: LiquidationSource | null;
 
-  // Without an injected adapter, one is built for the configured venue that reads this.config's credentials
-  constructor(config: Config, isHedgeMode: boolean = false, exchange?: ExchangeAdapter) {
+  // Without an injected adapter, one is built for the configured venue that reads this.config's credentials.
+  // Without an injected liquidation source, the configured one is built when the stream first connects.
+  constructor(config: Config, isHedgeMode: boolean = false, exchange?: ExchangeAdapter, liquidationSource?: LiquidationSource) {
     super();
     this.config = config;
     this.isHedgeMode = isHedgeMode;
     this.exchange = exchange ?? createExchangeAdapter(config, () => this.config.api);
+    this.liquidationSource = liquidationSource ?? null;
 
     // Initialize threshold monitor with config
     thresholdMonitor.updateConfig(config);
@@ -83,23 +92,17 @@ export class Hunter extends EventEmitter {
 logWithTimestamp(`Hunter: Paper mode changed to ${newConfig.global.paperMode}`);
 
       // If switching from paper mode to live mode, restart WebSocket connection
-      if (oldConfig.global.paperMode && !newConfig.global.paperMode && newConfig.api.apiKey) {
+      if (oldConfig.global.paperMode && !newConfig.global.paperMode && this.hasVenueCredentials(newConfig)) {
 logWithTimestamp('Hunter: Switching from paper mode to live mode');
-        if (this.ws) {
-          this.ws.close();
-          this.ws = null;
-        }
+        this.stopLiquidationSource();
         if (this.isRunning) {
           this.connectWebSocket();
         }
       }
       // If switching from live mode to paper mode without API keys
-      else if (!oldConfig.global.paperMode && newConfig.global.paperMode && !newConfig.api.apiKey) {
+      else if (!oldConfig.global.paperMode && newConfig.global.paperMode && !this.hasVenueCredentials(newConfig)) {
 logWithTimestamp('Hunter: Switching from live mode to paper mode');
-        if (this.ws) {
-          this.ws.close();
-          this.ws = null;
-        }
+        this.stopLiquidationSource();
         if (this.isRunning) {
           this.simulateLiquidations();
         }
@@ -151,10 +154,17 @@ logWithTimestamp(`Hunter: ${symbol} threshold time window updated: ${oldWindowSe
   }
 
   // Helper methods for pending order management
-  private addPendingOrder(orderId: string, symbol: string, side: 'BUY' | 'SELL'): void {
-    this.pendingOrders.set(orderId, { symbol, side, timestamp: Date.now() });
+  private addPendingOrder(orderId: string, symbol: string, side: 'BUY' | 'SELL', blockUntil?: number): void {
+    this.pendingOrders.set(orderId, { symbol, side, timestamp: Date.now(), ...(blockUntil !== undefined ? { blockUntil } : {}) });
 logWithTimestamp(`Hunter: Added pending order ${orderId} for ${symbol} ${side}. Total pending: ${this.pendingOrders.size}`);
     this.debugPendingOrders();
+  }
+
+  // An entry whose order may be on the exchange (unknown outcome): the symbol stays blocked until the venue says the
+  // order can no longer appear, or UNCONFIRMED_BLOCK_MS when it gives no bound
+  private blockUnconfirmedOrder(error: unknown, symbol: string, side: 'BUY' | 'SELL'): void {
+    const blockUntil = orderMayExistUntil(error) ?? Date.now() + Hunter.UNCONFIRMED_BLOCK_MS;
+    this.addPendingOrder(`unconfirmed_${Date.now()}_${symbol}_${side}`, symbol, side, blockUntil);
   }
 
   private removePendingOrder(orderId: string): void {
@@ -196,12 +206,13 @@ logWithTimestamp(`Hunter: [DEBUG] Current pending orders (${this.pendingOrders.s
     return false;
   }
 
-  // Clean up stale pending orders (older than 5 minutes)
+  // Clean up stale pending orders (older than 5 minutes, or past their blockUntil)
   private cleanStalePendingOrders(): void {
-    const staleTime = Date.now() - 5 * 60 * 1000; // 5 minutes
+    const now = Date.now();
+    const staleTime = now - 5 * 60 * 1000; // 5 minutes
     let cleanedCount = 0;
     for (const [orderId, order] of this.pendingOrders.entries()) {
-      if (order.timestamp < staleTime) {
+      if (order.blockUntil !== undefined ? now >= order.blockUntil : order.timestamp < staleTime) {
 logWithTimestamp(`Hunter: Cleaning stale pending order ${orderId} for ${order.symbol} (age: ${Math.round((Date.now() - order.timestamp) / 1000)}s)`);
         this.pendingOrders.delete(orderId);
         cleanedCount++;
@@ -331,110 +342,110 @@ logWithTimestamp('Hunter: Running in paper mode without API keys - simulating li
 logWithTimestamp('Hunter: Stopped periodic position mode sync');
     }
 
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    this.stopLiquidationSource();
   }
 
+  // Whether the trading venue has credentials: Aster keeps its API key check, other venues (Lighter keeps its
+  // keys under config.venues) ask the adapter, which reads the same live config
+  private hasVenueCredentials(config: Config): boolean {
+    return this.exchange.id === 'aster' ? !!config.api.apiKey : this.exchange.hasCredentials();
+  }
+
+  // The configured liquidation source (built on first use so an unsupported source fails here, as before)
+  private getLiquidationSource(): LiquidationSource {
+    this.liquidationSource ??= createLiquidationSource(this.config, { getConfig: () => this.config });
+    return this.liquidationSource;
+  }
+
+  // Close the live feed if one was built (a source that never started ignores stop)
+  private stopLiquidationSource(): void {
+    this.liquidationSource?.stop();
+  }
+
+  // Start the live liquidation feed. The source reconnects by itself; these hooks log and notify the UI.
   private connectWebSocket(): void {
-    const streamUrl = getLiquidationStreamUrl(getConfiguredLiquidationSource(this.config));
-    this.ws = new WebSocket(streamUrl);
-
-    this.ws.on('open', () => {
+    this.getLiquidationSource().start(
+      (liquidation) => {
+        this.handleLiquidation(liquidation);
+      },
+      {
+        onConnected: () => {
 logWithTimestamp('Hunter WS connected');
-    });
+        },
 
-    this.ws.on('message', (data: Buffer) => {
-      try {
-        const event = JSON.parse(data.toString());
-        this.handleLiquidationEvent(event);
-      } catch (error) {
+        onError: (error, info) => {
+          if (info.kind === 'message') {
 logErrorWithTimestamp('Hunter: WS message parse error:', error);
-        // Log to error database
-        errorLogger.logError(error instanceof Error ? error : new Error(String(error)), {
-          type: 'websocket',
-          severity: 'low',
-          context: {
-            component: 'Hunter',
-            userAction: 'Processing WebSocket message',
-            metadata: { rawMessage: data.toString() }
-          }
-        });
-        // Broadcast error to UI
-        if (this.statusBroadcaster) {
-          this.statusBroadcaster.broadcastWebSocketError(
-            'Message Parse Error',
-            'Failed to parse liquidation stream message',
-            {
-              component: 'Hunter',
-              rawError: error,
+            // Log to error database
+            errorLogger.logError(error instanceof Error ? error : new Error(String(error)), {
+              type: 'websocket',
+              severity: 'low',
+              context: {
+                component: 'Hunter',
+                userAction: 'Processing WebSocket message',
+                metadata: { rawMessage: info.rawMessage }
+              }
+            });
+            // Broadcast error to UI
+            if (this.statusBroadcaster) {
+              this.statusBroadcaster.broadcastWebSocketError(
+                'Message Parse Error',
+                'Failed to parse liquidation stream message',
+                {
+                  component: 'Hunter',
+                  rawError: error,
+                }
+              );
             }
-          );
-        }
-      }
-    });
+            return;
+          }
 
-    this.ws.on('error', (error) => {
 logErrorWithTimestamp('Hunter WS error:', error);
-      // Log to error database
-      errorLogger.logWebSocketError(
-        streamUrl,
-        error instanceof Error ? error : new Error(String(error)),
-        1
-      );
-      // Broadcast error to UI
-      if (this.statusBroadcaster) {
-        this.statusBroadcaster.broadcastWebSocketError(
-          'Hunter WebSocket Error',
-          'Connection error with liquidation stream. Reconnecting in 5 seconds...',
-          {
-            component: 'Hunter',
-            rawError: error,
-          }
-        );
-      }
-      // Reconnect after delay
-      setTimeout(() => this.connectWebSocket(), 5000);
-    });
-
-    this.ws.on('close', () => {
-logWithTimestamp('Hunter WS closed');
-      if (this.isRunning) {
-        // Broadcast reconnection attempt to UI
-        if (this.statusBroadcaster) {
-          this.statusBroadcaster.broadcastWebSocketError(
-            'Hunter WebSocket Closed',
-            'Liquidation stream disconnected. Reconnecting in 5 seconds...',
-            {
-              component: 'Hunter',
-            }
+          // Log to error database
+          errorLogger.logWebSocketError(
+            info.url,
+            error instanceof Error ? error : new Error(String(error)),
+            1
           );
-        }
-        setTimeout(() => this.connectWebSocket(), 5000);
+          // Broadcast error to UI
+          if (this.statusBroadcaster) {
+            this.statusBroadcaster.broadcastWebSocketError(
+              'Hunter WebSocket Error',
+              `Connection error with liquidation stream. Reconnecting in ${info.reconnectDelayMs / 1000} seconds...`,
+              {
+                component: 'Hunter',
+                rawError: error,
+              }
+            );
+          }
+        },
+
+        onDisconnected: ({ reconnectDelayMs }) => {
+logWithTimestamp('Hunter WS closed');
+          // Broadcast reconnection attempt to UI
+          if (reconnectDelayMs !== null && this.statusBroadcaster) {
+            this.statusBroadcaster.broadcastWebSocketError(
+              'Hunter WebSocket Closed',
+              `Liquidation stream disconnected. Reconnecting in ${reconnectDelayMs / 1000} seconds...`,
+              {
+                component: 'Hunter',
+              }
+            );
+          }
+        },
       }
-    });
+    );
   }
 
+  // Raw Aster forceOrder frame (used by the paper-mode simulator); anything else is ignored
   private async handleLiquidationEvent(event: any): Promise<void> {
-    if (event.e !== 'forceOrder') return; // Not a liquidation event
+    const liquidation = parseForceOrderEvent(event);
+    if (!liquidation) return; // Not a liquidation event
+    await this.handleLiquidation(liquidation);
+  }
 
-    const liquidation: LiquidationEvent = {
-      symbol: event.o.s,
-      side: event.o.S,
-      orderType: event.o.o,
-      quantity: parseFloat(event.o.q),
-      price: parseFloat(event.o.p),
-      averagePrice: parseFloat(event.o.ap),
-      orderStatus: event.o.X,
-      orderLastFilledQuantity: parseFloat(event.o.l),
-      orderFilledAccumulatedQuantity: parseFloat(event.o.z),
-      orderTradeTime: event.o.T,
-      eventTime: event.E,
-      qty: parseFloat(event.o.q), // Keep for backward compatibility
-      time: event.E, // Keep for backward compatibility
-    };
-
+  // A liquidation from the configured source (any venue), already in LiquidationEvent form
+  private async handleLiquidation(liquidation: LiquidationEvent): Promise<void> {
     // Check if threshold system is enabled globally and for this symbol
     const useThresholdSystem = this.config.global.useThresholdSystem === true &&
                               this.config.symbols[liquidation.symbol]?.useThreshold === true;
@@ -1159,8 +1170,8 @@ logWithTimestamp(`Hunter: Removed pending order ${order.orderId} after placement
         // This is a safety net for edge cases where order ID wasn't available
         const now = Date.now();
         for (const [orderId, orderInfo] of this.pendingOrders.entries()) {
-          if (orderInfo.symbol === symbol && orderInfo.side === side &&
-              (now - orderInfo.timestamp) < 10000) { // Only recent orders
+          if (orderInfo.symbol === symbol && orderInfo.side === side && orderInfo.blockUntil === undefined &&
+              (now - orderInfo.timestamp) < 10000) { // Only recent orders (never an entry that may exist on the exchange)
             this.removePendingOrder(orderId);
 logWithTimestamp(`Hunter: Cleaned up recent pending order ${orderId} for ${symbol} after placement failure`);
             break; // Only remove the most recent matching order
@@ -1338,6 +1349,15 @@ logErrorWithTimestamp(`Hunter: Place trade error for ${symbol} (${tradingError.c
         });
       }
 
+      // An order that may already be on the exchange (unknown outcome, placed but not confirmed) must not get a
+      // replacement, or the position doubles. The symbol stays blocked until the order can no longer appear; a fill
+      // reaches the position manager through the user stream and its periodic sync.
+      if (orderMayExist(error)) {
+        this.blockUnconfirmedOrder(error, symbol, side);
+logWarnWithTimestamp(`Hunter: Not placing a fallback order for ${symbol}: the first order may have been placed (${error?.message ?? String(error)})`);
+        return;
+      }
+
       // If limit order fails, try fallback to market order
       if (symbolConfig.orderType !== 'MARKET') {
         // Check if too much time has passed since initial attempt (to avoid timestamp errors)
@@ -1443,6 +1463,11 @@ logWithTimestamp(`Hunter: Fallback market order placed for ${symbol}, orderId: $
           if (fallbackTempId) {
             this.removePendingOrder(fallbackTempId);
 logWithTimestamp(`Hunter: Removed fallback temp pending order ${fallbackTempId} after placement failure`);
+          }
+          // The fallback itself may be on the exchange: keep the symbol blocked like the first order above
+          if (orderMayExist(fallbackError)) {
+            this.blockUnconfirmedOrder(fallbackError, symbol, side);
+logWarnWithTimestamp(`Hunter: Fallback order for ${symbol} may have been placed (${fallbackError?.message ?? String(fallbackError)}); keeping the symbol blocked`);
           }
 
           // Parse the fallback error with context
@@ -1563,6 +1588,11 @@ logWithTimestamp('Hunter: No symbols configured for simulation');
     // Generate random liquidation events every 5-10 seconds
     const generateEvent = () => {
       if (!this.isRunning) return;
+      // Simulated liquidations must never reach a live bot (paper mode switched off by a config reload)
+      if (!this.config.global.paperMode) {
+logWithTimestamp('Hunter: Paper mode is off - stopping simulated liquidations');
+        return;
+      }
 
       const symbol = symbols[Math.floor(Math.random() * symbols.length)];
       const side = Math.random() > 0.5 ? 'SELL' : 'BUY';

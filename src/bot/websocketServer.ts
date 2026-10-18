@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { LiquidationEvent } from '../lib/types';
 import { errorLogger } from '../lib/services/errorLogger';
 import { getRateLimitManager } from '../lib/api/rateLimitManager';
+import { withoutSecrets } from '../lib/config/redact';
 
 export interface BotStatus {
   isRunning: boolean;
@@ -71,9 +72,10 @@ export class StatusBroadcaster extends EventEmitter {
                 const { configManager } = await import('../lib/services/configManager');
                 try {
                   const newConfig = await configManager.reloadConfig();
+                  // Every dashboard client receives this: never include credentials
                   this.broadcast('config_reload_success', {
                     timestamp: new Date(),
-                    config: newConfig,
+                    config: withoutSecrets(newConfig),
                   });
                   console.log('✅ Config reloaded via WebSocket command');
                 } catch (error: any) {

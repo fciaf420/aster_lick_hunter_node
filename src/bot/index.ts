@@ -17,8 +17,26 @@ import { startRateLimitLogging } from '../lib/api/rateLimitMonitor';
 import { initializeRateLimitToasts } from '../lib/api/rateLimitToasts';
 import { thresholdMonitor } from '../lib/services/thresholdMonitor';
 import { logWithTimestamp, logErrorWithTimestamp, logWarnWithTimestamp } from '../lib/utils/timestamp';
-import { createExchangeAdapter, getConfiguredLiquidationSource, getConfiguredVenue, resolveLiquidationSource } from '../lib/exchange/registry';
-import { getLiquidationSourceEntry, getVenueEntry } from '../lib/exchange/catalog';
+import {
+  createExchangeAdapter,
+  createLiquidationSource,
+  getConfiguredLiquidationSource,
+  getConfiguredVenue,
+  resolveLiquidationSource,
+} from '../lib/exchange/registry';
+import { BETA_WARNING, getLiquidationSourceEntry, getVenueEntry } from '../lib/exchange/catalog';
+import type { ExchangeAdapter } from '../lib/exchange/types';
+import { LighterAdapter } from '../lib/exchange/lighter/LighterAdapter';
+import {
+  applyLighterConfig,
+  readLighterSettings,
+  resolveLighterProfile,
+  setLighterAlertSink,
+  startLighterMarketRefresh,
+  stopLighterRuntime,
+  type LighterRuntimeAlert,
+} from '../lib/exchange/lighter/runtime';
+import { withoutSecrets } from '../lib/config/redact';
 
 // Helper function to kill all child processes (synchronous for exit handler)
 function killAllProcesses() {
@@ -67,10 +85,15 @@ logWithTimestamp('Bot is already running');
       logWithTimestamp('✅ Configuration loaded');
 
       // Resolve the trading venue and liquidation source; ones that aren't implemented yet stop the bot here
-      // The adapter reads credentials from the current config, so reloaded API keys apply
-      const exchange = createExchangeAdapter(this.config, () => this.config!.api);
+      // The adapter reads credentials from the current config, so reloaded API keys apply.
+      // Only this process may sign Lighter transactions (allowSigning); the web UI's adapters are read-only.
+      const exchange = createExchangeAdapter(this.config, () => this.config!.api, {
+        getConfig: () => this.config!,
+        allowSigning: true,
+      });
       const liquidationSource = resolveLiquidationSource(this.config);
 logWithTimestamp(`🏦 Trading venue: ${getVenueEntry(exchange.id).name} | Liquidation source: ${getLiquidationSourceEntry(liquidationSource).name}`);
+      this.logBetaAndNetwork(exchange, liquidationSource === 'lighter');
 
       // Validate trade sizes against exchange minimums
       const { validateAllTradeSizes } = await import('../lib/validation/tradeSizeValidator');
@@ -131,6 +154,9 @@ logWarnWithTimestamp('   Please set a strong password immediately at /config');
       await this.statusBroadcaster.start();
 logWithTimestamp(`✅ WebSocket status server started on port ${wsPort}`);
 
+      // Lighter coverage gaps, account-stream problems and mark-ratio blocks reach the dashboard
+      setLighterAlertSink((event) => this.handleLighterAlert(event));
+
       // Start rate limit monitoring with toast notifications
       startRateLimitLogging(60000); // Log status every minute
       initializeRateLimitToasts(this.statusBroadcaster); // Enable toast notifications
@@ -187,12 +213,33 @@ logErrorWithTimestamp('❌ Cannot run in LIVE mode without API keys!');
         }
       }
 
+      // Lighter: check the network, the registered API key and the key's permissions before anything trades.
+      // Trading methods refuse to sign until these pass; in live mode a failure stops the bot here.
+      if (hasValidApiKeys && exchange instanceof LighterAdapter) {
+        try {
+          const report = await exchange.verifyStartup();
+logWithTimestamp(`✅ Lighter startup checks passed (${report.profile}, account ${report.accountIndex}, API key ${report.apiKeyIndex})`);
+        } catch (error: any) {
+          const message = error?.message || String(error);
+logErrorWithTimestamp('❌ Lighter startup checks failed:', message);
+          this.statusBroadcaster.broadcastConfigError(
+            'Lighter Startup Check Failed',
+            message,
+            { component: 'AsterBot', rawError: error }
+          );
+          if (!this.config.global.paperMode) {
+            throw new Error(`Lighter startup checks failed: ${message}`);
+          }
+        }
+      }
+
       if (hasValidApiKeys) {
         // Initialize balance service and set up WebSocket broadcasting
         try {
 logWithTimestamp('Initializing balance service...');
-          // The balance service keeps the credentials it started with (a static snapshot, as before)
-          await initializeBalanceService(createExchangeAdapter(this.config));
+          // The Aster balance service keeps the credentials it started with (a static snapshot, as before).
+          // Other venues share the bot's adapter: a second Lighter adapter would load a second signer.
+          await initializeBalanceService(exchange.id === 'aster' ? createExchangeAdapter(this.config) : exchange);
 
           // Connect balance service to status broadcaster
           const balanceService = getBalanceService();
@@ -224,7 +271,9 @@ logWithTimestamp(`📊 Position Mode: ${this.isHedgeMode ? 'HEDGE MODE' : 'ONE-W
           // If config specifies a position mode and it differs from current, automatically set it
           if (this.config.global.positionMode) {
             const wantHedgeMode = this.config.global.positionMode === 'HEDGE';
-            if (wantHedgeMode !== this.isHedgeMode) {
+            if (wantHedgeMode && !exchange.capabilities.hedgeMode) {
+logWarnWithTimestamp(`⚠️  ${getVenueEntry(exchange.id).name} has no hedge mode (one netted position per symbol); using ONE-WAY mode`);
+            } else if (wantHedgeMode !== this.isHedgeMode) {
 logWithTimestamp(`⚠️  Config specifies ${this.config.global.positionMode} mode but account is in ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'} mode`);
 logWithTimestamp(`🔄 Automatically changing position mode to match config...`);
 
@@ -304,48 +353,58 @@ logErrorWithTimestamp('[Bot] Balance service error stack:', error instanceof Err
 logWithTimestamp('[Bot] Bot will continue without real-time balance updates');
         }
 
+        // Lighter has no Binance-format mark price or kline stream: prices and VWAP use REST instead
+        const hasMarketStreams = exchange.id !== 'lighter';
+        if (!hasMarketStreams) {
+logWithTimestamp('ℹ️  Lighter: no streaming mark prices or klines; positions, SL/TP checks and VWAP use REST market data');
+        }
+
         // Initialize Price Service for real-time mark prices
-        try {
-          await initializePriceService(exchange);
+        if (hasMarketStreams) {
+          try {
+            await initializePriceService(exchange);
 logWithTimestamp('✅ Real-time price service started');
 
-          // Listen for mark price updates and broadcast to web UI
-          const priceService = getPriceService();
-          if (priceService) {
-            priceService.on('markPriceUpdate', (priceUpdates) => {
-              // Broadcast price updates to web UI for live PnL calculation
-              this.statusBroadcaster.broadcast('mark_price_update', priceUpdates);
-            });
+            // Listen for mark price updates and broadcast to web UI
+            const priceService = getPriceService();
+            if (priceService) {
+              priceService.on('markPriceUpdate', (priceUpdates) => {
+                // Broadcast price updates to web UI for live PnL calculation
+                this.statusBroadcaster.broadcast('mark_price_update', priceUpdates);
+              });
 
-            // Note: We'll subscribe to position symbols after position manager starts
-          }
-        } catch (error: any) {
+              // Note: We'll subscribe to position symbols after position manager starts
+            }
+          } catch (error: any) {
 logErrorWithTimestamp('⚠️  Price service failed to start:', error.message);
-          this.statusBroadcaster.addError(`Price Service: ${error.message}`);
+            this.statusBroadcaster.addError(`Price Service: ${error.message}`);
+          }
         }
 
         // Initialize VWAP Streamer for real-time VWAP calculations
-        try {
-          await vwapStreamer.start(this.config, exchange);
+        if (hasMarketStreams) {
+          try {
+            await vwapStreamer.start(this.config, exchange);
 
-          // Listen for VWAP updates and broadcast to web UI
-          vwapStreamer.on('vwap', (vwapData) => {
-            this.statusBroadcaster.broadcast('vwap_update', vwapData);
-          });
+            // Listen for VWAP updates and broadcast to web UI
+            vwapStreamer.on('vwap', (vwapData) => {
+              this.statusBroadcaster.broadcast('vwap_update', vwapData);
+            });
 
-          // Also broadcast all VWAP values periodically
-          setInterval(() => {
-            const allVwap = vwapStreamer.getAllVWAP();
-            if (allVwap.size > 0) {
-              const vwapArray = Array.from(allVwap.values());
-              this.statusBroadcaster.broadcast('vwap_bulk', vwapArray);
-            }
-          }, 2000);
+            // Also broadcast all VWAP values periodically
+            setInterval(() => {
+              const allVwap = vwapStreamer.getAllVWAP();
+              if (allVwap.size > 0) {
+                const vwapArray = Array.from(allVwap.values());
+                this.statusBroadcaster.broadcast('vwap_bulk', vwapArray);
+              }
+            }, 2000);
 
 logWithTimestamp('✅ VWAP streaming service started');
-        } catch (error: any) {
+          } catch (error: any) {
 logErrorWithTimestamp('⚠️  VWAP streamer failed to start:', error.message);
-          this.statusBroadcaster.addError(`VWAP Streamer: ${error.message}`);
+            this.statusBroadcaster.addError(`VWAP Streamer: ${error.message}`);
+          }
         }
       }
 
@@ -379,8 +438,10 @@ logErrorWithTimestamp('⚠️  Position Manager failed to start:', error.message
         }
       }
 
-      // Initialize Hunter
-      this.hunter = new Hunter(this.config, this.isHedgeMode, exchange);
+      // Initialize Hunter with the configured liquidation feed (Lighter: shadow mode unless switched live;
+      // across venues the feed runs behind the mark-ratio guard)
+      const liquidationFeed = createLiquidationSource(this.config, { getConfig: () => this.config! });
+      this.hunter = new Hunter(this.config, this.isHedgeMode, exchange, liquidationFeed);
 
       // Inject status broadcaster for order events
       this.hunter.setStatusBroadcaster(this.statusBroadcaster);
@@ -529,6 +590,16 @@ logWarnWithTimestamp('⚠️  Trading venue or liquidation source changed - rest
         this.statusBroadcaster.logActivity('Config: Venue change saved, restart the bot to apply');
       }
 
+      // The Lighter network is fixed for the process (the signer keeps one chain id). Until a restart the
+      // adapter refuses credentials saved for another network.
+      if (oldConfig && readLighterSettings(oldConfig).profile !== readLighterSettings(newConfig).profile) {
+logWarnWithTimestamp(`⚠️  Lighter network changed to ${readLighterSettings(newConfig).profile} - restart the bot to apply it`);
+        this.statusBroadcaster.logActivity('Config: Lighter network change saved, restart the bot to apply');
+      }
+
+      // Lighter symbol mapping and the liquidation feed's shadow / live switch follow the new config now
+      applyLighterConfig();
+
       // Notify about critical changes
       if (oldConfig && oldConfig.global.paperMode !== newConfig.global.paperMode) {
 logWithTimestamp(`⚠️  Paper Mode changed: ${oldConfig.global.paperMode} → ${newConfig.global.paperMode}`);
@@ -568,10 +639,9 @@ logWithTimestamp('✅ VWAP symbols updated');
 
       // Broadcast config update to web UI
       // Credentials are left out: this goes to every dashboard client
-      const { api: _api, venues: _venues, ...publicConfig } = newConfig;
       this.statusBroadcaster.broadcast('config_updated', {
         timestamp: new Date(),
-        config: publicConfig,
+        config: withoutSecrets(newConfig),
       });
 
 logWithTimestamp('✅ Config update applied successfully');
@@ -625,6 +695,8 @@ logWithTimestamp('✅ Balance service stopped');
       stopPriceService();
 logWithTimestamp('✅ Price service stopped');
 
+      stopLighterRuntime();
+
       cleanupScheduler.stop();
 logWithTimestamp('✅ Cleanup scheduler stopped');
 
@@ -642,6 +714,51 @@ logWithTimestamp('👋 Bot stopped successfully');
 logErrorWithTimestamp('❌ Error while stopping:', error);
       process.exit(1);
     }
+  }
+
+  // Beta warnings and, whenever Lighter is involved, the network it talks to
+  private logBetaAndNetwork(exchange: ExchangeAdapter, lighterLiquidations: boolean): void {
+    if (!this.config) return;
+    const entries = [getVenueEntry(exchange.id), getLiquidationSourceEntry(getConfiguredLiquidationSource(this.config))];
+    for (const entry of entries) {
+      if (entry.status === 'beta') {
+logWarnWithTimestamp(`⚠️  ${entry.name} is in BETA. ${BETA_WARNING}`);
+      }
+    }
+    if (exchange.id !== 'lighter' && !lighterLiquidations) return;
+
+    const profile = resolveLighterProfile(this.config);
+logWithTimestamp(`🌐 Lighter network: ${profile.label} (chain ${profile.chainId})${profile.testnet ? ' - test funds' : ' - REAL FUNDS'}`);
+    if (lighterLiquidations) {
+      const live = readLighterSettings(this.config).liquidationsLive;
+logWithTimestamp(live
+        ? '⚠️  Lighter liquidation feed is LIVE: detected liquidations are traded'
+        : '🕶️  Lighter liquidation feed is in SHADOW mode: liquidations are logged, never traded');
+    }
+    if (exchange instanceof LighterAdapter) {
+      startLighterMarketRefresh(this.config);
+    }
+  }
+
+  private handleLighterAlert(event: LighterRuntimeAlert): void {
+    if (event.source === 'mark-guard') {
+      this.statusBroadcaster.broadcastConfigError('Lighter Symbol Blocked', event.message, {
+        component: 'LighterMarkGuard',
+        symbol: event.symbol,
+      });
+      return;
+    }
+    if (event.source === 'late-tx') {
+      this.statusBroadcaster.broadcastTradingError('Lighter Transaction Resolved Late', event.message, {
+        component: 'LighterNonceManager',
+      });
+      return;
+    }
+    const title = event.source === 'liquidations' ? 'Lighter Liquidation Feed' : 'Lighter Account Stream';
+    this.statusBroadcaster.broadcastWebSocketError(title, event.alert.message, {
+      component: event.source === 'liquidations' ? 'LighterLiquidationSource' : 'LighterUserStream',
+      rawError: { kind: event.alert.kind },
+    });
   }
 
   async status(): Promise<void> {

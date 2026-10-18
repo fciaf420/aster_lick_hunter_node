@@ -53,6 +53,7 @@ async function main() {
     { file: 'tests/core/websocket.test.ts', name: 'WebSocket' },
     { file: 'tests/core/error-logging.test.ts', name: 'Error Logging' },
     { file: 'tests/core/hunter-pending-orders.test.ts', name: 'Hunter Pending Orders' },
+    { file: 'tests/core/hunter-fallback.test.ts', name: 'Hunter Fallback' },
     { file: 'tests/core/test-pending-order-fix.ts', name: 'Pending Order Fix' },
     { file: 'tests/core/position-mode-retry.test.ts', name: 'Position Mode Retry' },
     { file: 'tests/core/position-mode-sync.test.ts', name: 'Position Mode Sync' },
@@ -60,6 +61,7 @@ async function main() {
     { file: 'tests/core/multi-position.test.ts', name: 'Multi-Position' },
     { file: 'tests/core/exchange-golden.test.ts', name: 'Exchange Golden Requests' },
     { file: 'tests/core/exchange-registry.test.ts', name: 'Exchange Registry' },
+    { file: 'tests/core/lighter-bot-flow.test.ts', name: 'Lighter Bot Flow' },
     { file: 'tests/integration/trading-flow.test.ts', name: 'Integration' }
   ];
 

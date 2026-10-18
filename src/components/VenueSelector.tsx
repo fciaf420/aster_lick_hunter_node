@@ -1,15 +1,18 @@
 'use client';
 
 import React from 'react';
-import { ExternalLink } from 'lucide-react';
+import { AlertTriangle, ExternalLink } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
+  BETA_WARNING,
   LIQUIDATION_SOURCE_CATALOG,
   VENUE_CATALOG,
   getLiquidationSourceEntry,
   getVenueEntry,
+  isSelectableStatus,
+  type CatalogStatus,
 } from '@/lib/exchange/catalog';
 import type { LiquidationSourceId, VenueId } from '@/lib/exchange/types';
 
@@ -26,8 +29,36 @@ function ComingSoonBadge() {
   return <Badge variant="secondary">Coming soon</Badge>;
 }
 
+function BetaBadge() {
+  return (
+    <Badge variant="outline" className="border-amber-500 text-amber-600 dark:text-amber-400">
+      Beta
+    </Badge>
+  );
+}
+
+function StatusBadge({ status }: { status: CatalogStatus }) {
+  if (status === 'coming_soon') return <ComingSoonBadge />;
+  if (status === 'beta') return <BetaBadge />;
+  return null;
+}
+
+function BetaWarning({ name }: { name: string }) {
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-400"
+    >
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>
+        <strong>{name} is in beta.</strong> {BETA_WARNING}
+      </span>
+    </div>
+  );
+}
+
 // Trading venue and liquidation source pickers. Entries that aren't implemented yet are listed
-// (with their description) but can't be selected.
+// (with their description) but can't be selected; beta entries can be selected and carry a warning.
 export function VenueSelector({
   venue,
   onVenueChange,
@@ -52,14 +83,14 @@ export function VenueSelector({
               <SelectItem
                 key={entry.id}
                 value={entry.id}
-                disabled={entry.status !== 'available'}
+                disabled={!isSelectableStatus(entry.status)}
                 className="items-start"
               >
                 <div className="flex flex-col gap-0.5">
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{entry.name}</span>
                     <span className="text-xs text-muted-foreground">{entry.chain}</span>
-                    {entry.status !== 'available' && <ComingSoonBadge />}
+                    <StatusBadge status={entry.status} />
                   </div>
                   <span className="text-xs text-muted-foreground whitespace-normal">{entry.description}</span>
                 </div>
@@ -72,7 +103,7 @@ export function VenueSelector({
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">{venueEntry.name}</span>
               <Badge variant="outline">{venueEntry.chain}</Badge>
-              {venueEntry.status !== 'available' && <ComingSoonBadge />}
+              <StatusBadge status={venueEntry.status} />
             </div>
             <p className="text-xs text-muted-foreground">{venueEntry.description}</p>
             <a
@@ -86,6 +117,7 @@ export function VenueSelector({
             </a>
           </div>
         )}
+        {venueEntry.status === 'beta' && <BetaWarning name={venueEntry.name} />}
       </div>
 
       {showLiquidationSource && onLiquidationSourceChange && (
@@ -103,14 +135,14 @@ export function VenueSelector({
                 <SelectItem
                   key={entry.id}
                   value={entry.id}
-                  disabled={entry.status !== 'available'}
+                  disabled={!isSelectableStatus(entry.status)}
                   className="items-start"
                 >
                   <div className="flex flex-col gap-0.5">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{entry.name}</span>
                       {entry.requiresApiKey && <Badge variant="outline">API key</Badge>}
-                      {entry.status !== 'available' && <ComingSoonBadge />}
+                      <StatusBadge status={entry.status} />
                     </div>
                     <span className="text-xs text-muted-foreground whitespace-normal">{entry.description}</span>
                   </div>
@@ -119,6 +151,7 @@ export function VenueSelector({
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">{sourceEntry.description}</p>
+          {sourceEntry.status === 'beta' && <BetaWarning name={sourceEntry.name} />}
         </div>
       )}
     </div>

@@ -13,7 +13,9 @@ import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { VenueSelector } from '@/components/VenueSelector';
+import { LighterSettings } from '@/components/LighterSettings';
 import { getVenueEntry } from '@/lib/exchange/catalog';
+import type { LighterVenueConfig } from '@/lib/types';
 import type { LiquidationSourceId, VenueId } from '@/lib/exchange/types';
 import {
   Plus,
@@ -175,6 +177,16 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
         positionMode: !entry.supportsHedgeMode && config.global.positionMode === 'HEDGE'
           ? 'ONE_WAY'
           : config.global.positionMode,
+      },
+    });
+  };
+
+  const handleLighterChange = (lighter: LighterVenueConfig) => {
+    setConfig({
+      ...config,
+      venues: {
+        ...config.venues,
+        lighter,
       },
     });
   };
@@ -471,6 +483,23 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
               )}
             </CardContent>
           </Card>
+          ) : venueEntry.id === 'lighter' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Lighter Configuration</CardTitle>
+                <CardDescription>
+                  Network and API key for trading on Lighter (USDC margin), or leave the key empty for paper mode
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <LighterSettings
+                  value={config.venues?.lighter}
+                  onChange={handleLighterChange}
+                  showCredentials
+                  showLiquidationFeed={config.global.liquidationSource === 'lighter'}
+                />
+              </CardContent>
+            </Card>
           ) : (
             <div className="rounded-lg bg-muted p-4">
               <p className="text-sm text-muted-foreground flex items-center gap-2">
@@ -478,6 +507,26 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                 Credentials for {venueEntry.name} can be entered once it is supported.
               </p>
             </div>
+          )}
+
+          {venueEntry.id !== 'lighter' && config.global.liquidationSource === 'lighter' && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Lighter Liquidation Feed</CardTitle>
+                <CardDescription>
+                  Liquidation signals from Lighter&apos;s public trade stream (no Lighter API key needed)
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <LighterSettings
+                  value={config.venues?.lighter}
+                  onChange={handleLighterChange}
+                  showCredentials={false}
+                  showLiquidationFeed
+                  idPrefix="lighter-feed"
+                />
+              </CardContent>
+            </Card>
           )}
         </TabsContent>
 

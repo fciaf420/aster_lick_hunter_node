@@ -1,8 +1,8 @@
-import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import { Config } from '../types';
-import type { ExchangeAdapter } from '../exchange/types';
+import type { ExchangeAdapter, OrderId, UserDataSubscription } from '../exchange/types';
 import { createExchangeAdapter } from '../exchange/registry';
+import { compareOrderIds, normalizeOrderId } from '../exchange/orderId';
 import { symbolPrecision } from '../utils/symbolPrecision';
 import { getBalanceService } from '../services/balanceService';
 import { errorLogger } from '../services/errorLogger';
@@ -12,8 +12,8 @@ import { logWithTimestamp, logErrorWithTimestamp, logWarnWithTimestamp } from '.
 
 // Minimal local state - only track order IDs linked to positions
 interface PositionOrders {
-  slOrderId?: number;
-  tpOrderId?: number;
+  slOrderId?: OrderId;
+  tpOrderId?: OrderId;
 }
 
 // Exchange position from API
@@ -35,7 +35,7 @@ interface ExchangePosition {
 // Exchange order from API
 interface ExchangeOrder {
   symbol: string;
-  orderId: number;
+  orderId: OrderId;
   clientOrderId: string;
   price: string;
   origQty: string;
@@ -62,15 +62,14 @@ export interface PositionTracker {
 }
 
 export class PositionManager extends EventEmitter implements PositionTracker {
-  private ws: WebSocket | null = null;
-  private listenKey: string | null = null;
+  private userDataSubscription: UserDataSubscription | null = null;
   private config: Config;
   private positionOrders: Map<string, PositionOrders> = new Map(); // symbol_side -> order IDs
   private currentPositions: Map<string, ExchangePosition> = new Map(); // Live position data from WebSocket
   private previousPositionSizes: Map<string, number> = new Map(); // Track position size changes
-  private keepaliveInterval?: NodeJS.Timeout;
   private riskCheckInterval?: NodeJS.Timeout;
   private orderCheckInterval?: NodeJS.Timeout;
+  private cleanupInterval?: NodeJS.Timeout;
   private isRunning = false;
   private statusBroadcaster: any; // Will be injected
   private isHedgeMode: boolean;
@@ -139,31 +138,37 @@ logWithTimestamp(`PositionManager: Note: Existing SL/TP orders for ${symbol} rem
     if (oldConfig.global.paperMode !== newConfig.global.paperMode) {
 logWithTimestamp(`PositionManager: Paper mode changed to ${newConfig.global.paperMode}`);
 
-      // If switching modes with active connection, restart the connection
-      if (this.isRunning && newConfig.api.apiKey && newConfig.api.secretKey) {
+      // If switching modes with active connection, restart the connection. This also opens the user data
+      // stream when the bot started in paper mode without one and the venue now has credentials.
+      if (this.isRunning && this.hasVenueCredentials(newConfig)) {
 logWithTimestamp('PositionManager: Restarting connection due to mode change...');
         this.restartConnection();
       }
     }
   }
 
+  // Whether the trading venue has credentials: Aster keeps its API key + secret check, other venues (Lighter keeps
+  // its keys under config.venues) ask the adapter, which reads the same live config
+  private hasVenueCredentials(config: Config): boolean {
+    return this.exchange.id === 'aster' ? !!(config.api.apiKey && config.api.secretKey) : this.exchange.hasCredentials();
+  }
+
+  // Stop the risk, order-check and orphan-cleanup loops (started again in onConnected)
+  private clearPeriodicChecks(): void {
+    if (this.riskCheckInterval) clearInterval(this.riskCheckInterval);
+    if (this.orderCheckInterval) clearInterval(this.orderCheckInterval);
+    if (this.cleanupInterval) clearInterval(this.cleanupInterval);
+    this.riskCheckInterval = undefined;
+    this.orderCheckInterval = undefined;
+    this.cleanupInterval = undefined;
+  }
+
   private async restartConnection(): Promise<void> {
     // Close existing connection
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    await this.stopUserDataStream();
 
     // Clear intervals
-    if (this.keepaliveInterval) {
-      clearInterval(this.keepaliveInterval);
-    }
-    if (this.riskCheckInterval) {
-      clearInterval(this.riskCheckInterval);
-    }
-    if (this.orderCheckInterval) {
-      clearInterval(this.orderCheckInterval);
-    }
+    this.clearPeriodicChecks();
 
     // Wait a bit before reconnecting
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -213,115 +218,69 @@ logErrorWithTimestamp('PositionManager: Failed to start:', error);
     this.isRunning = false;
 logWithTimestamp('PositionManager: Stopping...');
 
-    if (this.keepaliveInterval) clearInterval(this.keepaliveInterval);
-    if (this.riskCheckInterval) clearInterval(this.riskCheckInterval);
-    if (this.orderCheckInterval) clearInterval(this.orderCheckInterval);
-    if (this.ws) this.ws.close();
-    if (this.listenKey) await this.closeUserDataStream();
+    this.clearPeriodicChecks();
+    await this.stopUserDataStream();
   }
 
+  // The adapter owns the user data connection (auth, keepalive, reconnect); events arrive in
+  // Binance format whatever the venue
   private async startUserDataStream(): Promise<void> {
-    this.listenKey = await this.exchange.createUserDataStream();
-logWithTimestamp('PositionManager: Got listenKey:', this.listenKey);
+    this.userDataSubscription = await this.exchange.subscribeUserData({
+      onEvent: (event) => this.handleEvent(event),
 
-    // Start WS
-    const streamUrl = this.exchange.getUserDataStreamUrl(this.listenKey!);
-    this.ws = new WebSocket(streamUrl);
-
-    this.ws.on('open', () => {
+      onConnected: () => {
 logWithTimestamp('PositionManager WS connected');
-      // Set keepalive every 30 min
-      this.keepaliveInterval = setInterval(() => this.keepalive(), 30 * 60 * 1000);
-      // Risk check every 5 min
-      this.riskCheckInterval = setInterval(() => this.checkRisk(), 5 * 60 * 1000);
-      // Order check every 30 seconds to ensure SL/TP quantities match positions
-      this.orderCheckInterval = setInterval(() => this.checkAndAdjustOrders(), 30 * 1000);
+        // Called again on every reconnect: replace the previous loops instead of stacking new ones
+        this.clearPeriodicChecks();
+        // Risk check every 5 min
+        this.riskCheckInterval = setInterval(() => this.checkRisk(), 5 * 60 * 1000);
+        // Order check every 30 seconds to ensure SL/TP quantities match positions
+        this.orderCheckInterval = setInterval(() => this.checkAndAdjustOrders(), 30 * 1000);
 
-      // Clean up orphaned orders immediately on startup, then every 30 seconds
-      this.cleanupOrphanedOrders().catch(error => {
+        // Clean up orphaned orders immediately on startup, then every 30 seconds
+        this.cleanupOrphanedOrders().catch(error => {
 logErrorWithTimestamp('PositionManager: Initial cleanup failed:', error);
-      });
-      setInterval(() => this.cleanupOrphanedOrders(), 30 * 1000);
-    });
+        });
+        this.cleanupInterval = setInterval(() => this.cleanupOrphanedOrders(), 30 * 1000);
+      },
 
-    this.ws.on('message', (data: Buffer) => {
-      try {
-        const event = JSON.parse(data.toString());
-        this.handleEvent(event);
-      } catch (error) {
-logErrorWithTimestamp('PositionManager: WS message parse error:', error);
-      }
-    });
+      onError: (error) => {
+        // Broadcast error to UI
+        if (this.statusBroadcaster) {
+          this.statusBroadcaster.broadcastWebSocketError(
+            'Position Manager WebSocket Error',
+            'User data stream connection error. Reconnecting...',
+            {
+              component: 'PositionManager',
+              rawError: error,
+            }
+          );
+        }
+      },
 
-    this.ws.on('error', (error) => {
-logErrorWithTimestamp('PositionManager WS error:', error);
-      // Log to error database
-      errorLogger.logWebSocketError(
-        streamUrl,
-        error instanceof Error ? error : new Error(String(error)),
-        1
-      );
-      // Broadcast error to UI
-      if (this.statusBroadcaster) {
-        this.statusBroadcaster.broadcastWebSocketError(
-          'Position Manager WebSocket Error',
-          'User data stream connection error. Reconnecting...',
-          {
-            component: 'PositionManager',
-            rawError: error,
-          }
-        );
-      }
-    });
-
-    this.ws.on('close', () => {
+      onDisconnected: () => {
 logWithTimestamp('PositionManager WS closed - reconnecting...');
-      // Broadcast reconnection attempt to UI
-      if (this.statusBroadcaster) {
-        this.statusBroadcaster.broadcastWebSocketError(
-          'Position Manager Disconnected',
-          'User data stream closed. Reconnecting in 5 seconds...',
-          {
-            component: 'PositionManager',
-          }
-        );
-      }
-      if (this.isRunning) {
-        // Re-sync with exchange on reconnect
-        setTimeout(async () => {
-          await this.syncWithExchange();
-          await this.startUserDataStream();
-        }, 5000);
-      }
+        // Broadcast reconnection attempt to UI
+        if (this.statusBroadcaster) {
+          this.statusBroadcaster.broadcastWebSocketError(
+            'Position Manager Disconnected',
+            'User data stream closed. Reconnecting in 5 seconds...',
+            {
+              component: 'PositionManager',
+            }
+          );
+        }
+      },
+
+      // Re-sync with exchange on reconnect
+      beforeReconnect: () => this.syncWithExchange(),
     });
   }
 
-  private async keepalive(): Promise<void> {
-    if (!this.listenKey) return;
-    try {
-      await this.exchange.keepAliveUserDataStream();
-logWithTimestamp('PositionManager: Keepalive sent');
-    } catch (error) {
-logErrorWithTimestamp('PositionManager: Keepalive error:', error);
-      // Log to error database
-      errorLogger.logApiError(
-        '/fapi/v1/listenKey',
-        'PUT',
-        error instanceof Error ? 0 : (error as any)?.response?.status || 0,
-        error,
-        { component: 'PositionManager', userAction: 'Keepalive' }
-      );
-    }
-  }
-
-  private async closeUserDataStream(): Promise<void> {
-    if (!this.listenKey) return;
-    try {
-      await this.exchange.closeUserDataStream();
-logWithTimestamp('PositionManager: User data stream closed');
-    } catch (error) {
-logErrorWithTimestamp('PositionManager: Close stream error:', error);
-    }
+  private async stopUserDataStream(): Promise<void> {
+    const subscription = this.userDataSubscription;
+    this.userDataSubscription = null;
+    if (subscription) await subscription.close();
   }
 
   // Sync with exchange on startup or reconnection
@@ -351,7 +310,7 @@ logWithTimestamp(`PositionManager: Open order - ${order.symbol} ${order.type} ${
       this.currentPositions.clear();
 
       // Track which orders have been assigned to positions
-      const assignedOrderIds = new Set<number>();
+      const assignedOrderIds = new Set<OrderId>();
 
       // Build a map of all reduce-only orders grouped by symbol for better matching
       const ordersBySymbol = new Map<string, ExchangeOrder[]>();
@@ -531,9 +490,13 @@ logErrorWithTimestamp('PositionManager: Failed to sync with exchange:', error);
     return this.exchange.getPositions(undefined, { bypassRateLimit: true });
   }
 
-  // Get all open orders from exchange
+  // Get all open orders from exchange (ids in canonical form so they match placement results and stream events)
   private async getOpenOrdersFromExchange(): Promise<ExchangeOrder[]> {
-    return this.exchange.getOpenOrders(undefined, { bypassRateLimit: true });
+    const orders = await this.exchange.getOpenOrders(undefined, { bypassRateLimit: true });
+    return orders.map(order => {
+      const orderId = normalizeOrderId(order.orderId);
+      return orderId === order.orderId ? order : { ...order, orderId };
+    });
   }
 
   // Helper to create consistent position keys
@@ -613,7 +576,7 @@ logWithTimestamp(`PositionManager: Cancelling TP order ${orders.tpOrderId} for s
   }
 
   // Cancel order with retry and backoff
-  private async cancelOrderWithRetry(symbol: string, orderId: number, orderType: string): Promise<void> {
+  private async cancelOrderWithRetry(symbol: string, orderId: OrderId, orderType: string): Promise<void> {
     const maxRetries = 3;
     const baseDelay = 1000; // 1 second
 
@@ -649,7 +612,7 @@ logErrorWithTimestamp(`PositionManager: Max retries reached for cancelling ${ord
   }
 
   // Cancel order by ID
-  private async cancelOrderById(symbol: string, orderId: number): Promise<void> {
+  private async cancelOrderById(symbol: string, orderId: OrderId): Promise<void> {
     await this.exchange.cancelOrder(symbol, orderId);
   }
 
@@ -686,7 +649,7 @@ logWithTimestamp('PositionManager: Account update received');
 
     // Forward to PnL service for tracking
     const pnlService = require('../services/pnlService').default;
-    pnlService.updateFromAccountEvent(event);
+    pnlService.updateFromAccountEvent(event, this.exchange.capabilities.marginAsset);
 
     // Broadcast PnL update if we have a broadcaster
     if (this.statusBroadcaster && this.statusBroadcaster.broadcastPnLUpdate) {
@@ -929,7 +892,8 @@ logWithTimestamp(`PositionManager: Order cancellation already in progress for ${
     const orderStatus = order.X;
     const _positionSide = order.ps || 'BOTH';
     const side = order.S;
-    const orderId = order.i;
+    // Canonical id, so it matches the ids tracked from placement results and REST (same value for Aster)
+    const orderId = order.i === undefined || order.i === null ? order.i : normalizeOrderId(order.i);
 
     // Enhanced logging for order lifecycle tracking
 logWithTimestamp(`PositionManager: ORDER_TRADE_UPDATE - Symbol: ${symbol}, OrderId: ${orderId}, Type: ${orderType}, Status: ${orderStatus}, Side: ${side}`);
@@ -1201,7 +1165,7 @@ logWithTimestamp(`PositionManager: Position ${key} is closed, removing order tra
   }
 
   // Listen for new positions from Hunter
-  public onNewPosition(data: { symbol: string; side: string; quantity: number; orderId?: number }): void {
+  public onNewPosition(data: { symbol: string; side: string; quantity: number; orderId?: OrderId }): void {
     // In the new architecture, we wait for ACCOUNT_UPDATE to confirm the position
     // The WebSocket will tell us when the position is actually open
 logWithTimestamp(`PositionManager: Notified of potential new position: ${data.symbol} ${data.side}`);
@@ -1552,8 +1516,7 @@ logWithTimestamp(`  Position Side: ${orderPositionSide}`);
 
         // Handle results
         if (batchResult.stopLoss) {
-          orders.slOrderId = typeof batchResult.stopLoss.orderId === 'string' ?
-            parseInt(batchResult.stopLoss.orderId) : batchResult.stopLoss.orderId;
+          orders.slOrderId = normalizeOrderId(batchResult.stopLoss.orderId);
 logWithTimestamp(`PositionManager: Placed SL for ${symbol} at ${slPrice.toFixed(4)}, orderId: ${batchResult.stopLoss.orderId}`);
 
           if (this.statusBroadcaster) {
@@ -1567,8 +1530,7 @@ logWithTimestamp(`PositionManager: Placed SL for ${symbol} at ${slPrice.toFixed(
         }
 
         if (batchResult.takeProfit) {
-          orders.tpOrderId = typeof batchResult.takeProfit.orderId === 'string' ?
-            parseInt(batchResult.takeProfit.orderId) : batchResult.takeProfit.orderId;
+          orders.tpOrderId = normalizeOrderId(batchResult.takeProfit.orderId);
 logWithTimestamp(`PositionManager: Placed TP for ${symbol} at ${tpPrice.toFixed(4)}, orderId: ${batchResult.takeProfit.orderId}`);
 
           if (this.statusBroadcaster) {
@@ -1615,6 +1577,14 @@ logErrorWithTimestamp(`PositionManager: Batch order errors for ${symbol}:`, actu
               }
             );
           }
+        }
+
+        // An unknown outcome may still land on the exchange: placing SL/TP again would double the protection,
+        // so leave it to the periodic order check, which works from the exchange's open orders
+        if (batchResult.mayExist) {
+logWarnWithTimestamp(`PositionManager: SL/TP outcome for ${symbol} is unknown; not re-placing, the periodic order check will verify protection`);
+          this.positionOrders.set(key, orders);
+          return;
         }
 
         // Check if there were ANY errors (including the filtered ones)
@@ -1715,7 +1685,7 @@ logWithTimestamp(`  Formatted SL price: ${slPrice}`);
 
         const slOrder = await this.exchange.placeOrder(orderParams);
 
-        orders.slOrderId = typeof slOrder.orderId === 'string' ? parseInt(slOrder.orderId) : slOrder.orderId;
+        orders.slOrderId = normalizeOrderId(slOrder.orderId);
 logWithTimestamp(`PositionManager: Placed SL (STOP_MARKET) for ${symbol} at ${slPrice.toFixed(4)}, orderId: ${slOrder.orderId}`);
 
         // Broadcast SL placed event
@@ -1820,7 +1790,7 @@ logWithTimestamp(`  Formatted TP price: ${tpPrice}`);
           }
 
           const tpOrder = await this.exchange.placeOrder(tpParams);
-          orders.tpOrderId = typeof tpOrder.orderId === 'string' ? parseInt(tpOrder.orderId) : tpOrder.orderId;
+          orders.tpOrderId = normalizeOrderId(tpOrder.orderId);
 logWithTimestamp(`PositionManager: Placed TP for ${symbol} at ${tpPrice}, orderId: ${tpOrder.orderId}`);
 
           // Broadcast TP placed event
@@ -2107,14 +2077,14 @@ logWithTimestamp(`PositionManager: Evaluating TP order ${o.orderId} for position
         if (slOrders.length > 1) {
 logWithTimestamp(`PositionManager: Found ${slOrders.length} SL orders for position ${key} (${symbol}), marking ${slOrders.length - 1} for cancellation`);
           // Sort by order ID to ensure consistent behavior
-          slOrders.sort((a, b) => a.orderId - b.orderId);
+          slOrders.sort((a, b) => compareOrderIds(a.orderId, b.orderId));
           duplicateOrders.push(...slOrders.slice(1));
         }
 
         if (tpOrders.length > 1) {
 logWithTimestamp(`PositionManager: Found ${tpOrders.length} TP orders for position ${key} (${symbol}), marking ${tpOrders.length - 1} for cancellation`);
           // Sort by order ID to ensure consistent behavior
-          tpOrders.sort((a, b) => a.orderId - b.orderId);
+          tpOrders.sort((a, b) => compareOrderIds(a.orderId, b.orderId));
           duplicateOrders.push(...tpOrders.slice(1));
         }
       }

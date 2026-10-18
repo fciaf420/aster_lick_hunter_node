@@ -3,14 +3,18 @@ import type {
   AccountHistory,
   AccountStream,
   ExchangeAdapter,
+  OrderId,
   OrderRequest,
   ProtectiveOrdersRequest,
   RequestOptions,
   TickerPrice,
+  UserDataHandlers,
+  UserDataSubscription,
   VenueCapabilities,
   VenueOrder,
   VenuePosition,
 } from '../types';
+import { normalizeOrderId } from '../orderId';
 import {
   getAccountInfo,
   getAllSymbolPrices,
@@ -36,6 +40,7 @@ import {
 } from '../../api/income';
 import { AsterDirectTransport } from './transport';
 import { ASTER_STREAM_BASE_URL } from './constants';
+import { ListenKeyUserDataSubscription } from './userDataSubscription';
 
 export { ASTER_REST_BASE_URL, ASTER_STREAM_BASE_URL } from './constants';
 
@@ -164,6 +169,12 @@ export class AsterAdapter implements ExchangeAdapter {
     return setLeverage(symbol, leverage, this.getCredentials());
   }
 
+  async subscribeUserData(handlers: UserDataHandlers): Promise<UserDataSubscription> {
+    const subscription = new ListenKeyUserDataSubscription(this, handlers);
+    await subscription.open();
+    return subscription;
+  }
+
   createUserDataStream(): Promise<string> {
     return this.direct.createListenKey();
   }
@@ -188,8 +199,13 @@ export class AsterAdapter implements ExchangeAdapter {
     return placeStopLossAndTakeProfit(request, this.getCredentials());
   }
 
-  cancelOrder(symbol: string, orderId: number) {
-    return cancelOrder({ symbol, orderId }, this.getCredentials());
+  cancelOrder(symbol: string, orderId: OrderId) {
+    // Aster order ids are integers; refuse anything that would not round-trip exactly
+    const id = normalizeOrderId(orderId);
+    if (typeof id !== 'number') {
+      return Promise.reject(new Error(`Invalid Aster order id: ${orderId}`));
+    }
+    return cancelOrder({ symbol, orderId: id }, this.getCredentials());
   }
 
   cancelAllOrders(symbol: string) {

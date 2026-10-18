@@ -7,23 +7,33 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { VenueSelector } from '@/components/VenueSelector';
+import { LighterSettings, hasLighterCredentials, lighterProfileOf } from '@/components/LighterSettings';
 import { getVenueEntry } from '@/lib/exchange/catalog';
 import type { VenueId } from '@/lib/exchange/types';
+import type { LighterVenueConfig } from '@/lib/types';
+
+// Venue settings collected by this step for venues other than Aster
+export interface VenueStepSettings {
+  lighter?: LighterVenueConfig;
+}
 
 interface ApiKeyStepProps {
-  onNext: (apiKey: string, secretKey: string, venue: VenueId) => void;
+  onNext: (apiKey: string, secretKey: string, venue: VenueId, venueSettings?: VenueStepSettings) => void;
   initialVenue?: VenueId;
+  initialLighter?: LighterVenueConfig;
   onBack: () => void;
   onSkip: () => void;
 }
 
-export function ApiKeyStep({ onNext, onBack, initialVenue }: ApiKeyStepProps) {
+export function ApiKeyStep({ onNext, onBack, initialVenue, initialLighter }: ApiKeyStepProps) {
   const [venue, setVenue] = useState<VenueId>(getVenueEntry(initialVenue).id);
   const venueEntry = getVenueEntry(venue);
   const [apiKey, setApiKey] = useState('');
   const [secretKey, setSecretKey] = useState('');
   const [showSecretKey, setShowSecretKey] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [lighter, setLighter] = useState<LighterVenueConfig>(initialLighter ?? {});
+  const isLighter = venue === 'lighter';
 
   const handleCopy = (text: string, field: string) => {
     navigator.clipboard.writeText(text);
@@ -32,12 +42,29 @@ export function ApiKeyStep({ onNext, onBack, initialVenue }: ApiKeyStepProps) {
   };
 
   const handleSubmit = () => {
+    if (isLighter) {
+      onNext('', '', venue, { lighter });
+      return;
+    }
     onNext(apiKey, secretKey, venue);
   };
 
   const handlePaperMode = () => {
+    if (isLighter) {
+      // Keep the chosen network; credentials are not saved in paper mode
+      onNext('', '', venue, { lighter: { profile: lighterProfileOf(lighter).name, liquidationsLive: lighter.liquidationsLive } });
+      return;
+    }
     onNext('', '', venue);
   };
+
+  const showKeysTab = () => {
+    const tabsList = document.querySelector('[role="tablist"]');
+    const keysTab = tabsList?.querySelector('[value="keys"]') as HTMLButtonElement;
+    keysTab?.click();
+  };
+
+  const lighterReady = hasLighterCredentials(lighter);
 
   return (
     <div className="space-y-6">
@@ -60,6 +87,63 @@ export function ApiKeyStep({ onNext, onBack, initialVenue }: ApiKeyStepProps) {
         </TabsList>
 
         <TabsContent value="guide" className="space-y-4">
+          {isLighter ? (
+            <div className="space-y-4">
+              <div className="border rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold">Step 1: Open a Lighter account</h3>
+                  <Badge variant="outline">Required</Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Start on testnet (testnet.app.lighter.xyz hands out test USDC). Mainnet uses real funds.
+                </p>
+                <Button
+                  variant="default"
+                  className="w-full"
+                  onClick={() => window.open(venueEntry.signupUrl, '_blank')}
+                >
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Open {venueEntry.name}
+                </Button>
+              </div>
+
+              <div className="border rounded-lg p-4 space-y-3">
+                <h3 className="font-semibold">Step 2: Create an API key for the bot</h3>
+                <ol className="text-sm text-muted-foreground space-y-2">
+                  <li className="flex gap-2">
+                    <span className="text-primary font-semibold">1.</span>
+                    Register a new API key on the same network, e.g. with the Lighter Python SDK&apos;s examples/system_setup.py
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-primary font-semibold">2.</span>
+                    Use an API key index other than 0 (app.lighter.xyz uses key 0)
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-primary font-semibold">3.</span>
+                    Note your account index, the key index, and the key&apos;s private and public key
+                  </li>
+                </ol>
+              </div>
+
+              <div className="border rounded-lg p-4 space-y-3">
+                <h3 className="font-semibold">Step 3: Install the signer</h3>
+                <p className="text-sm text-muted-foreground">
+                  Run <code className="font-mono">npm run lighter:signer</code> in the bot folder. It downloads Lighter&apos;s
+                  signing library and checks its fingerprint. Only the bot process uses it.
+                </p>
+                <Alert>
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    See docs/LIGHTER.md for the full setup, shadow mode and the checks to run before using real funds.
+                  </AlertDescription>
+                </Alert>
+              </div>
+
+              <Button className="w-full" onClick={showKeysTab}>
+                I Have My Keys <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
           <div className="space-y-4">
             <div className="border rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -125,9 +209,36 @@ export function ApiKeyStep({ onNext, onBack, initialVenue }: ApiKeyStepProps) {
               I Have My Keys <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </div>
+          )}
         </TabsContent>
 
         <TabsContent value="keys" className="space-y-4">
+          {isLighter ? (
+            <div className="space-y-4">
+              <LighterSettings value={lighter} onChange={setLighter} showCredentials idPrefix="onboarding-lighter" />
+
+              <div className="flex gap-3">
+                <Button variant="outline" onClick={onBack}>
+                  Back
+                </Button>
+                <Button variant="outline" onClick={handlePaperMode} className="flex-1">
+                  Use Paper Mode
+                </Button>
+                <Button onClick={handleSubmit} disabled={!lighterReady} className="flex-1">
+                  {lighterReady ? 'Continue' : 'Enter Keys'}
+                </Button>
+              </div>
+
+              <div className="flex justify-center">
+                {lighterReady ? (
+                  <Badge variant="default">{lighterProfileOf(lighter).testnet ? 'Testnet Trading Ready' : 'Live Trading Ready'}</Badge>
+                ) : (
+                  <Badge variant="secondary">Paper Mode Available</Badge>
+                )}
+              </div>
+            </div>
+          ) : (
+          <>
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="apiKey">API Key</Label>
@@ -244,6 +355,8 @@ export function ApiKeyStep({ onNext, onBack, initialVenue }: ApiKeyStepProps) {
               <Badge variant="default">Live Trading Ready</Badge>
             )}
           </div>
+          </>
+          )}
         </TabsContent>
       </Tabs>
     </div>

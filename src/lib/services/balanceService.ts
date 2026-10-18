@@ -179,13 +179,14 @@ export class BalanceService extends EventEmitter {
   private updateBalanceFromStream(update: AccountUpdate): void {
     const { balances, positions } = update.updateData;
 
-    // Find USDT balance update
-    const usdtBalance = balances.find(b => b.asset === 'USDT');
-    if (usdtBalance) {
+    // Find the margin asset's balance update (USDT on Aster, USDC on Lighter)
+    const marginAsset = this.exchange?.capabilities.marginAsset ?? 'USDT';
+    const marginBalance = balances.find(b => b.asset === marginAsset);
+    if (marginBalance) {
       // walletBalance is the total balance in the account
       // crossWalletBalance is the balance across all margin assets (usually same as wallet for single asset mode)
-      const walletBalance = parseFloat(usdtBalance.walletBalance);
-      const _crossWalletBalance = parseFloat(usdtBalance.crossWalletBalance);
+      const walletBalance = parseFloat(marginBalance.walletBalance);
+      const _crossWalletBalance = parseFloat(marginBalance.crossWalletBalance);
 
       // Calculate available balance (wallet balance minus margin used in positions)
       // We'll calculate margin from positions below, then derive available
