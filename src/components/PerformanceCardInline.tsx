@@ -12,6 +12,10 @@ interface DailyPnL {
   realizedPnl: number;
   commission: number;
   fundingFee: number;
+  insuranceClear: number;
+  marketMerchantReward: number;
+  apolloxRebate: number;
+  usdfReward: number;
   netPnl: number;
   tradeCount: number;
 }
@@ -21,6 +25,10 @@ interface PnLMetrics {
   totalRealizedPnl: number;
   totalCommission: number;
   totalFundingFee: number;
+  totalInsuranceClear: number;
+  totalMarketMerchantReward: number;
+  totalApolloxRebate: number;
+  totalUsdfReward: number;
   winRate: number;
   profitableDays: number;
   lossDays: number;
@@ -67,7 +75,13 @@ export default function PerformanceCardInline() {
     const handleMessage = (message: any) => {
       if (message.type === 'pnl_update' || message.type === 'trade_update') {
         fetch('/api/income?range=24h')
-          .then(r => r.json())
+          .then(async r => {
+            const contentType = r.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+              return r.json();
+            }
+            throw new Error('Non-JSON response');
+          })
           .then(pnlData => setPnlData(pnlData))
           .catch(error => console.error('Failed to refresh PnL data:', error));
       }

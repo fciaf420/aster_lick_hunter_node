@@ -1,8 +1,9 @@
 import { buildSignedQuery, buildSignedForm } from './auth';
 import { ApiCredentials } from '../types';
 import { getRateLimitedAxios } from './requestInterceptor';
+import { ASTER_REST_BASE_URL } from '../exchange/aster/constants';
 
-const BASE_URL = 'https://fapi.asterdex.com';
+const BASE_URL = ASTER_REST_BASE_URL;
 
 export interface PositionModeResponse {
   dualSidePosition: boolean;

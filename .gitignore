@@ -46,6 +46,16 @@ data/*.db-journal
 data/*.db-wal
 
 # user configuration
-config.user.json
+config.user*
+config.user.backup*.json
 config.json
-config.user.backup-*.json
+data/optimizer-jobs.json
+# optimizer output includes the full config (API keys)
+optimization-results.json
+
+# claude code local settings and agents
+.claude/settings.local.json
+.claude/agents/
+
+# Lighter native signer, installed by `npm run lighter:signer` (sha256-pinned)
+/vendor/lighter-signer/

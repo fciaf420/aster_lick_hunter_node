@@ -1,9 +1,17 @@
-import { getOrderBook, getBookTicker, getExchangeInfo } from './market';
+import type { ExchangeAdapter } from '../exchange/types';
+import { createPublicExchangeAdapter } from '../exchange/registry';
 
-interface OrderBookEntry {
-  price: string;
-  quantity: string;
+// Market data these helpers read; the caller's exchange adapter, else the default venue's public data
+type MarketData = Pick<ExchangeAdapter, 'getExchangeInfo' | 'getBookTicker' | 'getOrderBook'>;
+let defaultMarketData: MarketData | null = null;
+function marketData(exchange?: MarketData): MarketData {
+  if (exchange) return exchange;
+  defaultMarketData ??= createPublicExchangeAdapter();
+  return defaultMarketData;
 }
+
+// Depth levels come back as [price, quantity] pairs
+type OrderBookEntry = [price: string, quantity: string];
 
 interface OrderBookData {
   lastUpdateId: number;
@@ -34,21 +42,44 @@ let exchangeInfoCache: any = null;
 let exchangeInfoCacheTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
+// Default filter values for unknown symbols
+const DEFAULT_FILTERS = {
+  PRICE_FILTER: {
+    minPrice: '0.00001',
+    maxPrice: '1000000',
+    tickSize: '0.0001'
+  },
+  LOT_SIZE: {
+    minQty: '0.001',
+    maxQty: '10000000',
+    stepSize: '0.001'
+  },
+  MIN_NOTIONAL: {
+    notional: '10'
+  }
+};
+
 // Get symbol filters from exchange info
-export async function getSymbolFilters(symbol: string): Promise<SymbolInfo | null> {
+export async function getSymbolFilters(symbol: string, exchange?: MarketData): Promise<SymbolInfo | null> {
   const now = Date.now();
 
   // Use cache if available and not expired
   if (exchangeInfoCache && (now - exchangeInfoCacheTime) < CACHE_DURATION) {
     const symbolInfo = exchangeInfoCache.symbols.find((s: any) => s.symbol === symbol);
+    if (!symbolInfo) {
+      console.warn(`getSymbolFilters: Symbol ${symbol} not found in exchange info`);
+    }
     return symbolInfo || null;
   }
 
   try {
-    exchangeInfoCache = await getExchangeInfo();
+    exchangeInfoCache = await marketData(exchange).getExchangeInfo();
     exchangeInfoCacheTime = now;
 
     const symbolInfo = exchangeInfoCache.symbols.find((s: any) => s.symbol === symbol);
+    if (!symbolInfo) {
+      console.warn(`getSymbolFilters: Symbol ${symbol} not found in exchange info`);
+    }
     return symbolInfo || null;
   } catch (error) {
     console.error('Error fetching exchange info:', error);
@@ -61,13 +92,10 @@ export function roundToTickSize(price: number, tickSize: string): number {
   const tick = parseFloat(tickSize);
   if (tick === 0) return price;
 
-  // Count decimal places in tickSize to determine precision
-  const decimalPlaces = (tickSize.split('.')[1] || '').replace(/0+$/, '').length;
-
-  // Round to nearest tick and use toFixed to avoid floating point errors
-  const numTicks = Math.round(price / tick);
-  const aligned = (numTicks * tick).toFixed(decimalPlaces);
-  return parseFloat(aligned);
+  const rounded = Math.round(price / tick) * tick;
+  // Parse to fixed decimal places to avoid floating point precision issues
+  const decimals = tickSize.includes('.') ? tickSize.split('.')[1].replace(/0+$/, '').length : 0;
+  return parseFloat(rounded.toFixed(decimals));
 }
 
 // Round quantity to valid step size
@@ -75,13 +103,10 @@ export function roundToStepSize(quantity: number, stepSize: string): number {
   const step = parseFloat(stepSize);
   if (step === 0) return quantity;
 
-  // Count decimal places in stepSize to determine precision
-  const decimalPlaces = (stepSize.split('.')[1] || '').replace(/0+$/, '').length;
-
-  // Round to nearest step and use toFixed to avoid floating point errors
-  const numSteps = Math.round(quantity / step);
-  const aligned = (numSteps * step).toFixed(decimalPlaces);
-  return parseFloat(aligned);
+  const rounded = Math.round(quantity / step) * step;
+  // Parse to fixed decimal places to avoid floating point precision issues
+  const decimals = stepSize.includes('.') ? stepSize.split('.')[1].replace(/0+$/, '').length : 0;
+  return parseFloat(rounded.toFixed(decimals));
 }
 
 // Calculate optimal limit order price based on order book
@@ -89,16 +114,17 @@ export async function calculateOptimalPrice(
   symbol: string,
   side: 'BUY' | 'SELL',
   priceOffsetBps: number = 1, // 1 basis point default offset
-  usePostOnly: boolean = false
+  usePostOnly: boolean = false,
+  exchange?: MarketData
 ): Promise<number | null> {
   try {
     // Get current best bid/ask
-    const bookTicker = await getBookTicker(symbol);
+    const bookTicker = await marketData(exchange).getBookTicker(symbol);
     const bestBid = parseFloat(bookTicker.bidPrice);
     const bestAsk = parseFloat(bookTicker.askPrice);
 
     // Get symbol filters for price precision
-    const symbolInfo = await getSymbolFilters(symbol);
+    const symbolInfo = await getSymbolFilters(symbol, exchange);
     const tickSize = symbolInfo?.filters.find(f => f.filterType === 'PRICE_FILTER')?.tickSize || '0.01';
 
     let targetPrice: number;
@@ -149,23 +175,25 @@ export async function validateOrderParams(
   symbol: string,
   side: 'BUY' | 'SELL',
   price: number,
-  quantity: number
+  quantity: number,
+  exchange?: MarketData
 ): Promise<{ valid: boolean; adjustedPrice?: number; adjustedQuantity?: number; error?: string }> {
   try {
-    const symbolInfo = await getSymbolFilters(symbol);
+    const symbolInfo = await getSymbolFilters(symbol, exchange);
     if (!symbolInfo) {
-      return { valid: false, error: 'Symbol info not found' };
+      console.warn(`validateOrderParams: Symbol info not found for ${symbol}, using defaults`);
+      // Use default filters and still validate/format
     }
 
     let adjustedPrice = price;
     let adjustedQuantity = quantity;
 
-    // Validate and adjust price
-    const priceFilter = symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER');
+    // Validate and adjust price (use defaults if symbolInfo is missing)
+    const priceFilter = symbolInfo?.filters?.find(f => f.filterType === 'PRICE_FILTER') || DEFAULT_FILTERS.PRICE_FILTER;
     if (priceFilter) {
-      const minPrice = parseFloat(priceFilter.minPrice || '0');
-      const maxPrice = parseFloat(priceFilter.maxPrice || '999999999');
-      const tickSize = priceFilter.tickSize || '0.01';
+      const minPrice = parseFloat(priceFilter.minPrice || DEFAULT_FILTERS.PRICE_FILTER.minPrice);
+      const maxPrice = parseFloat(priceFilter.maxPrice || DEFAULT_FILTERS.PRICE_FILTER.maxPrice);
+      const tickSize = priceFilter.tickSize || DEFAULT_FILTERS.PRICE_FILTER.tickSize;
 
       adjustedPrice = roundToTickSize(adjustedPrice, tickSize);
 
@@ -177,12 +205,12 @@ export async function validateOrderParams(
       }
     }
 
-    // Validate and adjust quantity
-    const lotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
+    // Validate and adjust quantity (use defaults if symbolInfo is missing)
+    const lotSizeFilter = symbolInfo?.filters?.find(f => f.filterType === 'LOT_SIZE') || DEFAULT_FILTERS.LOT_SIZE;
     if (lotSizeFilter) {
-      const minQty = parseFloat(lotSizeFilter.minQty || '0');
-      const maxQty = parseFloat(lotSizeFilter.maxQty || '999999999');
-      const stepSize = lotSizeFilter.stepSize || '0.001';
+      const minQty = parseFloat(lotSizeFilter.minQty || DEFAULT_FILTERS.LOT_SIZE.minQty);
+      const maxQty = parseFloat(lotSizeFilter.maxQty || DEFAULT_FILTERS.LOT_SIZE.maxQty);
+      const stepSize = lotSizeFilter.stepSize || DEFAULT_FILTERS.LOT_SIZE.stepSize;
 
       adjustedQuantity = roundToStepSize(adjustedQuantity, stepSize);
 
@@ -194,10 +222,10 @@ export async function validateOrderParams(
       }
     }
 
-    // Validate notional value
-    const minNotionalFilter = symbolInfo.filters.find(f => f.filterType === 'MIN_NOTIONAL');
+    // Validate notional value (use defaults if symbolInfo is missing)
+    const minNotionalFilter = symbolInfo?.filters?.find(f => f.filterType === 'MIN_NOTIONAL') || DEFAULT_FILTERS.MIN_NOTIONAL;
     if (minNotionalFilter) {
-      const minNotional = parseFloat(minNotionalFilter.notional || '0');
+      const minNotional = parseFloat(minNotionalFilter.notional || DEFAULT_FILTERS.MIN_NOTIONAL.notional);
       const notionalValue = adjustedPrice * adjustedQuantity;
 
       if (notionalValue < minNotional) {
@@ -224,25 +252,26 @@ export async function validateOrderParams(
 export async function analyzeOrderBookDepth(
   symbol: string,
   side: 'BUY' | 'SELL',
-  targetNotional: number = 10000 // Target order size in USDT
+  targetNotional: number = 10000, // Target order size in USDT
+  exchange?: MarketData
 ): Promise<{
   avgPrice: number;
   priceImpact: number;
   liquidityOk: boolean;
 }> {
   try {
-    const orderBook: OrderBookData = await getOrderBook(symbol, 20); // Get deeper book
+    const orderBook: OrderBookData = await marketData(exchange).getOrderBook(symbol, 20); // Get deeper book
     const orders = side === 'BUY' ? orderBook.asks : orderBook.bids;
 
     let cumulativeNotional = 0;
     let weightedPriceSum = 0;
     let totalQuantity = 0;
 
-    const firstPrice = parseFloat(orders[0]?.price || '0');
+    const firstPrice = parseFloat(orders[0]?.[0] || '0');
 
-    for (const order of orders) {
-      const price = parseFloat(order.price);
-      const quantity = parseFloat(order.quantity);
+    for (const [priceStr, quantityStr] of orders) {
+      const price = parseFloat(priceStr);
+      const quantity = parseFloat(quantityStr);
       const notional = price * quantity;
 
       if (cumulativeNotional + notional >= targetNotional) {
@@ -252,6 +281,7 @@ export async function analyzeOrderBookDepth(
 
         weightedPriceSum += price * remainingQuantity;
         totalQuantity += remainingQuantity;
+        cumulativeNotional += remainingNotional;
         break;
       }
 

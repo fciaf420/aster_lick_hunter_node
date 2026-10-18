@@ -7,7 +7,6 @@ import { StatusBroadcaster } from './websocketServer';
 import { initializeBalanceService, stopBalanceService, getBalanceService } from '../lib/services/balanceService';
 import { initializePriceService, stopPriceService, getPriceService } from '../lib/services/priceService';
 import { vwapStreamer } from '../lib/services/vwapStreamer';
-import { getPositionMode, setPositionMode } from '../lib/api/positionMode';
 import { execSync } from 'child_process';
 import { cleanupScheduler } from '../lib/services/cleanupScheduler';
 import { db } from '../lib/db/database';
@@ -17,6 +16,27 @@ import { getRateLimitManager } from '../lib/api/rateLimitManager';
 import { startRateLimitLogging } from '../lib/api/rateLimitMonitor';
 import { initializeRateLimitToasts } from '../lib/api/rateLimitToasts';
 import { thresholdMonitor } from '../lib/services/thresholdMonitor';
+import { logWithTimestamp, logErrorWithTimestamp, logWarnWithTimestamp } from '../lib/utils/timestamp';
+import {
+  createExchangeAdapter,
+  createLiquidationSource,
+  getConfiguredLiquidationSource,
+  getConfiguredVenue,
+  resolveLiquidationSource,
+} from '../lib/exchange/registry';
+import { BETA_WARNING, getLiquidationSourceEntry, getVenueEntry } from '../lib/exchange/catalog';
+import type { ExchangeAdapter } from '../lib/exchange/types';
+import { LighterAdapter } from '../lib/exchange/lighter/LighterAdapter';
+import {
+  applyLighterConfig,
+  readLighterSettings,
+  resolveLighterProfile,
+  setLighterAlertSink,
+  startLighterMarketRefresh,
+  stopLighterRuntime,
+  type LighterRuntimeAlert,
+} from '../lib/exchange/lighter/runtime';
+import { withoutSecrets } from '../lib/config/redact';
 
 // Helper function to kill all child processes (synchronous for exit handler)
 function killAllProcesses() {
@@ -40,6 +60,7 @@ class AsterBot {
   private isRunning = false;
   private statusBroadcaster: StatusBroadcaster;
   private isHedgeMode: boolean = false;
+  private tradeSizeWarnings: any[] = [];
 
   constructor() {
     // Will be initialized with config port
@@ -48,46 +69,101 @@ class AsterBot {
 
   async start(): Promise<void> {
     if (this.isRunning) {
-      console.log('Bot is already running');
+logWithTimestamp('Bot is already running');
       return;
     }
 
     try {
-      console.log('🚀 Starting Aster Liquidation Hunter Bot...');
+      logWithTimestamp('🚀 Starting Aster Liquidation Hunter Bot...');
 
       // Initialize database first (ensures schema is created)
       await db.initialize();
-      console.log('✅ Database initialized');
+      logWithTimestamp('✅ Database initialized');
 
       // Initialize config manager and load configuration
       this.config = await configManager.initialize();
-      console.log('✅ Configuration loaded');
+      logWithTimestamp('✅ Configuration loaded');
+
+      // Resolve the trading venue and liquidation source; ones that aren't implemented yet stop the bot here
+      // The adapter reads credentials from the current config, so reloaded API keys apply.
+      // Only this process may sign Lighter transactions (allowSigning); the web UI's adapters are read-only.
+      const exchange = createExchangeAdapter(this.config, () => this.config!.api, {
+        getConfig: () => this.config!,
+        allowSigning: true,
+      });
+      const liquidationSource = resolveLiquidationSource(this.config);
+logWithTimestamp(`🏦 Trading venue: ${getVenueEntry(exchange.id).name} | Liquidation source: ${getLiquidationSourceEntry(liquidationSource).name}`);
+      this.logBetaAndNetwork(exchange, liquidationSource === 'lighter');
+
+      // Validate trade sizes against exchange minimums
+      const { validateAllTradeSizes } = await import('../lib/validation/tradeSizeValidator');
+      const validationResult = await validateAllTradeSizes(this.config, exchange);
+
+      if (!validationResult.valid) {
+logErrorWithTimestamp('❌ CONFIGURATION ERROR: Trade sizes below exchange minimums detected!');
+logErrorWithTimestamp('The following symbols have insufficient trade sizes:');
+
+        validationResult.warnings.forEach(warning => {
+logErrorWithTimestamp(`  ${warning.symbol}: ${warning.reason}`);
+logErrorWithTimestamp(`    Current price: $${warning.currentPrice.toFixed(2)}`);
+logErrorWithTimestamp(`    Leverage: ${warning.leverage}x`);
+logErrorWithTimestamp(`    MINIMUM REQUIRED: ${warning.minimumRequired.toFixed(2)} USDT`);
+        });
+
+logErrorWithTimestamp('\n⚠️  Please update your configuration at http://localhost:3000/config');
+logErrorWithTimestamp('The bot will continue but trades for these symbols will be rejected.\n');
+
+        // Store warnings to broadcast to UI
+        this.tradeSizeWarnings = validationResult.warnings;
+      }
+
+      // Security warnings
+      const dashboardPassword = this.config.global.server?.dashboardPassword;
+      if (!dashboardPassword || dashboardPassword === 'admin') {
+logWarnWithTimestamp('⚠️  WARNING: Using default "admin" dashboard password!');
+logWarnWithTimestamp('   Please change it at http://localhost:3000/config for better security');
+      } else if (dashboardPassword.length < 8) {
+logWarnWithTimestamp('⚠️  WARNING: Dashboard password is less than 8 characters');
+logWarnWithTimestamp('   Consider using a stronger password for better security');
+      }
+
+      // Check if exposing to network with weak password
+      const websocketHost = this.config.global.server?.websocketHost;
+      const isRemoteAccess = this.config.global.server?.useRemoteWebSocket || websocketHost;
+      if (isRemoteAccess && (!dashboardPassword || dashboardPassword === 'admin' || dashboardPassword.length < 8)) {
+logWarnWithTimestamp('🔴 SECURITY RISK: Remote access enabled with weak/default password!');
+logWarnWithTimestamp('   This could allow unauthorized access to your bot controls');
+logWarnWithTimestamp('   Please set a strong password immediately at /config');
+      }
 
       // Initialize threshold monitor with actual config
       thresholdMonitor.updateConfig(this.config);
-      console.log(`✅ Threshold monitor initialized with ${Object.keys(this.config.symbols).length} symbols`);
+      logWithTimestamp(`✅ Threshold monitor initialized with ${Object.keys(this.config.symbols).length} symbols`);
 
       // Initialize Rate Limit Manager with config
       const rateLimitConfig = this.config.global.rateLimit || {};
       const _rateLimitManager = getRateLimitManager(rateLimitConfig);
-      console.log('✅ Rate limit manager initialized');
-      console.log(`  Max weight: ${rateLimitConfig.maxRequestWeight || 2400}/min`);
-      console.log(`  Max orders: ${rateLimitConfig.maxOrderCount || 1200}/min`);
-      console.log(`  Reserve: ${rateLimitConfig.reservePercent || 30}% for critical operations`);
+      logWithTimestamp('✅ Rate limit manager initialized');
+      logWithTimestamp(`  Max weight: ${rateLimitConfig.maxRequestWeight || 2400}/min`);
+      logWithTimestamp(`  Max orders: ${rateLimitConfig.maxOrderCount || 1200}/min`);
+      logWithTimestamp(`  Reserve: ${rateLimitConfig.reservePercent || 30}% for critical operations`);
 
       // Initialize WebSocket server with configured port
       const wsPort = this.config.global.server?.websocketPort || 8080;
       this.statusBroadcaster = new StatusBroadcaster(wsPort);
       await this.statusBroadcaster.start();
-      console.log(`✅ WebSocket status server started on port ${wsPort}`);
+logWithTimestamp(`✅ WebSocket status server started on port ${wsPort}`);
+
+      // Lighter coverage gaps, account-stream problems and mark-ratio blocks reach the dashboard
+      setLighterAlertSink((event) => this.handleLighterAlert(event));
 
       // Start rate limit monitoring with toast notifications
       startRateLimitLogging(60000); // Log status every minute
       initializeRateLimitToasts(this.statusBroadcaster); // Enable toast notifications
-      console.log('✅ Rate limit monitoring started with toast notifications');
-      console.log(`📝 Paper Mode: ${this.config.global.paperMode ? 'ENABLED' : 'DISABLED'}`);
-      console.log(`💰 Risk Percent: ${this.config.global.riskPercent}%`);
-      console.log(`📊 Symbols configured: ${Object.keys(this.config.symbols).join(', ')}`);
+logWithTimestamp('✅ Rate limit monitoring started with toast notifications');
+logWithTimestamp(`📝 Paper Mode: ${this.config.global.paperMode ? 'ENABLED' : 'DISABLED'}`);
+logWithTimestamp(`💰 Risk Percent: ${this.config.global.riskPercent}%`);
+logWithTimestamp(`📊 Symbols configured: ${Object.keys(this.config.symbols).join(', ')}`);
 
       // Update status broadcaster with config info
       this.statusBroadcaster.updateStatus({
@@ -95,13 +171,18 @@ class AsterBot {
         symbols: Object.keys(this.config.symbols),
       });
 
+      // Broadcast trade size warnings if any
+      if (this.tradeSizeWarnings.length > 0) {
+        this.statusBroadcaster.broadcastTradeSizeWarnings(this.tradeSizeWarnings);
+      }
+
       // Listen for config updates
       configManager.on('config:updated', (newConfig) => {
         this.handleConfigUpdate(newConfig);
       });
 
       configManager.on('config:error', (error) => {
-        console.error('❌ Config error:', error.message);
+logErrorWithTimestamp('❌ Config error:', error.message);
         this.statusBroadcaster.broadcastConfigError(
           'Configuration Error',
           error.message,
@@ -114,14 +195,13 @@ class AsterBot {
       });
 
       // Check API keys
-      const hasValidApiKeys = this.config.api.apiKey && this.config.api.secretKey &&
-                              this.config.api.apiKey.length > 0 && this.config.api.secretKey.length > 0;
+      const hasValidApiKeys = exchange.hasCredentials();
 
       if (!hasValidApiKeys) {
-        console.log('⚠️  WARNING: No API keys configured. Running in PAPER MODE only.');
-        console.log('   Please configure your API keys via the web interface at http://localhost:3000/config');
+logWithTimestamp('⚠️  WARNING: No API keys configured. Running in PAPER MODE only.');
+logWithTimestamp('   Please configure your API keys via the web interface at http://localhost:3000/config');
         if (!this.config.global.paperMode) {
-          console.error('❌ Cannot run in LIVE mode without API keys!');
+logErrorWithTimestamp('❌ Cannot run in LIVE mode without API keys!');
           this.statusBroadcaster.broadcastConfigError(
             'Invalid Configuration',
             'Cannot run in LIVE mode without API keys. Please configure your API keys or enable paper mode.',
@@ -133,23 +213,45 @@ class AsterBot {
         }
       }
 
+      // Lighter: check the network, the registered API key and the key's permissions before anything trades.
+      // Trading methods refuse to sign until these pass; in live mode a failure stops the bot here.
+      if (hasValidApiKeys && exchange instanceof LighterAdapter) {
+        try {
+          const report = await exchange.verifyStartup();
+logWithTimestamp(`✅ Lighter startup checks passed (${report.profile}, account ${report.accountIndex}, API key ${report.apiKeyIndex})`);
+        } catch (error: any) {
+          const message = error?.message || String(error);
+logErrorWithTimestamp('❌ Lighter startup checks failed:', message);
+          this.statusBroadcaster.broadcastConfigError(
+            'Lighter Startup Check Failed',
+            message,
+            { component: 'AsterBot', rawError: error }
+          );
+          if (!this.config.global.paperMode) {
+            throw new Error(`Lighter startup checks failed: ${message}`);
+          }
+        }
+      }
+
       if (hasValidApiKeys) {
         // Initialize balance service and set up WebSocket broadcasting
         try {
-          console.log('Initializing balance service...');
-          await initializeBalanceService(this.config.api);
+logWithTimestamp('Initializing balance service...');
+          // The Aster balance service keeps the credentials it started with (a static snapshot, as before).
+          // Other venues share the bot's adapter: a second Lighter adapter would load a second signer.
+          await initializeBalanceService(exchange.id === 'aster' ? createExchangeAdapter(this.config) : exchange);
 
           // Connect balance service to status broadcaster
           const balanceService = getBalanceService();
           if (balanceService) {
             balanceService.on('balanceUpdate', (balanceData) => {
-              console.log('[Bot] Broadcasting balance update via WebSocket');
+logWithTimestamp('[Bot] Broadcasting balance update via WebSocket');
               this.statusBroadcaster.broadcast('balance_update', balanceData);
             });
           }
-          console.log('✅ Balance service initialized and connected to WebSocket broadcaster');
+logWithTimestamp('✅ Balance service initialized and connected to WebSocket broadcaster');
         } catch (error) {
-          console.error('Failed to initialize balance service:', error);
+logErrorWithTimestamp('Failed to initialize balance service:', error);
           this.statusBroadcaster.broadcastApiError(
             'Balance Service Initialization Failed',
             'Failed to connect to balance service. Some features may be unavailable.',
@@ -163,31 +265,33 @@ class AsterBot {
 
         // Check and set position mode
         try {
-          this.isHedgeMode = await getPositionMode(this.config.api);
-          console.log(`📊 Position Mode: ${this.isHedgeMode ? 'HEDGE MODE' : 'ONE-WAY MODE'}`);
+          this.isHedgeMode = await exchange.getHedgeMode();
+logWithTimestamp(`📊 Position Mode: ${this.isHedgeMode ? 'HEDGE MODE' : 'ONE-WAY MODE'}`);
 
           // If config specifies a position mode and it differs from current, automatically set it
           if (this.config.global.positionMode) {
             const wantHedgeMode = this.config.global.positionMode === 'HEDGE';
-            if (wantHedgeMode !== this.isHedgeMode) {
-              console.log(`⚠️  Config specifies ${this.config.global.positionMode} mode but account is in ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'} mode`);
-              console.log(`🔄 Automatically changing position mode to match config...`);
+            if (wantHedgeMode && !exchange.capabilities.hedgeMode) {
+logWarnWithTimestamp(`⚠️  ${getVenueEntry(exchange.id).name} has no hedge mode (one netted position per symbol); using ONE-WAY mode`);
+            } else if (wantHedgeMode !== this.isHedgeMode) {
+logWithTimestamp(`⚠️  Config specifies ${this.config.global.positionMode} mode but account is in ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'} mode`);
+logWithTimestamp(`🔄 Automatically changing position mode to match config...`);
 
               try {
-                await setPositionMode(wantHedgeMode, this.config.api);
+                await exchange.setHedgeMode(wantHedgeMode);
                 this.isHedgeMode = wantHedgeMode;
-                console.log(`✅ Position mode successfully changed to ${this.config.global.positionMode}`);
+logWithTimestamp(`✅ Position mode successfully changed to ${this.config.global.positionMode}`);
               } catch (error: any) {
                 // Check if error is because of open positions
                 if (error?.response?.data?.code === -5021) {
-                  console.log(`⚠️  Cannot change position mode: Open positions exist`);
-                  console.log(`📊 Using current exchange position mode: ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'}`);
+logWithTimestamp(`⚠️  Cannot change position mode: Open positions exist`);
+logWithTimestamp(`📊 Using current exchange position mode: ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'}`);
                 } else if (error?.response?.data?.code === -5020) {
-                  console.log(`⚠️  Cannot change position mode: Open orders exist`);
-                  console.log(`📊 Using current exchange position mode: ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'}`);
+logWithTimestamp(`⚠️  Cannot change position mode: Open orders exist`);
+logWithTimestamp(`📊 Using current exchange position mode: ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'}`);
                 } else {
                   const errorMsg = error?.response?.data?.msg || error?.message || 'Unknown error';
-                  console.error('❌ Failed to change position mode:', error?.response?.data || error);
+logErrorWithTimestamp('❌ Failed to change position mode:', error?.response?.data || error);
                   this.statusBroadcaster.broadcastConfigError(
                     'Position Mode Change Failed',
                     `Failed to change position mode: ${errorMsg}`,
@@ -197,13 +301,13 @@ class AsterBot {
                       rawError: error?.response?.data || error,
                     }
                   );
-                  console.log(`📊 Using current exchange position mode: ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'}`);
+logWithTimestamp(`📊 Using current exchange position mode: ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'}`);
                 }
               }
             }
           }
         } catch (error) {
-          console.error('⚠️  Failed to check position mode, assuming ONE-WAY mode:', error);
+logErrorWithTimestamp('⚠️  Failed to check position mode, assuming ONE-WAY mode:', error);
           this.statusBroadcaster.broadcastApiError(
             'Position Mode Check Failed',
             'Failed to check position mode from exchange. Assuming ONE-WAY mode.',
@@ -223,86 +327,96 @@ class AsterBot {
             const currentBalance = balanceService.getCurrentBalance();
 
             if (status.connected) {
-              console.log('✅ Real-time balance service connected');
-              console.log('[Bot] Balance service status:', {
+logWithTimestamp('✅ Real-time balance service connected');
+logWithTimestamp('[Bot] Balance service status:', {
                 connected: status.connected,
                 lastUpdate: status.lastUpdate ? new Date(status.lastUpdate).toISOString() : 'never',
                 balance: currentBalance
               });
             } else {
-              console.warn('⚠️ Balance service initialized but not fully connected:', status.error);
+logWarnWithTimestamp('⚠️ Balance service initialized but not fully connected:', status.error);
             }
 
             // Initialize PnL tracking service
             if (currentBalance && currentBalance.totalBalance > 0) {
               pnlService.resetSession(currentBalance.totalBalance);
-              console.log('✅ PnL tracking service initialized with balance:', currentBalance.totalBalance);
+logWithTimestamp('✅ PnL tracking service initialized with balance:', currentBalance.totalBalance);
             } else {
-              console.warn('⚠️ PnL tracking not initialized - no balance data available');
+logWarnWithTimestamp('⚠️ PnL tracking not initialized - no balance data available');
             }
           }
         } catch (error: any) {
-          console.error('⚠️  Balance service failed to start:', error instanceof Error ? error.message : error);
-          console.error('[Bot] Balance service error stack:', error instanceof Error ? error.stack : 'No stack trace');
+logErrorWithTimestamp('⚠️  Balance service failed to start:', error instanceof Error ? error.message : error);
+logErrorWithTimestamp('[Bot] Balance service error stack:', error instanceof Error ? error.stack : 'No stack trace');
           this.statusBroadcaster.addError(`Balance Service: ${error instanceof Error ? error.message : 'Unknown error'}`);
           // Continue running bot even if balance service fails
-          console.log('[Bot] Bot will continue without real-time balance updates');
+logWithTimestamp('[Bot] Bot will continue without real-time balance updates');
+        }
+
+        // Lighter has no Binance-format mark price or kline stream: prices and VWAP use REST instead
+        const hasMarketStreams = exchange.id !== 'lighter';
+        if (!hasMarketStreams) {
+logWithTimestamp('ℹ️  Lighter: no streaming mark prices or klines; positions, SL/TP checks and VWAP use REST market data');
         }
 
         // Initialize Price Service for real-time mark prices
-        try {
-          await initializePriceService();
-          console.log('✅ Real-time price service started');
+        if (hasMarketStreams) {
+          try {
+            await initializePriceService(exchange);
+logWithTimestamp('✅ Real-time price service started');
 
-          // Listen for mark price updates and broadcast to web UI
-          const priceService = getPriceService();
-          if (priceService) {
-            priceService.on('markPriceUpdate', (priceUpdates) => {
-              // Broadcast price updates to web UI for live PnL calculation
-              this.statusBroadcaster.broadcast('mark_price_update', priceUpdates);
-            });
+            // Listen for mark price updates and broadcast to web UI
+            const priceService = getPriceService();
+            if (priceService) {
+              priceService.on('markPriceUpdate', (priceUpdates) => {
+                // Broadcast price updates to web UI for live PnL calculation
+                this.statusBroadcaster.broadcast('mark_price_update', priceUpdates);
+              });
 
-            // Note: We'll subscribe to position symbols after position manager starts
+              // Note: We'll subscribe to position symbols after position manager starts
+            }
+          } catch (error: any) {
+logErrorWithTimestamp('⚠️  Price service failed to start:', error.message);
+            this.statusBroadcaster.addError(`Price Service: ${error.message}`);
           }
-        } catch (error: any) {
-          console.error('⚠️  Price service failed to start:', error.message);
-          this.statusBroadcaster.addError(`Price Service: ${error.message}`);
         }
 
         // Initialize VWAP Streamer for real-time VWAP calculations
-        try {
-          await vwapStreamer.start(this.config);
+        if (hasMarketStreams) {
+          try {
+            await vwapStreamer.start(this.config, exchange);
 
-          // Listen for VWAP updates and broadcast to web UI
-          vwapStreamer.on('vwap', (vwapData) => {
-            this.statusBroadcaster.broadcast('vwap_update', vwapData);
-          });
+            // Listen for VWAP updates and broadcast to web UI
+            vwapStreamer.on('vwap', (vwapData) => {
+              this.statusBroadcaster.broadcast('vwap_update', vwapData);
+            });
 
-          // Also broadcast all VWAP values periodically
-          setInterval(() => {
-            const allVwap = vwapStreamer.getAllVWAP();
-            if (allVwap.size > 0) {
-              const vwapArray = Array.from(allVwap.values());
-              this.statusBroadcaster.broadcast('vwap_bulk', vwapArray);
-            }
-          }, 2000);
+            // Also broadcast all VWAP values periodically
+            setInterval(() => {
+              const allVwap = vwapStreamer.getAllVWAP();
+              if (allVwap.size > 0) {
+                const vwapArray = Array.from(allVwap.values());
+                this.statusBroadcaster.broadcast('vwap_bulk', vwapArray);
+              }
+            }, 2000);
 
-          console.log('✅ VWAP streaming service started');
-        } catch (error: any) {
-          console.error('⚠️  VWAP streamer failed to start:', error.message);
-          this.statusBroadcaster.addError(`VWAP Streamer: ${error.message}`);
+logWithTimestamp('✅ VWAP streaming service started');
+          } catch (error: any) {
+logErrorWithTimestamp('⚠️  VWAP streamer failed to start:', error.message);
+            this.statusBroadcaster.addError(`VWAP Streamer: ${error.message}`);
+          }
         }
       }
 
       // Initialize Position Manager
-      this.positionManager = new PositionManager(this.config, this.isHedgeMode);
+      this.positionManager = new PositionManager(this.config, this.isHedgeMode, exchange);
 
       // Inject status broadcaster for real-time position updates
       this.positionManager.setStatusBroadcaster(this.statusBroadcaster);
 
       try {
         await this.positionManager.start();
-        console.log('✅ Position Manager started');
+logWithTimestamp('✅ Position Manager started');
 
         // Subscribe to price updates for all open positions
         const priceService = getPriceService();
@@ -312,11 +426,11 @@ class AsterBot {
 
           if (positionSymbols.length > 0) {
             priceService.subscribeToSymbols(positionSymbols);
-            console.log(`📊 Price streaming enabled for open positions: ${positionSymbols.join(', ')}`);
+logWithTimestamp(`📊 Price streaming enabled for open positions: ${positionSymbols.join(', ')}`);
           }
         }
       } catch (error: any) {
-        console.error('⚠️  Position Manager failed to start:', error.message);
+logErrorWithTimestamp('⚠️  Position Manager failed to start:', error.message);
         this.statusBroadcaster.addError(`Position Manager: ${error.message}`);
         // Continue running in paper mode without position manager
         if (!this.config.global.paperMode) {
@@ -324,8 +438,10 @@ class AsterBot {
         }
       }
 
-      // Initialize Hunter
-      this.hunter = new Hunter(this.config, this.isHedgeMode);
+      // Initialize Hunter with the configured liquidation feed (Lighter: shadow mode unless switched live;
+      // across venues the feed runs behind the mark-ratio guard)
+      const liquidationFeed = createLiquidationSource(this.config, { getConfig: () => this.config! });
+      this.hunter = new Hunter(this.config, this.isHedgeMode, exchange, liquidationFeed);
 
       // Inject status broadcaster for order events
       this.hunter.setStatusBroadcaster(this.statusBroadcaster);
@@ -337,31 +453,30 @@ class AsterBot {
 
       // Connect hunter events to position manager and status broadcaster
       this.hunter.on('liquidationDetected', (liquidationEvent: any) => {
-        console.log(`💥 Liquidation: ${liquidationEvent.symbol} ${liquidationEvent.side} ${liquidationEvent.quantity}`);
+        logWithTimestamp(`💥 Liquidation: ${liquidationEvent.symbol} ${liquidationEvent.side} ${liquidationEvent.quantity}`);
         this.statusBroadcaster.broadcastLiquidation(liquidationEvent);
         this.statusBroadcaster.logActivity(`Liquidation: ${liquidationEvent.symbol} ${liquidationEvent.side} ${liquidationEvent.quantity}`);
       });
 
       this.hunter.on('tradeOpportunity', (data: any) => {
-        console.log(`🎯 Trade opportunity: ${data.symbol} ${data.side} (${data.reason})`);
+        logWithTimestamp(`🎯 Trade opportunity: ${data.symbol} ${data.side} (${data.reason})`);
         this.statusBroadcaster.broadcastTradeOpportunity(data);
         this.statusBroadcaster.logActivity(`Opportunity: ${data.symbol} ${data.side} - ${data.reason}`);
       });
 
       this.hunter.on('tradeBlocked', (data: any) => {
-        console.log(`🚫 Trade blocked: ${data.symbol} ${data.side} - ${data.reason}`);
+        logWithTimestamp(`🚫 Trade blocked: ${data.symbol} ${data.side} - ${data.reason}`);
         this.statusBroadcaster.broadcastTradeBlocked(data);
         this.statusBroadcaster.logActivity(`Blocked: ${data.symbol} ${data.side} - ${data.blockType}`);
       });
 
       // Listen for threshold updates and broadcast to UI
       thresholdMonitor.on('thresholdUpdate', (thresholdUpdate: any) => {
-        console.log(`📊 Threshold update: ${thresholdUpdate.symbol} ${thresholdUpdate.side} - ${thresholdUpdate.progress.toFixed(1)}% (${thresholdUpdate.currentVolume.toFixed(0)}/${thresholdUpdate.threshold})`);
         this.statusBroadcaster.broadcastThresholdUpdate(thresholdUpdate);
       });
 
       this.hunter.on('positionOpened', (data: any) => {
-        console.log(`📈 Position opened: ${data.symbol} ${data.side} qty=${data.quantity}`);
+        logWithTimestamp(`📈 Position opened: ${data.symbol} ${data.side} qty=${data.quantity}`);
         this.positionManager?.onNewPosition(data);
         this.statusBroadcaster.broadcastPositionUpdate({
           symbol: data.symbol,
@@ -379,7 +494,7 @@ class AsterBot {
         const priceService = getPriceService();
         if (priceService && data.symbol) {
           priceService.subscribeToSymbols([data.symbol]);
-          console.log(`📊 Added price streaming for new position: ${data.symbol}`);
+logWithTimestamp(`📊 Added price streaming for new position: ${data.symbol}`);
         }
 
         // Trigger balance refresh after position open
@@ -399,24 +514,24 @@ class AsterBot {
       });
 
       this.hunter.on('error', (error: any) => {
-        console.error('❌ Hunter error:', error);
+logErrorWithTimestamp('❌ Hunter error:', error);
         this.statusBroadcaster.addError(error.toString());
       });
 
       await this.hunter.start();
-      console.log('✅ Liquidation Hunter started');
+logWithTimestamp('✅ Liquidation Hunter started');
 
       // Start the cleanup scheduler for liquidation database
       cleanupScheduler.start();
-      console.log('✅ Database cleanup scheduler started (7-day retention)');
+logWithTimestamp('✅ Database cleanup scheduler started (7-day retention)');
 
       this.isRunning = true;
       this.statusBroadcaster.setRunning(true);
-      console.log('🟢 Bot is now running. Press Ctrl+C to stop.');
+logWithTimestamp('🟢 Bot is now running. Press Ctrl+C to stop.');
 
       // Handle graceful shutdown with enhanced signal handling
       const shutdownHandler = async (signal: string) => {
-        console.log(`\n📡 Received ${signal}`);
+logWithTimestamp(`\n📡 Received ${signal}`);
         await this.stop();
       };
 
@@ -433,30 +548,30 @@ class AsterBot {
       // Handle process exit
       process.on('exit', (code) => {
         if (!this.isRunning) return;
-        console.log(`Process exiting with code ${code}`);
+logWithTimestamp(`Process exiting with code ${code}`);
         // Synchronous cleanup only
         killAllProcesses();
       });
 
       // Handle uncaught errors
       process.on('uncaughtException', (error) => {
-        console.error('❌ Uncaught exception:', error);
+logErrorWithTimestamp('❌ Uncaught exception:', error);
         this.stop().catch(console.error);
       });
 
       process.on('unhandledRejection', (reason, promise) => {
-        console.error('❌ Unhandled rejection at:', promise, 'reason:', reason);
+logErrorWithTimestamp('❌ Unhandled rejection at:', promise, 'reason:', reason);
         this.stop().catch(console.error);
       });
 
     } catch (error) {
-      console.error('❌ Failed to start bot:', error);
+logErrorWithTimestamp('❌ Failed to start bot:', error);
       process.exit(1);
     }
   }
 
   private async handleConfigUpdate(newConfig: Config): Promise<void> {
-    console.log('🔄 Applying config update...');
+logWithTimestamp('🔄 Applying config update...');
 
     const oldConfig = this.config;
     this.config = newConfig;
@@ -468,26 +583,43 @@ class AsterBot {
         symbols: Object.keys(newConfig.symbols),
       });
 
+      // Switching venue or liquidation source mid-run is unsafe (open positions live on the old venue)
+      if (oldConfig && (getConfiguredVenue(oldConfig) !== getConfiguredVenue(newConfig) ||
+          getConfiguredLiquidationSource(oldConfig) !== getConfiguredLiquidationSource(newConfig))) {
+logWarnWithTimestamp('⚠️  Trading venue or liquidation source changed - restart the bot to apply it (close open positions first)');
+        this.statusBroadcaster.logActivity('Config: Venue change saved, restart the bot to apply');
+      }
+
+      // The Lighter network is fixed for the process (the signer keeps one chain id). Until a restart the
+      // adapter refuses credentials saved for another network.
+      if (oldConfig && readLighterSettings(oldConfig).profile !== readLighterSettings(newConfig).profile) {
+logWarnWithTimestamp(`⚠️  Lighter network changed to ${readLighterSettings(newConfig).profile} - restart the bot to apply it`);
+        this.statusBroadcaster.logActivity('Config: Lighter network change saved, restart the bot to apply');
+      }
+
+      // Lighter symbol mapping and the liquidation feed's shadow / live switch follow the new config now
+      applyLighterConfig();
+
       // Notify about critical changes
       if (oldConfig && oldConfig.global.paperMode !== newConfig.global.paperMode) {
-        console.log(`⚠️  Paper Mode changed: ${oldConfig.global.paperMode} → ${newConfig.global.paperMode}`);
+logWithTimestamp(`⚠️  Paper Mode changed: ${oldConfig.global.paperMode} → ${newConfig.global.paperMode}`);
         this.statusBroadcaster.logActivity(`Config: Paper Mode ${newConfig.global.paperMode ? 'ENABLED' : 'DISABLED'}`);
       }
 
       // Update Hunter with new config
       if (this.hunter) {
         this.hunter.updateConfig(newConfig);
-        console.log('✅ Hunter config updated');
+logWithTimestamp('✅ Hunter config updated');
       }
 
       // Update threshold monitor with new config
       thresholdMonitor.updateConfig(newConfig);
-      console.log('✅ Threshold monitor config updated');
+logWithTimestamp('✅ Threshold monitor config updated');
 
       // Update PositionManager with new config
       if (this.positionManager) {
         this.positionManager.updateConfig(newConfig);
-        console.log('✅ Position Manager config updated');
+logWithTimestamp('✅ Position Manager config updated');
       }
 
       // Update VWAP streamer with new symbols
@@ -501,20 +633,21 @@ class AsterBot {
 
         if (symbolsChanged) {
           await vwapStreamer.updateSymbols(newConfig);
-          console.log('✅ VWAP symbols updated');
+logWithTimestamp('✅ VWAP symbols updated');
         }
       }
 
       // Broadcast config update to web UI
+      // Credentials are left out: this goes to every dashboard client
       this.statusBroadcaster.broadcast('config_updated', {
         timestamp: new Date(),
-        config: newConfig,
+        config: withoutSecrets(newConfig),
       });
 
-      console.log('✅ Config update applied successfully');
+logWithTimestamp('✅ Config update applied successfully');
       this.statusBroadcaster.logActivity('Config reloaded from file');
     } catch (error) {
-      console.error('❌ Failed to apply config update:', error);
+logErrorWithTimestamp('❌ Failed to apply config update:', error);
       this.statusBroadcaster.addError(`Config update failed: ${error}`);
 
       // Rollback to old config on error
@@ -529,68 +662,115 @@ class AsterBot {
   async stop(): Promise<void> {
     if (!this.isRunning) return;
 
-    console.log('\n🛑 Stopping bot...');
+logWithTimestamp('\n🛑 Stopping bot...');
     this.isRunning = false;
     this.statusBroadcaster.setRunning(false);
 
     // Create a timeout to force exit if graceful shutdown takes too long
     const forceExitTimeout = setTimeout(() => {
-      console.error('⚠️  Graceful shutdown timeout, forcing exit...');
+logErrorWithTimestamp('⚠️  Graceful shutdown timeout, forcing exit...');
       process.exit(1);
     }, 5000); // 5 second timeout
 
     try {
       if (this.hunter) {
         this.hunter.stop();
-        console.log('✅ Hunter stopped');
+logWithTimestamp('✅ Hunter stopped');
       }
 
       if (this.positionManager) {
         this.positionManager.stop();
-        console.log('✅ Position Manager stopped');
+logWithTimestamp('✅ Position Manager stopped');
       }
 
       // Stop other services
       vwapStreamer.stop();
-      console.log('✅ VWAP streamer stopped');
+logWithTimestamp('✅ VWAP streamer stopped');
 
       await stopBalanceService().catch(err =>
-        console.error('⚠️  Balance service stop error:', err)
+logErrorWithTimestamp('⚠️  Balance service stop error:', err)
       );
-      console.log('✅ Balance service stopped');
+logWithTimestamp('✅ Balance service stopped');
 
       stopPriceService();
-      console.log('✅ Price service stopped');
+logWithTimestamp('✅ Price service stopped');
+
+      stopLighterRuntime();
 
       cleanupScheduler.stop();
-      console.log('✅ Cleanup scheduler stopped');
+logWithTimestamp('✅ Cleanup scheduler stopped');
 
       configManager.stop();
-      console.log('✅ Config manager stopped');
+logWithTimestamp('✅ Config manager stopped');
 
       this.statusBroadcaster.stop();
-      console.log('✅ WebSocket server stopped');
+logWithTimestamp('✅ WebSocket server stopped');
 
       clearTimeout(forceExitTimeout);
-      console.log('👋 Bot stopped successfully');
+logWithTimestamp('👋 Bot stopped successfully');
       process.exit(0);
     } catch (error) {
       clearTimeout(forceExitTimeout);
-      console.error('❌ Error while stopping:', error);
+logErrorWithTimestamp('❌ Error while stopping:', error);
       process.exit(1);
     }
   }
 
+  // Beta warnings and, whenever Lighter is involved, the network it talks to
+  private logBetaAndNetwork(exchange: ExchangeAdapter, lighterLiquidations: boolean): void {
+    if (!this.config) return;
+    const entries = [getVenueEntry(exchange.id), getLiquidationSourceEntry(getConfiguredLiquidationSource(this.config))];
+    for (const entry of entries) {
+      if (entry.status === 'beta') {
+logWarnWithTimestamp(`⚠️  ${entry.name} is in BETA. ${BETA_WARNING}`);
+      }
+    }
+    if (exchange.id !== 'lighter' && !lighterLiquidations) return;
+
+    const profile = resolveLighterProfile(this.config);
+logWithTimestamp(`🌐 Lighter network: ${profile.label} (chain ${profile.chainId})${profile.testnet ? ' - test funds' : ' - REAL FUNDS'}`);
+    if (lighterLiquidations) {
+      const live = readLighterSettings(this.config).liquidationsLive;
+logWithTimestamp(live
+        ? '⚠️  Lighter liquidation feed is LIVE: detected liquidations are traded'
+        : '🕶️  Lighter liquidation feed is in SHADOW mode: liquidations are logged, never traded');
+    }
+    if (exchange instanceof LighterAdapter) {
+      startLighterMarketRefresh(this.config);
+    }
+  }
+
+  private handleLighterAlert(event: LighterRuntimeAlert): void {
+    if (event.source === 'mark-guard') {
+      this.statusBroadcaster.broadcastConfigError('Lighter Symbol Blocked', event.message, {
+        component: 'LighterMarkGuard',
+        symbol: event.symbol,
+      });
+      return;
+    }
+    if (event.source === 'late-tx') {
+      this.statusBroadcaster.broadcastTradingError('Lighter Transaction Resolved Late', event.message, {
+        component: 'LighterNonceManager',
+      });
+      return;
+    }
+    const title = event.source === 'liquidations' ? 'Lighter Liquidation Feed' : 'Lighter Account Stream';
+    this.statusBroadcaster.broadcastWebSocketError(title, event.alert.message, {
+      component: event.source === 'liquidations' ? 'LighterLiquidationSource' : 'LighterUserStream',
+      rawError: { kind: event.alert.kind },
+    });
+  }
+
   async status(): Promise<void> {
     if (!this.isRunning) {
-      console.log('⚠️  Bot is not running');
+logWithTimestamp('⚠️  Bot is not running');
       return;
     }
 
-    console.log('🟢 Bot Status:');
-    console.log(`  Running: ${this.isRunning}`);
-    console.log(`  Paper Mode: ${this.config?.global.paperMode}`);
-    console.log(`  Symbols: ${this.config ? Object.keys(this.config.symbols).join(', ') : 'N/A'}`);
+logWithTimestamp('🟢 Bot Status:');
+logWithTimestamp(`  Running: ${this.isRunning}`);
+logWithTimestamp(`  Paper Mode: ${this.config?.global.paperMode}`);
+logWithTimestamp(`  Symbols: ${this.config ? Object.keys(this.config.symbols).join(', ') : 'N/A'}`);
   }
 }
 
@@ -609,9 +789,9 @@ async function main() {
       await bot.status();
       break;
     default:
-      console.log('Usage: node src/bot/index.js [start|status]');
-      console.log('  start  - Start the bot');
-      console.log('  status - Show bot status');
+logWithTimestamp('Usage: node src/bot/index.js [start|status]');
+logWithTimestamp('  start  - Start the bot');
+logWithTimestamp('  status - Show bot status');
       process.exit(1);
   }
 }
@@ -619,7 +799,7 @@ async function main() {
 // Run if this is the main module
 if (require.main === module) {
   main().catch((error) => {
-    console.error('Fatal error:', error);
+logErrorWithTimestamp('Fatal error:', error);
     process.exit(1);
   });
 }

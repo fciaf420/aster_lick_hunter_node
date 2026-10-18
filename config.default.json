@@ -13,9 +13,14 @@
       "leverage": 10,
       "tpPercent": 1,
       "slPercent": 20,
+      "orderType": "LIMIT",
+      "forceMarketEntry": false,
       "vwapProtection": true,
       "vwapTimeframe": "5m",
-      "vwapLookback": 200
+      "vwapLookback": 200,
+      "useThreshold": false,
+      "thresholdTimeWindow": 60000,
+      "thresholdCooldown": 30000
     }
   },
   "global": {
@@ -23,8 +28,11 @@
     "paperMode": true,
     "positionMode": "HEDGE",
     "maxOpenPositions": 5,
+    "useThresholdSystem": false,
+    "exchange": "aster",
+    "liquidationSource": "aster",
     "server": {
-      "dashboardPassword": "",
+      "dashboardPassword": "admin",
       "dashboardPort": 3000,
       "websocketPort": 8080,
       "useRemoteWebSocket": false,
@@ -35,8 +43,20 @@
       "maxOrderCount": 1200,
       "reservePercent": 30,
       "enableBatching": true,
-      "queueTimeout": 30000
+      "queueTimeout": 30000,
+      "enableDeduplication": true,
+      "deduplicationWindowMs": 1000,
+      "parallelProcessing": true,
+      "maxConcurrentRequests": 3
     }
   },
-  "version": "1.1.0"
+  "venues": {
+    "lighter": {
+      "profile": "testnet",
+      "liquidationsLive": false,
+      "sltpSlippagePct": 1,
+      "sendTxPerMin": 60
+    }
+  },
+  "version": "1.3.0"
 }

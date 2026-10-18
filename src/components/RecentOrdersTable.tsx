@@ -39,54 +39,94 @@ interface RecentOrdersTableProps {
   maxRows?: number;
 }
 
-export default function RecentOrdersTable({ maxRows = 50 }: RecentOrdersTableProps) {
-  const { config } = useConfig();
+export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrdersTableProps) {
+  const { config: _config } = useConfig();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('FILLED');
   const [symbolFilter, setSymbolFilter] = useState<string>('ALL');
   const [showMore, setShowMore] = useState(false);
   const [flashingOrders, setFlashingOrders] = useState<Set<number>>(new Set());
+  const [hasMore, setHasMore] = useState(true);
+  const [currentLimit, setCurrentLimit] = useState(50); // Start with 50 orders
+  const LOAD_MORE_INCREMENT = 50; // Load 50 more each time
 
-  // Get available symbols from config
+  // Get available symbols from orders (not just configured symbols)
   const availableSymbols = useMemo(() => {
-    if (!config?.symbols) return [];
-    return Object.keys(config.symbols);
-  }, [config]);
+    // Extract unique symbols from all orders
+    const symbolSet = new Set<string>();
+    orders.forEach(order => symbolSet.add(order.symbol));
+    return Array.from(symbolSet).sort();
+  }, [orders]);
 
   // Load initial orders
-  const loadOrders = useCallback(async (force = false) => {
+  const loadOrders = useCallback(async (force = false, isLoadMore = false) => {
     try {
-      setLoading(true);
+      if (isLoadMore) {
+        setLoadingMore(true);
+      } else {
+        setLoading(true);
+        setCurrentLimit(50); // Reset to initial limit
+      }
       setError(null);
+
+      const limitToUse = isLoadMore ? currentLimit + LOAD_MORE_INCREMENT : 50;
+
+      // Handle REDUCE filter separately - it's a custom filter, not a real order status
+      // For REDUCE filter, we need to fetch FILLED orders and then filter client-side
+      const actualStatusFilter = statusFilter === 'REDUCE' ? 'FILLED' : statusFilter;
 
       // Set filters in store
       orderStore.setFilters({
-        status: statusFilter === 'ALL' ? undefined : statusFilter as OrderStatus,
+        status: actualStatusFilter === 'ALL' ? undefined : actualStatusFilter as OrderStatus,
         symbol: symbolFilter === 'ALL' ? undefined : symbolFilter,
-        limit: maxRows,
+        limit: limitToUse,
       });
 
       // Fetch orders
       await orderStore.fetchOrders(force);
       let filteredOrders = orderStore.getFilteredOrders();
 
-      // Filter by configured symbols only
-      if (availableSymbols.length > 0) {
-        filteredOrders = filteredOrders.filter(order =>
-          availableSymbols.includes(order.symbol)
-        );
+      // If REDUCE filter is active, filter to only reduce-only orders
+      if (statusFilter === 'REDUCE') {
+        filteredOrders = filteredOrders.filter(order => {
+          // Check if this is a reduce-only order (closing/reducing position)
+          const hasRealizedPnL = order.realizedProfit !== undefined &&
+                                 order.realizedProfit !== null &&
+                                 order.realizedProfit !== '' &&
+                                 order.realizedProfit !== '0';
+
+          // Check if it's a reduce-only order or SL/TP type
+          const isReduceOrder = order.reduceOnly ||
+                               order.type === OrderType.STOP_MARKET ||
+                               order.type === OrderType.TAKE_PROFIT_MARKET ||
+                               order.type === 'STOP' ||
+                               order.type === 'TAKE_PROFIT' ||
+                               order.closePosition;
+
+          return hasRealizedPnL || isReduceOrder;
+        });
       }
 
+      // Show orders from all symbols, not just configured ones
       setOrders(filteredOrders);
+
+      // Check if there are more orders to load
+      setHasMore(filteredOrders.length >= limitToUse);
+
+      if (isLoadMore) {
+        setCurrentLimit(limitToUse);
+      }
     } catch (err) {
       console.error('Failed to load orders:', err);
       setError('Failed to load orders');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  }, [statusFilter, symbolFilter, maxRows, availableSymbols]);
+  }, [statusFilter, symbolFilter, currentLimit, LOAD_MORE_INCREMENT]);
 
   // Initial load
   useEffect(() => {
@@ -96,37 +136,26 @@ export default function RecentOrdersTable({ maxRows = 50 }: RecentOrdersTablePro
   // Subscribe to order updates
   useEffect(() => {
     const handleOrdersUpdate = (_updatedOrders: Order[]) => {
-      let filtered = orderStore.getFilteredOrders();
-      // Filter by configured symbols only
-      if (availableSymbols.length > 0) {
-        filtered = filtered.filter(order =>
-          availableSymbols.includes(order.symbol)
-        );
-      }
+      const filtered = orderStore.getFilteredOrders();
+      // Show orders from all symbols
       setOrders(filtered);
     };
 
     const handleNewOrder = (order: Order) => {
-      // Only flash if this order is for a configured symbol
-      if (availableSymbols.length === 0 || availableSymbols.includes(order.symbol)) {
-        // Flash animation for new orders
-        setFlashingOrders(prev => new Set(prev).add(order.orderId));
-        setTimeout(() => {
-          setFlashingOrders(prev => {
-            const next = new Set(prev);
-            next.delete(order.orderId);
-            return next;
-          });
-        }, 2000);
-      }
+      // Flash animation for all new orders
+      setFlashingOrders(prev => new Set(prev).add(order.orderId));
+      setTimeout(() => {
+        setFlashingOrders(prev => {
+          const next = new Set(prev);
+          next.delete(order.orderId);
+          return next;
+        });
+      }, 2000);
     };
 
     const handleOrderFilled = (order: Order) => {
-      // Only log if this order is for a configured symbol
-      if (availableSymbols.length === 0 || availableSymbols.includes(order.symbol)) {
-        // Special handling for filled orders
-        console.log('Order filled:', order.symbol, order.realizedProfit);
-      }
+      // Log filled orders from all symbols
+      console.log('Order filled:', order.symbol, order.realizedProfit);
     };
 
     // Subscribe to store events
@@ -150,7 +179,7 @@ export default function RecentOrdersTable({ maxRows = 50 }: RecentOrdersTablePro
       orderStore.off('order:filled', handleOrderFilled);
       cleanupWebSocket();
     };
-  }, [availableSymbols]);
+  }, []); // No dependencies - setup once on mount
 
   // Format time
   const formatTime = (timestamp: number) => {
@@ -301,12 +330,8 @@ export default function RecentOrdersTable({ maxRows = 50 }: RecentOrdersTablePro
 
   // Get statistics
   const statistics = useMemo(() => {
-    // Calculate statistics only for configured symbols
-    const configuredOrders = availableSymbols.length > 0
-      ? orders.filter(o => availableSymbols.includes(o.symbol))
-      : orders;
-
-    const filled = configuredOrders.filter(o => o.status === OrderStatus.FILLED);
+    // Calculate statistics for all symbols
+    const filled = orders.filter(o => o.status === OrderStatus.FILLED);
 
     // Only count orders that actually closed positions (have PnL data)
     // These are typically reduce-only orders, SL/TP orders, or close orders
@@ -349,13 +374,13 @@ export default function RecentOrdersTable({ maxRows = 50 }: RecentOrdersTablePro
     const losses = ordersWithPnL.filter(o => parseFloat(o.realizedProfit || '0') < 0).length;
 
     return {
-      total: configuredOrders.length,
+      total: orders.length,
       filled: filled.length,
-      open: configuredOrders.filter(o =>
+      open: orders.filter(o =>
         o.status === OrderStatus.NEW ||
         o.status === OrderStatus.PARTIALLY_FILLED
       ).length,
-      canceled: configuredOrders.filter(o => o.status === OrderStatus.CANCELED).length,
+      canceled: orders.filter(o => o.status === OrderStatus.CANCELED).length,
       totalProfit: profit,
       totalLoss: loss,
       netPnL: profit - loss,
@@ -366,7 +391,7 @@ export default function RecentOrdersTable({ maxRows = 50 }: RecentOrdersTablePro
       losses,
       closedTrades: ordersWithPnL.length,
     };
-  }, [orders, availableSymbols]);
+  }, [orders]);
 
   const displayedOrders = showMore ? orders : orders.slice(0, 10);
 
@@ -377,7 +402,7 @@ export default function RecentOrdersTable({ maxRows = 50 }: RecentOrdersTablePro
           <CardTitle className="flex items-center gap-2">
             Recent Orders
             <Badge variant="outline" className="ml-2">
-              {orders.length} orders
+              {orders.length} {hasMore ? `of ${currentLimit}+` : ''} orders
             </Badge>
           </CardTitle>
           <div className="flex items-center gap-2">
@@ -389,6 +414,7 @@ export default function RecentOrdersTable({ maxRows = 50 }: RecentOrdersTablePro
               <SelectContent>
                 <SelectItem value="ALL">All Status</SelectItem>
                 <SelectItem value="FILLED">Filled</SelectItem>
+                <SelectItem value="REDUCE">Reduce</SelectItem>
                 <SelectItem value="NEW">Open</SelectItem>
                 <SelectItem value="PARTIALLY_FILLED">Partial</SelectItem>
                 <SelectItem value="CANCELED">Canceled</SelectItem>
@@ -548,8 +574,8 @@ export default function RecentOrdersTable({ maxRows = 50 }: RecentOrdersTablePro
               </Table>
             </div>
 
-            {orders.length > 10 && (
-              <div className="mt-4 text-center">
+            <div className="mt-4 flex items-center justify-center gap-4">
+              {orders.length > 10 && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -559,8 +585,29 @@ export default function RecentOrdersTable({ maxRows = 50 }: RecentOrdersTablePro
                   {showMore ? 'Show Less' : `Show More (${orders.length - 10} more)`}
                   <ChevronDown className={`h-4 w-4 transition-transform ${showMore ? 'rotate-180' : ''}`} />
                 </Button>
-              </div>
-            )}
+              )}
+
+              {showMore && hasMore && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => loadOrders(true, true)}
+                  disabled={loadingMore}
+                  className="gap-2"
+                >
+                  {loadingMore ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                      Loading...
+                    </>
+                  ) : (
+                    <>
+                      Load {LOAD_MORE_INCREMENT} More Orders
+                    </>
+                  )}
+                </Button>
+              )}
+            </div>
           </>
         )}
       </CardContent>

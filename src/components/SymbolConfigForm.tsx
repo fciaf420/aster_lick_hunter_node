@@ -12,11 +12,15 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { VenueSelector } from '@/components/VenueSelector';
+import { LighterSettings } from '@/components/LighterSettings';
+import { getVenueEntry } from '@/lib/exchange/catalog';
+import type { LighterVenueConfig } from '@/lib/types';
+import type { LiquidationSourceId, VenueId } from '@/lib/exchange/types';
 import {
   Plus,
   Trash2,
   Save,
-  Key,
   Eye,
   EyeOff,
   Shield,
@@ -24,6 +28,8 @@ import {
   AlertCircle,
   Settings2,
   BarChart3,
+  Landmark,
+  RotateCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -49,6 +55,8 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
           positionMode: 'HEDGE',
           maxOpenPositions: 10,
           useThresholdSystem: false,
+          exchange: 'aster',
+          liquidationSource: 'aster',
           server: {
             dashboardPassword: '',
             dashboardPort: 3000,
@@ -90,6 +98,8 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
         positionMode: 'HEDGE',
         maxOpenPositions: 10,
         useThresholdSystem: false,
+        exchange: 'aster',
+        liquidationSource: 'aster',
         server: {
           dashboardPassword: 'admin',
           dashboardPort: 3000,
@@ -108,7 +118,7 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
         }
       },
       symbols: {},
-      version: '1.1.0'
+      version: '1.2.0'
     };
   };
 
@@ -156,6 +166,31 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
     });
   };
 
+  const handleVenueChange = (venue: VenueId) => {
+    const entry = getVenueEntry(venue);
+    setConfig({
+      ...config,
+      global: {
+        ...config.global,
+        exchange: venue,
+        // Venues without hedge mode can only run one-way positions
+        positionMode: !entry.supportsHedgeMode && config.global.positionMode === 'HEDGE'
+          ? 'ONE_WAY'
+          : config.global.positionMode,
+      },
+    });
+  };
+
+  const handleLighterChange = (lighter: LighterVenueConfig) => {
+    setConfig({
+      ...config,
+      venues: {
+        ...config.venues,
+        lighter,
+      },
+    });
+  };
+
   const handleApiChange = (field: string, value: string) => {
     setConfig({
       ...config,
@@ -186,6 +221,13 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
     setLoadingSymbols(true);
     try {
       const response = await fetch('/api/symbols');
+      if (!response.ok) {
+        throw new Error('Failed to fetch symbols');
+      }
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error('Invalid response type');
+      }
       const data = await response.json();
       if (data.symbols) {
         setAvailableSymbols(data.symbols);
@@ -230,6 +272,13 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
   };
 
   const handleSave = () => {
+    // Validate dashboard password if set
+    const dashboardPassword = config.global.server?.dashboardPassword;
+    if (dashboardPassword && dashboardPassword.length > 0 && dashboardPassword.length < 4) {
+      alert('Dashboard password must be at least 4 characters');
+      return;
+    }
+
     onSave(config);
   };
 
@@ -238,10 +287,14 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
     setLoadingDetails(true);
     try {
       const response = await fetch(`/api/symbol-details/${symbol}`);
-      const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to fetch symbol details');
+        throw new Error('Failed to fetch symbol details');
       }
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error('Invalid response type');
+      }
+      const data = await response.json();
       setSymbolDetails(data);
     } catch (error) {
       console.error('Failed to fetch symbol details:', error);
@@ -278,7 +331,7 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
     const separateSizes: Record<string, boolean> = {};
     Object.keys(config.symbols).forEach(symbol => {
       const symbolConfig = config.symbols[symbol];
-      // Check if either longTradeSize or shortTradeSize exists (not undefined)
+      // Set to true if either longTradeSize or shortTradeSize are explicitly defined
       const hasLongSize = symbolConfig.longTradeSize !== undefined;
       const hasShortSize = symbolConfig.shortTradeSize !== undefined;
       separateSizes[symbol] = hasLongSize || hasShortSize;
@@ -286,15 +339,25 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
     setUseSeparateTradeSizes(separateSizes);
   }, [config.symbols]);
 
-  // Calculate minimum margin based on leverage (with 20% buffer for safety)
+  // Calculate minimum margin based on leverage (with 30% buffer for safety)
   const getMinimumMargin = () => {
     if (!symbolDetails || !selectedSymbol || !config.symbols[selectedSymbol]) {
       return null;
     }
     const leverage = config.symbols[selectedSymbol].leverage || 1;
-    const rawMinimum = symbolDetails.minNotional / leverage;
-    // Add 20% buffer to avoid rejection due to price movements
-    return rawMinimum * 1.2;
+
+    // Calculate minimum from notional requirement
+    const minFromNotional = symbolDetails.minNotional / leverage;
+
+    // Calculate minimum from quantity requirement
+    // minQty * currentPrice = notional needed, then divide by leverage for margin
+    const minFromQuantity = (symbolDetails.minQty * symbolDetails.currentPrice) / leverage;
+
+    // Use the larger of the two requirements
+    const rawMinimum = Math.max(minFromNotional, minFromQuantity);
+
+    // Add 30% buffer to avoid rejection due to price movements
+    return rawMinimum * 1.3;
   };
 
   // Get raw minimum without buffer (for display purposes)
@@ -303,16 +366,23 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
       return null;
     }
     const leverage = config.symbols[selectedSymbol].leverage || 1;
-    return symbolDetails.minNotional / leverage;
+
+    // Calculate both minimums and return the larger one
+    const minFromNotional = symbolDetails.minNotional / leverage;
+    const minFromQuantity = (symbolDetails.minQty * symbolDetails.currentPrice) / leverage;
+
+    return Math.max(minFromNotional, minFromQuantity);
   };
+
+  const venueEntry = getVenueEntry(config.global.exchange);
 
   return (
     <div className="space-y-6">
       <Tabs defaultValue="api" className="space-y-4">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="api" className="flex items-center gap-2">
-            <Key className="h-4 w-4" />
-            API Keys
+            <Landmark className="h-4 w-4" />
+            Exchange
           </TabsTrigger>
           <TabsTrigger value="global" className="flex items-center gap-2">
             <Shield className="h-4 w-4" />
@@ -327,47 +397,72 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
         <TabsContent value="api" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>API Configuration</CardTitle>
+              <CardTitle>Exchange</CardTitle>
               <CardDescription>
-                Connect your exchange API for live trading or leave empty for paper mode
+                Choose where the bot trades and where its liquidation signals come from
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="apiKey">API Key</Label>
-                <Input
-                  id="apiKey"
-                  type="text"
-                  value={config.api?.apiKey || ''} 
-                  onChange={(e) => handleApiChange('apiKey', e.target.value)}
-                  placeholder="Enter your API key (optional for paper mode)"
-                  className="font-mono"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Your API key for exchange authentication
-                </p>
-              </div>
+              <VenueSelector
+                venue={config.global.exchange}
+                onVenueChange={handleVenueChange}
+                liquidationSource={config.global.liquidationSource}
+                onLiquidationSourceChange={(source: LiquidationSourceId) => handleGlobalChange('liquidationSource', source)}
+              />
+              <Alert>
+                <RotateCcw className="h-4 w-4" />
+                <AlertDescription>
+                  Changing the trading venue or liquidation source takes effect after the bot restarts.
+                  Only switch venues when you have no open positions.
+                </AlertDescription>
+              </Alert>
+            </CardContent>
+          </Card>
 
-              <div className="space-y-2">
-                <Label htmlFor="secretKey">Secret Key</Label>
-                <div className="relative">
+          {venueEntry.id === 'aster' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>API Configuration</CardTitle>
+                <CardDescription>
+                  Connect your {venueEntry.name} API for live trading or leave empty for paper mode
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="apiKey">API Key</Label>
                   <Input
-                    id="secretKey"
-                    type={showApiSecret ? 'text' : 'password'}
-                    value={config.api?.secretKey || ''} 
-                    onChange={(e) => handleApiChange('secretKey', e.target.value)}
-                    placeholder="Enter your secret key (optional for paper mode)"
-                    className="font-mono pr-10"
+                    id="apiKey"
+                    type="text"
+                    value={config.api?.apiKey || ''} 
+                    onChange={(e) => handleApiChange('apiKey', e.target.value)}
+                    placeholder="Enter your API key (optional for paper mode)"
+                    className="font-mono"
                   />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-                    onClick={() => setShowApiSecret(!showApiSecret)}
-                  >
-                    {showApiSecret ? (
-                      <EyeOff className="h-4 w-4" />
+                  <p className="text-xs text-muted-foreground">
+                    Your API key for exchange authentication
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="secretKey">Secret Key</Label>
+                  <div className="relative">
+                    <Input
+                      id="secretKey"
+                      type={showApiSecret ? 'text' : 'password'}
+                      value={config.api?.secretKey || ''} 
+                      onChange={(e) => handleApiChange('secretKey', e.target.value)}
+                      placeholder="Enter your secret key (optional for paper mode)"
+                      className="font-mono pr-10"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                      onClick={() => setShowApiSecret(!showApiSecret)}
+                    >
+                      {showApiSecret ? (
+                        <EyeOff className="h-4 w-4" />
                     ) : (
                       <Eye className="h-4 w-4" />
                     )}
@@ -388,6 +483,51 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
               )}
             </CardContent>
           </Card>
+          ) : venueEntry.id === 'lighter' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Lighter Configuration</CardTitle>
+                <CardDescription>
+                  Network and API key for trading on Lighter (USDC margin), or leave the key empty for paper mode
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <LighterSettings
+                  value={config.venues?.lighter}
+                  onChange={handleLighterChange}
+                  showCredentials
+                  showLiquidationFeed={config.global.liquidationSource === 'lighter'}
+                />
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="rounded-lg bg-muted p-4">
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <AlertCircle className="h-4 w-4" />
+                Credentials for {venueEntry.name} can be entered once it is supported.
+              </p>
+            </div>
+          )}
+
+          {venueEntry.id !== 'lighter' && config.global.liquidationSource === 'lighter' && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Lighter Liquidation Feed</CardTitle>
+                <CardDescription>
+                  Liquidation signals from Lighter&apos;s public trade stream (no Lighter API key needed)
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <LighterSettings
+                  value={config.venues?.lighter}
+                  onChange={handleLighterChange}
+                  showCredentials={false}
+                  showLiquidationFeed
+                  idPrefix="lighter-feed"
+                />
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="global" className="space-y-4">
@@ -460,11 +600,18 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <option value="ONE_WAY">One-way Mode (BOTH)</option>
-                  <option value="HEDGE">Hedge Mode (LONG/SHORT)</option>
+                  <option value="HEDGE" disabled={!venueEntry.supportsHedgeMode}>
+                    Hedge Mode (LONG/SHORT){venueEntry.supportsHedgeMode ? '' : ` - not supported on ${venueEntry.name}`}
+                  </option>
                 </select>
                 <p className="text-xs text-muted-foreground">
                   One-way: All positions use BOTH | Hedge: Separate LONG and SHORT positions
                 </p>
+                {!venueEntry.supportsHedgeMode && (
+                  <p className="text-xs text-yellow-600 dark:text-yellow-500">
+                    {venueEntry.name} only supports one-way positions
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -488,6 +635,37 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                   </span>
                 </div>
               </div>
+
+              <Separator />
+
+              {/* Threshold System Setting */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4" />
+                      60-Second Volume Threshold System
+                    </Label>
+                    <p className="text-sm text-muted-foreground">
+                      Accumulate liquidation volume over 60-second windows
+                    </p>
+                  </div>
+                  <Switch
+                    checked={config.global.useThresholdSystem || false}
+                    onCheckedChange={(checked) =>
+                      handleGlobalChange('useThresholdSystem', checked)
+                    }
+                  />
+                </div>
+                {config.global.useThresholdSystem && (
+                  <Alert>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                      When enabled, trades will only trigger when cumulative liquidation volume in a 60-second window meets the threshold. Configure per-symbol settings in the symbols tab.
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </div>
             </CardContent>
           </Card>
 
@@ -510,11 +688,17 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                     ...config.global.server,
                     dashboardPassword: e.target.value
                   })}
-                  placeholder="Leave empty for no password protection"
+                  placeholder="Enter dashboard password (min 4 characters)"
+                  minLength={4}
                 />
                 <p className="text-xs text-muted-foreground">
                   Set a password to protect your dashboard when exposing it to external networks
                 </p>
+                {config.global.server?.dashboardPassword && config.global.server.dashboardPassword.length > 0 && config.global.server.dashboardPassword.length < 4 && (
+                  <p className="text-xs text-destructive">
+                    Password must be at least 4 characters
+                  </p>
+                )}
               </div>
 
               <Separator />
@@ -881,7 +1065,7 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                                       )}
                                     </div>
                                     <p className="text-xs text-muted-foreground">
-                                      Exchange min: ${getRawMinimum()!.toFixed(2)} @ {config.symbols[selectedSymbol].leverage}x (20% buffer added)
+                                      Exchange min: ${getRawMinimum()!.toFixed(2)} @ {config.symbols[selectedSymbol].leverage}x (30% buffer added)
                                     </p>
                                   </div>
                                 )}
@@ -942,7 +1126,7 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                                         )}
                                       </div>
                                       <p className="text-xs text-muted-foreground">
-                                        Min: ${getRawMinimum()!.toFixed(2)} + 20% buffer
+                                        Min: ${getRawMinimum()!.toFixed(2)} + 30% buffer
                                       </p>
                                     </div>
                                   )}
@@ -996,7 +1180,7 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                                         )}
                                       </div>
                                       <p className="text-xs text-muted-foreground">
-                                        Min: ${getRawMinimum()!.toFixed(2)} + 20% buffer
+                                        Min: ${getRawMinimum()!.toFixed(2)} + 30% buffer
                                       </p>
                                     </div>
                                   )}
@@ -1054,6 +1238,58 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                           <p className="text-xs text-muted-foreground">
                             Take profit percentage
                           </p>
+                        </div>
+
+                        {/* Order Type Settings */}
+                        <div className="col-span-2">
+                          <Separator className="my-4" />
+                          <div className="space-y-4">
+                            <div className="space-y-2">
+                              <Label>Order Type</Label>
+                              <Select
+                                value={config.symbols[selectedSymbol].orderType || 'LIMIT'}
+                                onValueChange={(value) =>
+                                  handleSymbolChange(selectedSymbol, 'orderType', value)
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="LIMIT">LIMIT Orders (Better fills)</SelectItem>
+                                  <SelectItem value="MARKET">MARKET Orders (Instant fills)</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <p className="text-xs text-muted-foreground">
+                                Default order type for opening positions
+                              </p>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <div className="space-y-0.5">
+                                <Label>Force Market Entry</Label>
+                                <p className="text-sm text-muted-foreground">
+                                  Always use MARKET orders for opening positions (overrides order type above)
+                                </p>
+                              </div>
+                              <Switch
+                                checked={config.symbols[selectedSymbol].forceMarketEntry || false}
+                                onCheckedChange={(checked) =>
+                                  handleSymbolChange(selectedSymbol, 'forceMarketEntry', checked)
+                                }
+                              />
+                            </div>
+
+                            {config.symbols[selectedSymbol].forceMarketEntry && (
+                              <Alert>
+                                <AlertCircle className="h-4 w-4" />
+                                <AlertDescription className="text-xs">
+                                  <strong>Market Entry Forced:</strong> All opening orders will use MARKET type for instant fills,
+                                  regardless of the order type setting above. This ensures faster entry but may have higher slippage.
+                                </AlertDescription>
+                              </Alert>
+                            )}
+                          </div>
                         </div>
 
                         {/* VWAP Protection Settings */}
@@ -1138,6 +1374,84 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                             )}
                           </div>
                         </div>
+
+                        {/* Threshold System Settings - Only show if global threshold is enabled */}
+                        {config.global.useThresholdSystem && (
+                          <div className="col-span-2">
+                            <Separator className="my-4" />
+                            <div className="space-y-4">
+                              <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                  <Label className="flex items-center gap-2">
+                                    <TrendingUp className="h-4 w-4" />
+                                    Enable Threshold System for {selectedSymbol}
+                                  </Label>
+                                  <p className="text-sm text-muted-foreground">
+                                    Use 60-second cumulative volume thresholds
+                                  </p>
+                                </div>
+                                <Switch
+                                  checked={config.symbols[selectedSymbol].useThreshold || false}
+                                  onCheckedChange={(checked) =>
+                                    handleSymbolChange(selectedSymbol, 'useThreshold', checked)
+                                  }
+                                />
+                              </div>
+
+                              {config.symbols[selectedSymbol].useThreshold && (
+                                <div className="space-y-4 pt-2">
+                                  <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                      <Label>Time Window (seconds)</Label>
+                                      <Input
+                                        type="number"
+                                        value={(config.symbols[selectedSymbol].thresholdTimeWindow || 60000) / 1000}
+                                        onChange={(e) => {
+                                          const seconds = parseFloat(e.target.value);
+                                          const ms = isNaN(seconds) ? 60000 : seconds * 1000;
+                                          handleSymbolChange(selectedSymbol, 'thresholdTimeWindow', ms);
+                                        }}
+                                        min="10"
+                                        max="300"
+                                        step="10"
+                                      />
+                                      <p className="text-xs text-muted-foreground">
+                                        Window for accumulating volume (default: 60s)
+                                      </p>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                      <Label>Cooldown Period (seconds)</Label>
+                                      <Input
+                                        type="number"
+                                        value={(config.symbols[selectedSymbol].thresholdCooldown || 30000) / 1000}
+                                        onChange={(e) => {
+                                          const seconds = parseFloat(e.target.value);
+                                          const ms = isNaN(seconds) ? 30000 : seconds * 1000;
+                                          handleSymbolChange(selectedSymbol, 'thresholdCooldown', ms);
+                                        }}
+                                        min="10"
+                                        max="300"
+                                        step="10"
+                                      />
+                                      <p className="text-xs text-muted-foreground">
+                                        Cooldown between triggers (default: 30s)
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <Alert>
+                                    <AlertCircle className="h-4 w-4" />
+                                    <AlertDescription>
+                                      With threshold enabled, trades will only trigger when cumulative liquidation volume
+                                      within the time window meets the Long/Short Volume Thresholds configured above.
+                                    </AlertDescription>
+                                  </Alert>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </CardContent>
                     </Card>
                   )}

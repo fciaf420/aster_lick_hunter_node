@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { errorLogsDb } from '@/lib/db/errorLogsDb';
 import { errorLogger } from '@/lib/services/errorLogger';
+import { getLiquidationStreamUrl } from '@/lib/exchange/registry';
 
 export async function POST(_request: NextRequest) {
   try {
@@ -26,7 +27,7 @@ export async function POST(_request: NextRequest) {
           component: 'Hunter',
           symbol: 'BTCUSDT',
           userAction: 'Connecting to liquidation stream',
-          metadata: { url: 'wss://fstream.asterdex.com/ws/!forceOrder@arr', attemptCount: 3 }
+          metadata: { url: getLiquidationStreamUrl('aster'), attemptCount: 3 }
         }
       },
       {

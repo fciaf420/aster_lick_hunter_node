@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
-
-const BASE_URL = 'https://fapi.asterdex.com';
+import { createPublicExchangeAdapter } from '@/lib/exchange/registry';
+import { configLoader } from '@/lib/config/configLoader';
 
 interface SymbolDetails {
   symbol: string;
@@ -22,13 +21,14 @@ export async function GET(
     const { symbol } = await params;
 
     // Fetch both exchange info and current price in parallel
-    const [exchangeInfoResponse, priceResponse] = await Promise.all([
-      axios.get(`${BASE_URL}/fapi/v1/exchangeInfo`),
-      axios.get(`${BASE_URL}/fapi/v1/ticker/price?symbol=${symbol}`)
+    const exchange = createPublicExchangeAdapter(configLoader.getConfig());
+    const [exchangeInfo, ticker] = await Promise.all([
+      exchange.getExchangeInfo({ bypassRateLimit: true }),
+      exchange.getTickerPrice(symbol, { bypassRateLimit: true })
     ]);
 
     // Find the symbol info
-    const symbolInfo = exchangeInfoResponse.data.symbols.find(
+    const symbolInfo = exchangeInfo.symbols.find(
       (s: any) => s.symbol === symbol
     );
 
@@ -59,7 +59,7 @@ export async function GET(
       parseFloat(lotSizeFilter.stepSize) : 0.001;
     const tickSize = priceFilter?.tickSize ?
       parseFloat(priceFilter.tickSize) : 0.01;
-    const currentPrice = parseFloat(priceResponse.data.price);
+    const currentPrice = parseFloat(ticker.price);
 
     const details: SymbolDetails = {
       symbol,

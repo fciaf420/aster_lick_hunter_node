@@ -1,9 +1,10 @@
 import { AxiosResponse } from 'axios';
 import { ApiCredentials, MarkPrice, Kline } from '../types';
-import { getSignedParams, paramsToQuery } from './auth';
+import { buildSignedQuery, paramsToQuery } from './auth';
 import { getRateLimitedAxios } from './requestInterceptor';
+import { ASTER_REST_BASE_URL } from '../exchange/aster/constants';
 
-const BASE_URL = 'https://fapi.asterdex.com';
+const BASE_URL = ASTER_REST_BASE_URL;
 
 // Public endpoints (no authentication)
 export async function getExchangeInfo(): Promise<any> {
@@ -51,8 +52,7 @@ export async function getRecentTrades(symbol: string, limit: number = 500): Prom
 // Signed endpoints (require authentication)
 export async function getBalance(credentials: ApiCredentials): Promise<any> {
   const params = {}; // Empty params for balance endpoint
-  const signedParams = getSignedParams(params, credentials);
-  const query = paramsToQuery(signedParams);
+  const query = buildSignedQuery(params, credentials);
 
   try {
     const axios = getRateLimitedAxios();
@@ -76,8 +76,7 @@ export async function getBalance(credentials: ApiCredentials): Promise<any> {
 
 export async function getAccountInfo(credentials: ApiCredentials): Promise<any> {
   const params = {}; // Empty params for account endpoint
-  const signedParams = getSignedParams(params, credentials);
-  const query = paramsToQuery(signedParams);
+  const query = buildSignedQuery(params, credentials);
 
   try {
     const axios = getRateLimitedAxios();
@@ -109,8 +108,7 @@ export async function getPositionRisk(symbol?: string, credentials?: ApiCredenti
   if (symbol) {
     params.symbol = symbol;
   }
-  const signedParams = getSignedParams(params, credentials);
-  const query = paramsToQuery(signedParams);
+  const query = buildSignedQuery(params, credentials);
   const axios = getRateLimitedAxios();
   const response: AxiosResponse = await axios.get(`${BASE_URL}/fapi/v2/positionRisk?${query}`, {
     headers: {
@@ -130,8 +128,7 @@ export async function getOpenOrders(symbol?: string, credentials?: ApiCredential
   if (symbol) {
     params.symbol = symbol;
   }
-  const signedParams = getSignedParams(params, credentials);
-  const query = paramsToQuery(signedParams);
+  const query = buildSignedQuery(params, credentials);
   const axios = getRateLimitedAxios();
   const response: AxiosResponse = await axios.get(`${BASE_URL}/fapi/v1/openOrders?${query}`, {
     headers: {
@@ -159,11 +156,61 @@ export async function getSymbolPrice(symbol: string): Promise<any> {
   return response.data;
 }
 
+// Get latest prices for all symbols
+export async function getAllSymbolPrices(): Promise<any[]> {
+  const axios = getRateLimitedAxios();
+  const response: AxiosResponse = await axios.get(`${BASE_URL}/fapi/v1/ticker/price`);
+  return response.data;
+}
+
 // Get best bid/ask prices from book ticker
 export async function getBookTicker(symbol: string): Promise<any> {
   const params = { symbol };
   const query = paramsToQuery(params);
   const axios = getRateLimitedAxios();
   const response: AxiosResponse = await axios.get(`${BASE_URL}/fapi/v1/ticker/bookTicker?${query}`);
+  return response.data;
+}
+
+// Get account trades with realized PnL
+export interface UserTrade {
+  buyer: boolean;
+  commission: string;
+  commissionAsset: string;
+  id: number;
+  maker: boolean;
+  orderId: number;
+  price: string;
+  qty: string;
+  quoteQty: string;
+  realizedPnl: string;
+  side: 'BUY' | 'SELL';
+  positionSide: 'LONG' | 'SHORT' | 'BOTH';
+  symbol: string;
+  time: number;
+}
+
+export async function getUserTrades(
+  symbol: string,
+  credentials: ApiCredentials,
+  params: {
+    startTime?: number;
+    endTime?: number;
+    fromId?: number;
+    limit?: number;
+  } = {}
+): Promise<UserTrade[]> {
+  const queryParams: any = {
+    symbol,
+    ...params,
+  };
+
+  const query = buildSignedQuery(queryParams, credentials);
+  const axios = getRateLimitedAxios();
+  const response: AxiosResponse = await axios.get(`${BASE_URL}/fapi/v1/userTrades?${query}`, {
+    headers: {
+      'X-MBX-APIKEY': credentials.apiKey,
+    },
+  });
   return response.data;
 }

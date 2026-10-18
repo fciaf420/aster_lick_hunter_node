@@ -35,13 +35,98 @@ const COMMISSION = {
                              // For typical trade sizes ($10-25), minimal chunking occurs
 };
 
+const DEFAULT_SCORING_WEIGHTS = {
+  pnl: 50,
+  sharpe: 30,
+  drawdown: 20
+};
+
+function parseScoringWeights() {
+  const parseWeight = (value, fallback) => {
+    if (value === undefined || value === null || value === '') {
+      return fallback;
+    }
+
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      return fallback;
+    }
+
+    return numeric;
+  };
+
+  const percent = {
+    pnl: parseWeight(process.env.OPTIMIZER_WEIGHT_PNL, DEFAULT_SCORING_WEIGHTS.pnl),
+    sharpe: parseWeight(process.env.OPTIMIZER_WEIGHT_SHARPE, DEFAULT_SCORING_WEIGHTS.sharpe),
+    drawdown: parseWeight(process.env.OPTIMIZER_WEIGHT_DRAWDOWN, DEFAULT_SCORING_WEIGHTS.drawdown)
+  };
+
+  const total = percent.pnl + percent.sharpe + percent.drawdown;
+
+  if (total <= 0) {
+    const fallbackTotal = DEFAULT_SCORING_WEIGHTS.pnl + DEFAULT_SCORING_WEIGHTS.sharpe + DEFAULT_SCORING_WEIGHTS.drawdown;
+    return {
+      percent: { ...DEFAULT_SCORING_WEIGHTS },
+      normalized: {
+        pnl: DEFAULT_SCORING_WEIGHTS.pnl / fallbackTotal,
+        sharpe: DEFAULT_SCORING_WEIGHTS.sharpe / fallbackTotal,
+        drawdown: DEFAULT_SCORING_WEIGHTS.drawdown / fallbackTotal
+      },
+      isDefault: true
+    };
+  }
+
+  return {
+    percent,
+    normalized: {
+      pnl: percent.pnl / total,
+      sharpe: percent.sharpe / total,
+      drawdown: percent.drawdown / total
+    },
+    isDefault: false
+  };
+}
+
+const scoringWeights = parseScoringWeights();
+const normalizedScoringWeights = scoringWeights.normalized;
+
+const formatWeightPercent = (value) => {
+  if (!Number.isFinite(value)) {
+    return '0%';
+  }
+
+  const rounded = Number(value.toFixed(1));
+  if (Number.isInteger(rounded)) {
+    return `${Math.trunc(rounded)}%`;
+  }
+
+  return `${rounded.toFixed(1)}%`;
+};
+
 // Connect to the database
 const dbPath = path.join(__dirname, 'data', 'liquidations.db');
 const db = new Database(dbPath, { readonly: true });
 
-// Load current configuration
-const configPath = path.join(__dirname, 'config.user.json');
-const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+// Load current configuration with fallback to default
+function loadConfig() {
+  const userConfigPath = path.join(__dirname, 'config.user.json');
+  const defaultConfigPath = path.join(__dirname, 'config.default.json');
+
+  // Try user config first
+  if (fs.existsSync(userConfigPath)) {
+    return JSON.parse(fs.readFileSync(userConfigPath, 'utf8'));
+  }
+
+  // Fall back to default config
+  if (fs.existsSync(defaultConfigPath)) {
+    console.log('Using default configuration (config.user.json not found)');
+    return JSON.parse(fs.readFileSync(defaultConfigPath, 'utf8'));
+  }
+
+  throw new Error('No configuration file found (checked config.user.json and config.default.json)');
+}
+
+const config = loadConfig();
 
 // API helper functions for balance fetching
 function buildSignedQuery(params, credentials) {
@@ -77,7 +162,7 @@ async function getAccountBalance(credentials) {
       crossMargin: parseFloat(usdtBalance?.crossUnPnl || 0)
     };
   } catch (error) {
-    console.error('❌ Failed to fetch balance:', error.response?.data || error.message);
+    console.error('??? Failed to fetch balance:', error.response?.data || error.message);
     return { totalWalletBalance: 0, availableBalance: 0, crossMargin: 0 };
   }
 }
@@ -94,7 +179,7 @@ async function getAccountInfo(credentials) {
 
     return response.data;
   } catch (error) {
-    console.error('❌ Failed to fetch account info:', error.response?.data || error.message);
+    console.error('??? Failed to fetch account info:', error.response?.data || error.message);
     return null;
   }
 }
@@ -115,7 +200,7 @@ async function getUserTrades(credentials, symbol, limit = 100, startTime = null,
 
     return response.data;
   } catch (error) {
-    console.error(`❌ Failed to fetch trade history for ${symbol}:`, error.response?.data || error.message);
+    console.error(`??? Failed to fetch trade history for ${symbol}:`, error.response?.data || error.message);
     return [];
   }
 }
@@ -134,7 +219,7 @@ async function getCurrentPositions(credentials) {
     const activePositions = response.data.filter(pos => parseFloat(pos.positionAmt) !== 0);
     return activePositions;
   } catch (error) {
-    console.error('❌ Failed to fetch positions:', error.response?.data || error.message);
+    console.error('??? Failed to fetch positions:', error.response?.data || error.message);
     return [];
   }
 }
@@ -151,7 +236,6 @@ async function retryWithTimeout(fn, retries = MAX_RETRIES, timeoutMs = API_TIMEO
       return result;
     } catch (error) {
       const isLastAttempt = attempt === retries;
-      const isTimeout = error.code === 'ECONNABORTED' || error.name === 'AbortError';
 
       if (isLastAttempt) {
         throw error;
@@ -183,7 +267,7 @@ async function _getHistoricalPrices(symbol, interval = '1m', limit = 1000) {
 
     return priceData;
   } catch (error) {
-    console.error(`❌ Failed to fetch price data for ${symbol}:`, error.response?.data || error.message);
+    console.error(`??? Failed to fetch price data for ${symbol}:`, error.response?.data || error.message);
     return [];
   }
 }
@@ -222,7 +306,7 @@ async function getCachedHistoricalPrices(symbol, interval = '1m', totalCandles =
         });
       });
     } catch (error) {
-      console.error(`❌ Failed to fetch price data for ${symbol} after ${MAX_RETRIES} retries:`, error.response?.data || error.message);
+      console.error(`??? Failed to fetch price data for ${symbol} after ${MAX_RETRIES} retries:`, error.response?.data || error.message);
       break;
     }
 
@@ -266,12 +350,12 @@ async function getCachedHistoricalPrices(symbol, interval = '1m', totalCandles =
   return priceData;
 }
 
-console.log('🎯 LIQUIDATION BOT OPTIMIZATION TOOL');
+console.log('???? LIQUIDATION BOT OPTIMIZATION TOOL');
 console.log('====================================\n');
 
 // Check liquidation price data coverage
 function analyzePriceDataCoverage() {
-  console.log('🔍 PRICE DATA COVERAGE ANALYSIS');
+  console.log('???? PRICE DATA COVERAGE ANALYSIS');
   console.log('===============================\n');
 
   const priceData = db.prepare(`
@@ -310,12 +394,21 @@ function analyzePriceDataCoverage() {
     WHERE symbol = 'ASTERUSDT'
   `).get();
 
+  console.log();
+  console.log(`???? ASTERUSDT Price Coverage:`);
+  console.log(`   Total Events: ${coverage.total_events}`);
+
+  if (coverage.total_events === 0) {
+    console.log(`   ⚠️  No liquidation data available for analysis`);
+    console.log(`   ℹ️  The optimizer requires historical liquidation data to function`);
+    console.log(`   ℹ️  Please run the bot to collect data, or import existing data`);
+    console.log();
+    throw new Error('Insufficient liquidation data: 0 events found. The optimizer requires historical data to analyze.');
+  }
+
   const timeSpan = (coverage.last_time - coverage.first_time) / 1000 / 60 / 60; // hours
   const avgGap = timeSpan * 60 / coverage.total_events; // minutes per event
 
-  console.log();
-  console.log(`📊 ASTERUSDT Price Coverage:`);
-  console.log(`   Total Events: ${coverage.total_events}`);
   console.log(`   Time Span: ${timeSpan.toFixed(1)} hours`);
   console.log(`   Average Gap: ${avgGap.toFixed(1)} minutes between price points`);
   console.log(`   Price Range: $${coverage.min_price.toFixed(4)} - $${coverage.max_price.toFixed(4)}`);
@@ -346,8 +439,72 @@ function formatCurrency(num) {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const ENTRY_COOLDOWN_MS = 30 * 1000;
+const DEFAULT_THRESHOLD_WINDOW_MS = 60 * 1000;
+const DEFAULT_THRESHOLD_COOLDOWN_MS = 30 * 1000;
 const HUNTER_COOLDOWN_MS = 2 * 60 * 1000;
+
+function generateTimeWindowCandidates(currentMs) {
+  const seconds = Math.max(10, Math.round((currentMs || DEFAULT_THRESHOLD_WINDOW_MS) / 1000));
+  const base = [20, 30, 45, 60, 75, 90, 120, 150, 180, 240];
+  const dynamic = [
+    seconds,
+    Math.max(10, Math.round(seconds * 0.5)),
+    Math.max(10, Math.round(seconds * 0.75)),
+    Math.round(seconds * 1.25),
+    Math.round(seconds * 1.5),
+    Math.round(seconds * 2)
+  ];
+
+  const candidates = new Set([...base, ...dynamic]);
+  const filtered = [...candidates]
+    .filter((sec) => Number.isFinite(sec) && sec >= 10 && sec <= 300)
+    .sort((a, b) => a - b);
+
+  return filtered.map((sec) => sec * 1000);
+}
+
+function generateCooldownCandidates(currentMs) {
+  const seconds = Math.max(5, Math.round((currentMs || DEFAULT_THRESHOLD_COOLDOWN_MS) / 1000));
+  const base = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180];
+  const dynamic = [
+    seconds,
+    Math.max(5, Math.round(seconds * 0.5)),
+    Math.max(5, Math.round(seconds * 0.75)),
+    Math.round(seconds * 1.25),
+    Math.round(seconds * 1.5)
+  ];
+
+  const candidates = new Set([...base, ...dynamic]);
+  const filtered = [...candidates]
+    .filter((sec) => Number.isFinite(sec) && sec >= 5 && sec <= 240)
+    .sort((a, b) => a - b);
+
+  return filtered.map((sec) => sec * 1000);
+}
+
+function calculateCombinationScore(longResult, shortResult) {
+  const combinedPnl = (longResult?.totalPnl || 0) + (shortResult?.totalPnl || 0);
+  const rawLongSharpe = longResult?.sharpeRatio ?? 0;
+  const rawShortSharpe = shortResult?.sharpeRatio ?? 0;
+  const cappedLongSharpe = Number.isFinite(rawLongSharpe) ? Math.min(Math.max(rawLongSharpe, -5), 5) : 0;
+  const cappedShortSharpe = Number.isFinite(rawShortSharpe) ? Math.min(Math.max(rawShortSharpe, -5), 5) : 0;
+  const combinedSharpe = (cappedLongSharpe + cappedShortSharpe) / 2;
+  const combinedDrawdown = Math.max(longResult?.maxDrawdown || 1, shortResult?.maxDrawdown || 1);
+  const drawdownScore = combinedPnl / (combinedDrawdown + 1);
+
+  const finalScore = (
+    (combinedPnl * normalizedScoringWeights.pnl) +
+    (combinedSharpe * normalizedScoringWeights.sharpe) +
+    (drawdownScore * normalizedScoringWeights.drawdown)
+  );
+
+  return {
+    finalScore,
+    combinedPnl,
+    combinedSharpe,
+    drawdownScore,
+  };
+}
 const symbolSpanCache = new Map();
 
 
@@ -511,7 +668,7 @@ function generateSlCandidates(volStats, currentSl) {
     ? [currentSl, currentSl * 0.5, currentSl * 0.75, currentSl * 1.25, currentSl * 1.5, currentSl * 2, currentSl * 3]
     : [];
 
-  const general = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5]; // trimmed: 10, 12.5, 15, 20, 25, 30, 35, 40
+  const general = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5, 10, 12.5, 15, 20, 25, 30, 35, 40, 45, 50];
   const dynamic = [
     base * 0.5,
     base * 0.75,
@@ -527,7 +684,7 @@ function generateSlCandidates(volStats, currentSl) {
     .filter(val => typeof val === 'number' && val > 0.1 && val <= 80);
 
   const candidates = sampleCandidates(rawCandidates, 15)
-    .filter(val => val >= 0.1 && val <= 40);  // Basic sanity bounds only
+    .filter(val => val >= 0.1 && val <= 50);  // Basic sanity bounds only
 
   return candidates;
 }
@@ -547,14 +704,24 @@ function generateMarginCandidates(capitalBudget, currentMargin) {
 async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spanDays) {
   const cloneConfig = { ...symbolConfig };
 
-  const baseTradeSize = symbolConfig.tradeSize || 20;
-  const baseShortTradeSize = symbolConfig.shortTradeSize || baseTradeSize;
+  const baseLongTradeSize = symbolConfig.longTradeSize ?? symbolConfig.tradeSize ?? 20;
+  const baseShortTradeSize = symbolConfig.shortTradeSize ?? symbolConfig.tradeSize ?? baseLongTradeSize;
+  const baseTradeSize = baseLongTradeSize;
   const currentMargin = symbolConfig.maxPositionMarginUSDT || Math.max(baseTradeSize * 5, 50);
   const leverageCurrent = symbolConfig.leverage || 10;
   const currentLongThreshold = symbolConfig.longVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
   const currentShortThreshold = symbolConfig.shortVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
   const currentTp = symbolConfig.tpPercent || 1;
   const currentSl = symbolConfig.slPercent || 5;
+  const thresholdEnabled = symbolConfig.useThreshold !== false;
+  const currentTimeWindowMs = symbolConfig.thresholdTimeWindow || DEFAULT_THRESHOLD_WINDOW_MS;
+  const currentCooldownMs = symbolConfig.thresholdCooldown || DEFAULT_THRESHOLD_COOLDOWN_MS;
+  const timeWindowCandidates = thresholdEnabled
+    ? generateTimeWindowCandidates(currentTimeWindowMs)
+    : [currentTimeWindowMs];
+  const cooldownCandidates = thresholdEnabled
+    ? generateCooldownCandidates(currentCooldownMs)
+    : [currentCooldownMs];
 
   const longBasePositions = Math.max(1, Math.floor(currentMargin / (baseTradeSize || 1)) || 1);
   const shortBasePositions = Math.max(1, Math.floor(currentMargin / (baseShortTradeSize || 1)) || 1);
@@ -578,19 +745,42 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
   const marginCandidates = generateMarginCandidates(capitalBudget, currentMargin).slice(-6); // focus on higher budgets
 
   const backtestCache = new Map();
+  const defaultCooldownMs = Math.max(0, currentCooldownMs);
+  const defaultWindowMs = Math.max(5_000, currentTimeWindowMs || DEFAULT_THRESHOLD_WINDOW_MS);
+  const defaultHunterCooldownMs = HUNTER_COOLDOWN_MS;
 
-  const runBacktest = async (side, threshold, maxPositions, tradeSize, leverage, tp, sl) => {
-    const key = [side, threshold, maxPositions, tradeSize, leverage, tp, sl, ENTRY_COOLDOWN_MS, HUNTER_COOLDOWN_MS]
-      .map(v => Number.isFinite(v) ? v.toFixed(6) : v)
+  const runBacktest = async (side, threshold, maxPositions, tradeSize, leverage, tp, sl, overrides = {}) => {
+    const {
+      cooldownMs = defaultCooldownMs,
+      hunterCooldownMs = defaultHunterCooldownMs,
+      windowMs = defaultWindowMs
+    } = overrides;
+
+    const key = [side, threshold, maxPositions, tradeSize, leverage, tp, sl, cooldownMs, hunterCooldownMs, windowMs]
+      .map(v => Number.isFinite(v) ? Number(v).toFixed(6) : v)
       .join('|');
+
     if (backtestCache.has(key)) {
       return backtestCache.get(key);
     }
-    const result = await backtestSymbol(symbol, side, Math.max(1, Math.round(threshold)), maxPositions, tradeSize, leverage, tp, sl, {
-      suppressLogs: true,
-      cooldownMs: ENTRY_COOLDOWN_MS,
-      hunterCooldownMs: HUNTER_COOLDOWN_MS
-    });
+
+    const result = await backtestSymbol(
+      symbol,
+      side,
+      Math.max(1, Math.round(threshold)),
+      maxPositions,
+      tradeSize,
+      leverage,
+      tp,
+      sl,
+      {
+        suppressLogs: true,
+        cooldownMs,
+        hunterCooldownMs,
+        windowMs
+      }
+    );
+
     backtestCache.set(key, result);
     return result;
   };
@@ -610,7 +800,7 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
   const currentSharpe = (cappedCurrentLongSharpe + cappedCurrentShortSharpe) / 2;
   const currentDrawdown = Math.max(currentLongBacktest.maxDrawdown || 1, currentShortBacktest.maxDrawdown || 1);
   const currentDrawdownScore = currentTotalPnl / (currentDrawdown + 1);
-  // Aggressive scoring: 50% PnL, 30% Sharpe, 20% Drawdown (prioritizes profit & capital deployment)
+// Tri-factor scoring weights are configurable via optimizer UI (defaults: 50% PnL / 30% Sharpe / 20% Drawdown)
   const currentFinalScore = (currentTotalPnl * 0.5) + (currentSharpe * 0.3) + (currentDrawdownScore * 0.2);
 
   let bestCombination = {
@@ -679,13 +869,27 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
 
           const combinedPnl = bestLongSide.result.totalPnl + bestShortSide.result.totalPnl;
           const stopExitCount = (bestLongSide.result.exitReasons?.SL || 0) + (bestShortSide.result.exitReasons?.SL || 0);
+          const liquidationCount = (bestLongSide.result.exitReasons?.LIQUIDATED || 0) + (bestShortSide.result.exitReasons?.LIQUIDATED || 0);
           const totalTrades = (bestLongSide.result.totalTrades || 0) + (bestShortSide.result.totalTrades || 0);
           const stopRate = totalTrades > 0 ? stopExitCount / totalTrades : 0;
           const combinedProfitFactor = ((bestLongSide.result.profitFactor || 0) + (bestShortSide.result.profitFactor || 0)) / 2;
 
+          // CRITICAL: Reject ANY combination that resulted in liquidations
+          if (liquidationCount > 0) {
+            continue;  // Zero tolerance for liquidations - these configs are unsafe
+          }
+
           // Skip combinations with poor profit factor or excessive stop rate
           if (combinedProfitFactor < 1.05 || stopRate > 0.65) {
             continue;
+          }
+
+          // CRITICAL: Liquidation distance check
+          // Liquidation occurs at approximately (100 / leverage)% price move
+          // Leave 10% safety margin for fees, funding, and slippage
+          const liquidationDistance = (100 / leverage) * 0.9; // 90% of theoretical distance
+          if (sl >= liquidationDistance) {
+            continue;  // SL would never execute - position gets liquidated first!
           }
 
           // Risk management constraint: Enforce minimum R:R ratio
@@ -705,11 +909,11 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
             continue;  // Not profitable enough even in optimistic backtest
           }
 
-          // Tri-Factor Weighted Scoring System
-          // Factor 1: Total PnL (50% weight) - Prioritize profit and capital deployment
+          // Tri-factor weighted scoring system (weights configured via UI sliders)
+          // Factor 1: Total PnL - prioritizes profit and capital deployment
           const pnlScore = combinedPnl;
 
-          // Factor 2: Sharpe Ratio (30% weight) - Ensure consistency
+          // Factor 2: Sharpe Ratio - monitors consistency
           // Cap Sharpe at 5.0 to prevent infinity from unrealistic backtests
           const rawLongSharpe = bestLongSide.result.sharpeRatio || 0;
           const rawShortSharpe = bestShortSide.result.sharpeRatio || 0;
@@ -717,13 +921,16 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
           const cappedShortSharpe = Number.isFinite(rawShortSharpe) ? Math.min(Math.max(rawShortSharpe, -5), 5) : 0;
           const combinedSharpe = (cappedLongSharpe + cappedShortSharpe) / 2;
 
-          // Factor 3: PnL per Drawdown (20% weight) - Protect against blowup
+          // Factor 3: PnL per Drawdown - keeps risk in check
           const combinedDrawdown = Math.max(bestLongSide.result.maxDrawdown || 1, bestShortSide.result.maxDrawdown || 1);
           const drawdownScore = combinedPnl / (combinedDrawdown + 1);  // +1 to avoid division by zero
 
-          // Calculate weighted final score - Aggressive: 50% PnL, 30% Sharpe, 20% Drawdown
-          // Prioritizes profit and capital deployment while maintaining risk awareness
-          const finalScore = (pnlScore * 0.5) + (combinedSharpe * 0.3) + (drawdownScore * 0.2);
+          // Calculate weighted final score using normalized weights from the optimizer configuration
+          const finalScore = (
+            (pnlScore * normalizedScoringWeights.pnl) +
+            (combinedSharpe * normalizedScoringWeights.sharpe) +
+            (drawdownScore * normalizedScoringWeights.drawdown)
+          );
 
           // Sanity check for NaN/Infinity
           if (!Number.isFinite(finalScore)) {
@@ -749,6 +956,65 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
     }
   }
 
+  let bestWindowMs = currentTimeWindowMs;
+  let bestCooldownMs = currentCooldownMs;
+  let cachedBestScore = bestCombination.finalScore;
+  let cachedBestLongResult = bestCombination.long.result;
+  let cachedBestShortResult = bestCombination.short.result;
+
+  if (thresholdEnabled) {
+    for (const windowMs of timeWindowCandidates) {
+      for (const cooldownMs of cooldownCandidates) {
+        const longResult = await runBacktest(
+          'SELL',
+          Math.max(1, bestCombination.long.threshold),
+          bestCombination.long.maxPositions,
+          bestCombination.long.tradeSize,
+          bestCombination.leverage,
+          bestCombination.tp,
+          bestCombination.sl,
+          { windowMs, cooldownMs }
+        );
+
+        const shortResult = await runBacktest(
+          'BUY',
+          Math.max(1, bestCombination.short.threshold),
+          bestCombination.short.maxPositions,
+          bestCombination.short.tradeSize,
+          bestCombination.leverage,
+          bestCombination.tp,
+          bestCombination.sl,
+          { windowMs, cooldownMs }
+        );
+
+        const metrics = calculateCombinationScore(longResult, shortResult);
+
+        if (metrics.finalScore > cachedBestScore + 1e-6) {
+          cachedBestScore = metrics.finalScore;
+          cachedBestLongResult = longResult;
+          cachedBestShortResult = shortResult;
+          bestWindowMs = windowMs;
+          bestCooldownMs = cooldownMs;
+          bestCombination.totalPnl = metrics.combinedPnl;
+          bestCombination.sharpeRatio = metrics.combinedSharpe;
+          bestCombination.drawdownScore = metrics.drawdownScore;
+        }
+      }
+    }
+  }
+
+  bestCombination.finalScore = cachedBestScore;
+  bestCombination.long.result = cachedBestLongResult;
+  bestCombination.short.result = cachedBestShortResult;
+  bestCombination.windowMs = bestWindowMs;
+  bestCombination.cooldownMs = bestCooldownMs;
+
+  const finalMetrics = calculateCombinationScore(bestCombination.long.result, bestCombination.short.result);
+  bestCombination.totalPnl = finalMetrics.combinedPnl;
+  bestCombination.sharpeRatio = finalMetrics.combinedSharpe;
+  bestCombination.drawdownScore = finalMetrics.drawdownScore;
+  bestCombination.finalScore = Math.max(bestCombination.finalScore, finalMetrics.finalScore);
+
   const optimizedDailyPnl = bestCombination.totalPnl * dailyFactor;
 
   const longImprovement = (bestCombination.long.result.totalPnl - currentLongBacktest.totalPnl) * dailyFactor;
@@ -766,12 +1032,15 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
     longVolumeThresholdUSDT: Math.round(bestCombination.long.threshold),
     shortVolumeThresholdUSDT: Math.round(bestCombination.short.threshold),
     tradeSize: parseFloat((bestCombination.long.tradeSize).toFixed(2)),
+    longTradeSize: parseFloat((bestCombination.long.tradeSize).toFixed(2)),
     shortTradeSize: parseFloat((bestCombination.short.tradeSize).toFixed(2)),
     maxPositionMarginUSDT: parseFloat(bestCombination.margin.toFixed(2)),
     leverage: bestCombination.leverage,
     tpPercent: parseFloat(bestCombination.tp.toFixed(2)),
     slPercent: parseFloat(bestCombination.sl.toFixed(2)),
-    vwapProtection: vwapOptimized
+    vwapProtection: vwapOptimized,
+    thresholdTimeWindow: Math.round(bestCombination.windowMs || currentTimeWindowMs),
+    thresholdCooldown: Math.round(bestCombination.cooldownMs || currentCooldownMs)
   };
 
   return {
@@ -780,6 +1049,7 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
       longThreshold: Math.max(1, currentLongThreshold),
       shortThreshold: Math.max(1, currentShortThreshold),
       tradeSize: baseTradeSize,
+      longTradeSize: baseTradeSize,
       shortTradeSize: baseShortTradeSize,
       margin: currentMargin,
       leverage: leverageCurrent,
@@ -787,6 +1057,8 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
       sl: currentSl,
       longMaxPositions: longBasePositions,
       shortMaxPositions: shortBasePositions,
+      thresholdTimeWindow: currentTimeWindowMs,
+      thresholdCooldown: currentCooldownMs,
       performance: {
         long: currentLongBacktest,
         short: currentShortBacktest,
@@ -799,6 +1071,8 @@ async function optimizeSymbolParameters(symbol, symbolConfig, capitalBudget, spa
       long: bestCombination.long,
       short: bestCombination.short,
       leverage: bestCombination.leverage,
+      thresholdTimeWindow: bestCombination.windowMs,
+      thresholdCooldown: bestCombination.cooldownMs,
       tp: bestCombination.tp,
       sl: bestCombination.sl,
       totalPnl: bestCombination.totalPnl,
@@ -901,12 +1175,13 @@ function analyzeRollingWindows(symbol, side, threshold, windowSize = 60000) {
 
 // 1. Current Config Performance Analysis using Rolling Windows
 function analyzeCurrentConfig() {
-  console.log('📊 ROLLING 60-SECOND WINDOW ANALYSIS');
+  console.log('???? ROLLING 60-SECOND WINDOW ANALYSIS');
   console.log('=====================================\n');
 
   for (const [symbol, symbolConfig] of Object.entries(config.symbols)) {
-    console.log(`🔍 ${symbol} Analysis:`);
+    console.log(`???? ${symbol} Analysis:`);
 
+    const timeWindowMs = symbolConfig.thresholdTimeWindow || DEFAULT_THRESHOLD_WINDOW_MS;
     const longThreshold = symbolConfig.longVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
     const shortThreshold = symbolConfig.shortVolumeThresholdUSDT || symbolConfig.volumeThresholdUSDT || 0;
     const tradeSize = symbolConfig.tradeSize || 20;
@@ -918,14 +1193,14 @@ function analyzeCurrentConfig() {
     const longAnalysis = analyzeRollingWindows(symbol, 'SELL', longThreshold);
     const shortAnalysis = analyzeRollingWindows(symbol, 'BUY', shortThreshold);
 
-    console.log(`   📈 LONG Opportunities (60s rolling SELL liquidations):`);
+    console.log(`   ???? LONG Opportunities (${(timeWindowMs/1000).toFixed(0)}s rolling SELL liquidations):`);
     console.log(`      Threshold: $${formatLargeNumber(longThreshold)}`);
     console.log(`      Daily Triggers: ${longAnalysis.dailyTriggers.toFixed(1)}`);
     console.log(`      Daily Profit: $${formatLargeNumber(longAnalysis.dailyTriggers * profitPerTrade)}`);
     console.log(`      Avg Window Volume: $${formatLargeNumber(longAnalysis.avgWindowVolume)}`);
     console.log(`      Max Window Volume: $${formatLargeNumber(longAnalysis.maxWindowVolume)}`);
 
-    console.log(`   📉 SHORT Opportunities (60s rolling BUY liquidations):`);
+    console.log(`   ???? SHORT Opportunities (${(timeWindowMs/1000).toFixed(0)}s rolling BUY liquidations):`);
     console.log(`      Threshold: $${formatLargeNumber(shortThreshold)}`);
     console.log(`      Daily Triggers: ${shortAnalysis.dailyTriggers.toFixed(1)}`);
     console.log(`      Daily Profit: $${formatLargeNumber(shortAnalysis.dailyTriggers * profitPerTrade)}`);
@@ -933,14 +1208,14 @@ function analyzeCurrentConfig() {
     console.log(`      Max Window Volume: $${formatLargeNumber(shortAnalysis.maxWindowVolume)}`);
 
     const totalDailyProfit = (longAnalysis.dailyTriggers + shortAnalysis.dailyTriggers) * profitPerTrade;
-    console.log(`   💰 Total Daily Profit: $${formatLargeNumber(totalDailyProfit)}`);
+    console.log(`   ???? Total Daily Profit: $${formatLargeNumber(totalDailyProfit)}`);
     console.log();
   }
 }
 
 // 2. Threshold Optimization Analysis using Rolling Windows
 function optimizeThresholds() {
-  console.log('🎯 ROLLING WINDOW THRESHOLD OPTIMIZATION');
+  console.log('???? ROLLING WINDOW THRESHOLD OPTIMIZATION');
   console.log('========================================\n');
 
   // Focus on most active symbols
@@ -949,9 +1224,10 @@ function optimizeThresholds() {
   topSymbols.forEach(symbol => {
     if (!config.symbols[symbol]) return;
 
-    console.log(`🔧 ${symbol} Rolling Window Optimization:`);
+    console.log(`???? ${symbol} Rolling Window Optimization:`);
 
     const symbolConfig = config.symbols[symbol];
+    const timeWindowMs = symbolConfig.thresholdTimeWindow || DEFAULT_THRESHOLD_WINDOW_MS;
     const tradeSize = symbolConfig.tradeSize || 20;
     const leverage = symbolConfig.leverage || 10;
     const tpPercent = symbolConfig.tpPercent || 1;
@@ -962,24 +1238,24 @@ function optimizeThresholds() {
     // Test different threshold levels
     const thresholds = [1000, 2000, 3000, 5000, 8000, 10000, 15000, 20000, 25000, 50000];
 
-    console.log('   📊 LONG Opportunities (60s rolling SELL liquidations):');
+    console.log(`   ???? LONG Opportunities (${(timeWindowMs/1000).toFixed(0)}s rolling SELL liquidations):`);
     console.log('   Threshold | Daily Triggers | Daily Profit | Current');
     console.log('   ----------|----------------|--------------|--------');
 
     thresholds.forEach(threshold => {
-      const analysis = analyzeRollingWindows(symbol, 'SELL', threshold);
+      const analysis = analyzeRollingWindows(symbol, 'SELL', threshold, timeWindowMs);
       const dailyProfit = analysis.dailyTriggers * profitPerTrade;
       const isCurrent = threshold === currentLong ? ' <- CURRENT' : '';
 
       console.log(`   $${threshold.toString().padEnd(8)} | ${analysis.dailyTriggers.toFixed(1).padEnd(14)} | $${formatLargeNumber(dailyProfit).padEnd(12)} |${isCurrent}`);
     });
 
-    console.log('\n   📊 SHORT Opportunities (60s rolling BUY liquidations):');
+    console.log('\n   ???? SHORT Opportunities (${(timeWindowMs/1000).toFixed(0)}s rolling BUY liquidations):');
     console.log('   Threshold | Daily Triggers | Daily Profit | Current');
     console.log('   ----------|----------------|--------------|--------');
 
     thresholds.forEach(threshold => {
-      const analysis = analyzeRollingWindows(symbol, 'BUY', threshold);
+      const analysis = analyzeRollingWindows(symbol, 'BUY', threshold, timeWindowMs);
       const dailyProfit = analysis.dailyTriggers * profitPerTrade;
       const isCurrent = threshold === currentShort ? ' <- CURRENT' : '';
 
@@ -992,7 +1268,7 @@ function optimizeThresholds() {
 
 // 3. Symbol Profitability Ranking
 function rankSymbolProfitability() {
-  console.log('🏆 SYMBOL PROFITABILITY RANKING');
+  console.log('???? SYMBOL PROFITABILITY RANKING');
   console.log('-------------------------------\n');
 
   const symbolStats = [];
@@ -1102,14 +1378,15 @@ function calculateRiskMetrics(trades) {
 async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, leverage, tpPercent, slPercent, options = {}) {
   const suppressLogs = options.suppressLogs || false;
   const cooldownMs = Number.isFinite(options.cooldownMs) ? Math.max(0, options.cooldownMs) : 0;
-  const hunterCooldownMs = Number.isFinite(options.hunterCooldownMs) ? Math.max(0, options.hunterCooldownMs) : 0;
+  const hunterCooldownMs = Number.isFinite(options.hunterCooldownMs) ? Math.max(0, options.hunterCooldownMs) : HUNTER_COOLDOWN_MS;
+  const windowMs = Number.isFinite(options.windowMs) ? Math.max(1_000, options.windowMs) : DEFAULT_THRESHOLD_WINDOW_MS;
   const log = (...args) => {
     if (!suppressLogs) {
       console.log(...args);
     }
   };
 
-  log(`🧪 Backtesting ${symbol} ${side === 'SELL' ? 'LONG' : 'SHORT'} with $${threshold} threshold...`);
+  log(`???? Backtesting ${symbol} ${side === 'SELL' ? 'LONG' : 'SHORT'} with $${threshold} threshold...`);
 
   // Get liquidations ordered by time
   const liquidations = db.prepare(`
@@ -1132,7 +1409,7 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
   try {
     priceData = await getCachedHistoricalPrices(symbol, '1m', 10080); // Last ~7 days at 1-minute resolution
   } catch (_error) {
-    log(`   ⚠️  Could not fetch historical prices for ${symbol}, using liquidation prices`);
+    log(`   ??????  Could not fetch historical prices for ${symbol}, using liquidation prices`);
   }
 
   // If we have historical price data, use it; otherwise fall back to liquidation prices
@@ -1177,6 +1454,37 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
   };
 
   const recordExit = (pos, exitPrice, exitReason, priceEventTime, volatilityFactor = 1.0) => {
+    // Handle liquidation specially - 100% margin loss
+    if (exitReason === 'LIQUIDATED') {
+      const notional = tradeSize * leverage;
+      const entryCommission = notional * (COMMISSION.MAKER_FEE * 0.9 + COMMISSION.TAKER_FEE * 0.1);
+
+      // Liquidation fee is typically 0.5% of position value on most exchanges
+      const liquidationFee = notional * 0.005;
+
+      // Total loss = entire margin + entry commission + liquidation fee
+      const netPnl = -(tradeSize + entryCommission + liquidationFee);
+
+      totalPnl += netPnl;
+      completedTrades.push({
+        symbol,
+        side: pos.isLong ? 'LONG' : 'SHORT',
+        entryPrice: pos.entryPrice,
+        exitPrice: exitPrice,
+        triggerPrice: exitPrice,
+        slippage: 0,
+        grossPnl: netPnl,
+        commission: entryCommission + liquidationFee,
+        pnl: netPnl,
+        exitReason,
+        duration: priceEventTime - pos.entryTime,
+        margin: tradeSize,
+        leverage: pos.leverage,
+        volatilityFactor: null
+      });
+      return;
+    }
+
     // Apply realistic slippage based on order type and market conditions
     let actualExitPrice = exitPrice;
 
@@ -1240,7 +1548,21 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
       let exitReason = null;
       let exitPrice = null;
 
-      // Check if both TP and SL were touched in this candle
+      // PRIORITY 1: Check liquidation FIRST (happens before TP/SL can trigger)
+      const liquidationTouched = pos.isLong
+        ? priceBar.low <= pos.liquidationPrice
+        : priceBar.high >= pos.liquidationPrice;
+
+      if (liquidationTouched) {
+        // Position liquidated - exit at liquidation price with total margin loss
+        shouldExit = true;
+        exitReason = 'LIQUIDATED';
+        exitPrice = pos.liquidationPrice;
+        recordExit(pos, exitPrice, exitReason, priceBar.event_time, volatilityFactor);
+        return false;
+      }
+
+      // PRIORITY 2: Check if both TP and SL were touched in this candle
       const tpTouched = pos.isLong ? priceBar.high >= pos.tpPrice : priceBar.low <= pos.tpPrice;
       const slTouched = pos.isLong ? priceBar.low <= pos.slPrice : priceBar.high >= pos.slPrice;
 
@@ -1298,7 +1620,7 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
   for (let i = 0; i < liquidations.length; i++) {
     const currentEvent = liquidations[i];
     const currentTime = currentEvent.event_time;
-    const windowStart = currentTime - 60000; // 60-second window
+    const windowStart = currentTime - windowMs;
 
     // Calculate rolling window volume
     let windowVolume = 0;
@@ -1325,7 +1647,7 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
       if (Math.random() > LIMIT_FILL_RATE) {
         // LIMIT order placed but never filled - skip this entry
         if (!suppressLogs && Math.random() < 0.1) {  // Log 10% of non-fills to avoid spam
-          log(`   💨 LIMIT order did not fill (non-fill simulation)`);
+          log(`   ???? LIMIT order did not fill (non-fill simulation)`);
         }
         continue;  // Skip to next liquidation event
       }
@@ -1349,13 +1671,23 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
         ? entryPrice * (1 - slPercent/100)
         : entryPrice * (1 + slPercent/100);
 
+      // Calculate liquidation price based on leverage
+      // Liquidation happens at approximately (100 / leverage)% price move from entry
+      // Using 95% of theoretical distance to account for maintenance margin and fees
+      const liquidationDistance = (100 / leverage) * 0.95;
+      const liquidationPrice = isLong
+        ? entryPrice * (1 - liquidationDistance/100)
+        : entryPrice * (1 + liquidationDistance/100);
+
       activePositions.push({
         entryPrice,
         entryTime: currentTime,
         tpPrice,
         slPrice,
+        liquidationPrice,
         isLong,
-        size: tradeSize * leverage / entryPrice
+        size: tradeSize * leverage / entryPrice,
+        leverage
       });
       lastEntryTime = currentTime;
       lastHunterEntryTime = currentTime;
@@ -1395,6 +1727,14 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
   const avgLoss = losses > 0 ? completedTrades.filter(t => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0) / losses : 0;
   const avgDuration = completedTrades.length > 0 ? completedTrades.reduce((sum, t) => sum + t.duration, 0) / completedTrades.length / 1000 / 60 : 0; // minutes
 
+  // Calculate exit reason breakdown
+  const exitReasons = {
+    TP: completedTrades.filter(t => t.exitReason === 'TP').length,
+    SL: completedTrades.filter(t => t.exitReason === 'SL').length,
+    EOD: completedTrades.filter(t => t.exitReason === 'EOD').length,
+    LIQUIDATED: completedTrades.filter(t => t.exitReason === 'LIQUIDATED').length
+  };
+
   // Calculate risk metrics
   const riskMetrics = calculateRiskMetrics(completedTrades);
 
@@ -1409,6 +1749,7 @@ async function backtestSymbol(symbol, side, threshold, maxPositions, tradeSize, 
     avgDuration,
     activePositions: activePositions.length,
     recentTrades: completedTrades.slice(-3),
+    exitReasons,
     ...riskMetrics
   };
 }
@@ -1450,7 +1791,7 @@ async function generateRecommendations(deployableCapital) {
     const delta = optimization.improvements.totalDaily;
 
     console.log('SUMMARY ' + symbol + ': current $' + currentDaily.toFixed(2) +
-      ' -> $' + optimizedDaily.toFixed(2) + ' (Δ $' + delta.toFixed(2) + '/day)');
+      ' -> $' + optimizedDaily.toFixed(2) + ' (?? $' + delta.toFixed(2) + '/day)');
 
     recommendations.push({
       symbol,
@@ -1459,6 +1800,7 @@ async function generateRecommendations(deployableCapital) {
       optimizedLong: optimization.optimized.config.longVolumeThresholdUSDT,
       optimizedShort: optimization.optimized.config.shortVolumeThresholdUSDT,
       currentTradeSize: optimization.current.tradeSize,
+      currentLongTradeSize: optimization.current.longTradeSize,
       currentShortTradeSize: optimization.current.shortTradeSize,
       currentMargin: optimization.current.margin,
       currentLeverage: optimization.current.leverage,
@@ -1466,7 +1808,10 @@ async function generateRecommendations(deployableCapital) {
       currentSl: optimization.current.sl,
       currentLongMaxPositions: optimization.current.longMaxPositions,
       currentShortMaxPositions: optimization.current.shortMaxPositions,
+      currentTimeWindow: optimization.current.thresholdTimeWindow,
+      currentCooldown: optimization.current.thresholdCooldown,
       optimizedTradeSize: optimization.optimized.config.tradeSize,
+      optimizedLongTradeSize: optimization.optimized.config.longTradeSize,
       optimizedShortTradeSize: optimization.optimized.config.shortTradeSize,
       optimizedMargin: optimization.optimized.config.maxPositionMarginUSDT,
       optimizedLeverage: optimization.optimized.leverage,
@@ -1474,6 +1819,8 @@ async function generateRecommendations(deployableCapital) {
       optimizedSl: optimization.optimized.sl,
       optimizedLongMaxPositions: optimization.optimized.long.maxPositions,
       optimizedShortMaxPositions: optimization.optimized.short.maxPositions,
+      optimizedTimeWindow: optimization.optimized.config.thresholdTimeWindow,
+      optimizedCooldown: optimization.optimized.config.thresholdCooldown,
       longImprovement: optimization.improvements.long,
       shortImprovement: optimization.improvements.short,
       totalDailyImprovement: optimization.improvements.totalDaily,
@@ -1490,6 +1837,13 @@ async function generateRecommendations(deployableCapital) {
       optimizedConfig: optimization.optimized.config,
       spanDays: optimization.spanDays
     });
+
+    // CRITICAL FIX: Apply the optimized config to the final optimizedConfig object
+    // This was missing - we were collecting recommendations but never updating optimizedConfig.symbols!
+    optimizedConfig.symbols[symbol] = {
+      ...optimizedConfig.symbols[symbol],
+      ...optimization.optimized.config
+    };
   }
 
   console.log('KEY BACKTEST INSIGHTS:');
@@ -1516,11 +1870,11 @@ async function generateRecommendations(deployableCapital) {
   return { recommendations, optimizedConfig, recommendedGlobalMax: recommendedGlobalRounded };
 }// Capital allocation analysis for liquidation cascade strategy
 function analyzeCapitalAllocation(balance, accountInfo, positions) {
-  console.log('💰 COMPLETE ACCOUNT SNAPSHOT');
+  console.log('???? COMPLETE ACCOUNT SNAPSHOT');
   console.log('=============================\n');
 
   // Debug: Show raw account info
-  console.log('🔍 DEBUG - Raw Account Data:');
+  console.log('???? DEBUG - Raw Account Data:');
   console.log('Balance API Response:', JSON.stringify(balance, null, 2));
   if (accountInfo) {
     console.log('Account API Response keys:', Object.keys(accountInfo));
@@ -1529,7 +1883,7 @@ function analyzeCapitalAllocation(balance, accountInfo, positions) {
   }
   console.log();
 
-  console.log(`🏦 Account Balance Breakdown:`);
+  console.log(`???? Account Balance Breakdown:`);
   console.log(`   Available Balance: $${formatLargeNumber(balance.availableBalance)}`);
 
   if (accountInfo) {
@@ -1547,7 +1901,7 @@ function analyzeCapitalAllocation(balance, accountInfo, positions) {
 
     // Calculate true total account value
     const trueTotal = Math.max(totalMarginBalance, totalWalletBalance, balance.availableBalance + usedMargin);
-    console.log(`   🎯 CALCULATED TOTAL: $${formatLargeNumber(trueTotal)}`);
+    console.log(`   ???? CALCULATED TOTAL: $${formatLargeNumber(trueTotal)}`);
 
     // Store for later use
     this.calculatedTotal = trueTotal;
@@ -1555,7 +1909,7 @@ function analyzeCapitalAllocation(balance, accountInfo, positions) {
   console.log();
 
   if (positions && positions.length > 0) {
-    console.log(`📊 CURRENT POSITIONS (${positions.length} active):`);
+    console.log(`???? CURRENT POSITIONS (${positions.length} active):`);
     console.log(`Symbol      | Side | Size      | Entry Price | Mark Price  | PNL      | Margin   | ROE%`);
     console.log(`------------|------|-----------|-------------|-------------|----------|----------|------`);
 
@@ -1591,13 +1945,13 @@ function analyzeCapitalAllocation(balance, accountInfo, positions) {
   let totalMaxAllocation = 0;
   const globalSettings = config.global;
 
-  console.log(`⚙️ Global Settings:`);
+  console.log(`?????? Global Settings:`);
   console.log(`   Risk Percent: ${globalSettings.riskPercent}%`);
   console.log(`   Max Open Positions: ${globalSettings.maxOpenPositions}`);
   console.log(`   Position Mode: ${globalSettings.positionMode}`);
   console.log();
 
-  console.log(`🎯 Per-Symbol Capital Allocation:`);
+  console.log(`???? Per-Symbol Capital Allocation:`);
   console.log(`Symbol      | Trade Size | Max Margin/Side | Max Positions | Strategy`);
   console.log(`------------|------------|------------------|---------------|----------`);
 
@@ -1621,11 +1975,11 @@ function analyzeCapitalAllocation(balance, accountInfo, positions) {
   console.log();
 
   const utilizationRate = (totalMaxAllocation / balance.availableBalance * 100).toFixed(1);
-  const safeUtilization = utilizationRate <= 80 ? '✅' : utilizationRate <= 95 ? '⚠️' : '🚨';
+  const safeUtilization = utilizationRate <= 80 ? '???' : utilizationRate <= 95 ? '??????' : '????';
 
-  console.log(`📊 Capital Utilization:`);
+  console.log(`???? Capital Utilization:`);
   console.log(`   Max Allocation (both sides): $${formatLargeNumber(totalMaxAllocation)} (${utilizationRate}% of available) ${safeUtilization}`);
-  console.log(`   Safe Range: ≤80% optimal, ≤95% acceptable`);
+  console.log(`   Safe Range: ???80% optimal, ???95% acceptable`);
   console.log();
 
   return { totalMaxAllocation, utilizationRate, calculatedTotal: this.calculatedTotal || 0 };
@@ -1633,7 +1987,7 @@ function analyzeCapitalAllocation(balance, accountInfo, positions) {
 
 // Enhanced liquidation cascade analysis
 function analyzeLiquidationCascades() {
-  console.log('🌊 LIQUIDATION CASCADE ANALYSIS');
+  console.log('???? LIQUIDATION CASCADE ANALYSIS');
   console.log('================================\n');
 
   console.log('Strategy: Multiple Position Accumulation During Cascades');
@@ -1661,7 +2015,7 @@ function analyzeLiquidationCascades() {
     cascadesBySymbol[row.symbol].push(row);
   });
 
-  console.log('📈 Cascade Frequency by Symbol:');
+  console.log('???? Cascade Frequency by Symbol:');
   console.log('Symbol      | Cascade Minutes | Avg Volume/Min | Max Liquidations/Min');
   console.log('------------|----------------|----------------|--------------------');
 
@@ -1678,7 +2032,7 @@ function analyzeLiquidationCascades() {
 
 // Main execution - now async
 async function analyzeRealTradingHistory(credentials) {
-  console.log('📈 REAL TRADING HISTORY ANALYSIS');
+  console.log('???? REAL TRADING HISTORY ANALYSIS');
   console.log('=================================\n');
 
   const symbols = ['ASTERUSDT'];
@@ -1687,7 +2041,7 @@ async function analyzeRealTradingHistory(credentials) {
   for (const symbol of symbols) {
     if (!config.symbols[symbol]) continue;
 
-    console.log(`🎯 ${symbol} Real Trade Analysis:`);
+    console.log(`???? ${symbol} Real Trade Analysis:`);
 
     try {
       // Get trades from last 7 days
@@ -1722,7 +2076,7 @@ async function analyzeRealTradingHistory(credentials) {
       const avgLoss = losses > 0 ? Math.abs(trades.filter(t => parseFloat(t.realizedPnl) < 0).reduce((sum, t) => sum + parseFloat(t.realizedPnl), 0) / losses) : 0;
       const dailyPnl = totalPnl / 7;
 
-      console.log(`   📊 Real Performance (Last 7 days):`);
+      console.log(`   ???? Real Performance (Last 7 days):`);
       console.log(`      Total Trades: ${trades.length} fills (${totalTrades} with PnL)`);
       console.log(`      Win Rate: ${winRate.toFixed(1)}% (${wins}W/${losses}L)`);
       console.log(`      Total PnL: $${totalPnl.toFixed(2)} | Daily: $${dailyPnl.toFixed(2)}/day`);
@@ -1738,21 +2092,27 @@ async function analyzeRealTradingHistory(credentials) {
       const slPercent = symbolConfig.slPercent || 5;
       const maxPositions = Math.floor((symbolConfig.maxPositionMarginUSDT || 100) / tradeSize);
 
-      const backtestResult = await backtestSymbol(symbol, 'SELL', currentLong, maxPositions, tradeSize, leverage, tpPercent, slPercent, { cooldownMs: ENTRY_COOLDOWN_MS, hunterCooldownMs: HUNTER_COOLDOWN_MS });
+      const cooldownMs = symbolConfig.thresholdCooldown || DEFAULT_THRESHOLD_COOLDOWN_MS;
+      const timeWindowMs = symbolConfig.thresholdTimeWindow || DEFAULT_THRESHOLD_WINDOW_MS;
+      const backtestResult = await backtestSymbol(symbol, 'SELL', currentLong, maxPositions, tradeSize, leverage, tpPercent, slPercent, {
+        cooldownMs,
+        hunterCooldownMs: HUNTER_COOLDOWN_MS,
+        windowMs: timeWindowMs
+      });
       const spanDays = getSymbolDataSpanDays(symbol);
       const backtestDaily = spanDays > 0 ? backtestResult.totalPnl / spanDays : 0;
 
-      console.log(`   🔬 Backtest vs Reality Comparison:`);
+      console.log(`   ???? Backtest vs Reality Comparison:`);
       console.log(`      Backtest Daily: $${backtestDaily.toFixed(2)}/day | Real Daily: $${dailyPnl.toFixed(2)}/day`);
       console.log(`      Backtest Win Rate: ${backtestResult.winRate.toFixed(1)}% | Real Win Rate: ${winRate.toFixed(1)}%`);
-      console.log(`      Accuracy: ${Math.abs(backtestResult.winRate - winRate) < 10 ? '✅ Good' : '❌ Poor'} (${Math.abs(backtestResult.winRate - winRate).toFixed(1)}% diff)`);
+      console.log(`      Accuracy: ${Math.abs(backtestResult.winRate - winRate) < 10 ? '??? Good' : '??? Poor'} (${Math.abs(backtestResult.winRate - winRate).toFixed(1)}% diff)`);
 
       if (Math.abs(dailyPnl - backtestDaily) > 50) {
-        console.log(`      ⚠️  Large discrepancy detected - backtest may need refinement`);
+        console.log(`      ??????  Large discrepancy detected - backtest may need refinement`);
       }
 
     } catch (error) {
-      console.log(`   ❌ Failed to analyze ${symbol}: ${error.message}`);
+      console.log(`   ??? Failed to analyze ${symbol}: ${error.message}`);
     }
 
     console.log();
@@ -1761,7 +2121,7 @@ async function analyzeRealTradingHistory(credentials) {
 
 // Capital allocation optimizer
 function optimizeCapitalAllocation(accountInfo, recommendations, symbolConfigs = config.symbols) {
-  console.log('📊 CAPITAL ALLOCATION OPTIMIZER');
+  console.log('???? CAPITAL ALLOCATION OPTIMIZER');
   console.log('================================\n');
 
   const totalWalletBalance = parseFloat(accountInfo?.totalWalletBalance ?? 0);
@@ -1769,10 +2129,10 @@ function optimizeCapitalAllocation(accountInfo, recommendations, symbolConfigs =
   const targetUtilization = 0.80; // 80% max utilization
   const maxAllocation = totalWalletBalance * targetUtilization;
 
-  console.log(`💰 Total Wallet Balance: $${formatLargeNumber(totalWalletBalance)}`);
-  console.log(`💰 Available Balance: $${formatLargeNumber(availableBalance)}`);
-  console.log(`🎯 Target Utilization: ${(targetUtilization * 100).toFixed(0)}%`);
-  console.log(`📈 Max Safe Allocation: $${formatLargeNumber(maxAllocation)}\n`);
+  console.log(`???? Total Wallet Balance: $${formatLargeNumber(totalWalletBalance)}`);
+  console.log(`???? Available Balance: $${formatLargeNumber(availableBalance)}`);
+  console.log(`???? Target Utilization: ${(targetUtilization * 100).toFixed(0)}%`);
+  console.log(`???? Max Safe Allocation: $${formatLargeNumber(maxAllocation)}\n`);
 
   // Calculate total required allocation with current config
   let currentTotalAllocation = 0;
@@ -1780,20 +2140,20 @@ function optimizeCapitalAllocation(accountInfo, recommendations, symbolConfigs =
     currentTotalAllocation += symbolConfig.maxPositionMarginUSDT || 100;
   }
 
-  console.log(`📊 Current Total Allocation: $${formatLargeNumber(currentTotalAllocation)} (${(currentTotalAllocation / totalWalletBalance * 100).toFixed(1)}% of total balance)`);
+  console.log(`???? Current Total Allocation: $${formatLargeNumber(currentTotalAllocation)} (${(currentTotalAllocation / totalWalletBalance * 100).toFixed(1)}% of total balance)`);
 
   if (currentTotalAllocation > maxAllocation) {
-    console.log(`⚠️  OVERALLOCATED by $${formatLargeNumber(currentTotalAllocation - maxAllocation)}`);
-    console.log(`🔧 Recommendation: Reduce per-symbol allocation or disable low-performing symbols\n`);
+    console.log(`??????  OVERALLOCATED by $${formatLargeNumber(currentTotalAllocation - maxAllocation)}`);
+    console.log(`???? Recommendation: Reduce per-symbol allocation or disable low-performing symbols\n`);
   } else {
-    console.log(`✅ Capital allocation within safe range\n`);
+    console.log(`??? Capital allocation within safe range\n`);
   }
 
   // Rank symbols by expected daily profit improvement
   const rankedSymbols = recommendations
     .sort((a, b) => b.totalDailyImprovement - a.totalDailyImprovement);
 
-  console.log('🏆 Symbol Priority by Expected Daily Profit Improvement:');
+  console.log('???? Symbol Priority by Expected Daily Profit Improvement:');
   console.log('Rank | Symbol    | Current Daily | Optimized Daily | Improvement | Allocation');
   console.log('-----|-----------|---------------|-----------------|-------------|------------');
 
@@ -1818,7 +2178,7 @@ function optimizeCapitalAllocation(accountInfo, recommendations, symbolConfigs =
 
   // Suggest allocation rebalancing
   if (currentTotalAllocation > maxAllocation) {
-    console.log('💡 REBALANCING RECOMMENDATIONS:');
+    console.log('???? REBALANCING RECOMMENDATIONS:');
     const allocationPerSymbol = Math.floor(maxAllocation / Object.keys(config.symbols).length);
 
     console.log(`   Option 1: Equal allocation of $${formatLargeNumber(allocationPerSymbol)} per symbol`);
@@ -1836,7 +2196,7 @@ function optimizeCapitalAllocation(accountInfo, recommendations, symbolConfigs =
 
 // Generate optimization summary with actionable recommendations
 function generateOptimizationSummary(recommendations, capitalOptimization, optimizedConfig, recommendedGlobalMax) {
-  console.log('📋 OPTIMIZATION SUMMARY');
+  console.log('???? OPTIMIZATION SUMMARY');
   console.log('======================\n');
 
   // Calculate total improvements
@@ -1847,31 +2207,31 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
     ? (totalDailyImprovement / Math.abs(totalCurrentDaily)) * 100
     : null;
 
-  console.log('💰 PERFORMANCE SUMMARY:');
+  console.log('???? PERFORMANCE SUMMARY:');
   console.log(`   Current Daily P&L: $${totalCurrentDaily.toFixed(2)}`);
   console.log(`   Optimized Daily P&L: $${totalOptimizedDaily.toFixed(2)}`);
   const improvementText = improvementPercent === null
-    ? 'n/a (baseline ≈ 0)'
+    ? 'n/a (baseline ??? 0)'
     : `${improvementPercent.toFixed(1)}%`;
   console.log(`   Total Daily Improvement: +$${totalDailyImprovement.toFixed(2)} (+${improvementText})`);
   console.log(`   Monthly Improvement: +$${(totalDailyImprovement * 30).toFixed(2)}\n`);
 
   // Threshold recommendations
-  console.log('🎯 RECOMMENDED THRESHOLD CHANGES:');
+  console.log('???? RECOMMENDED THRESHOLD CHANGES:');
   recommendations.forEach(_rec => {
     if (_rec.optimizedLong !== _rec.currentLong || _rec.optimizedShort !== _rec.currentShort) {
       console.log(`   ${_rec.symbol}:`);
       if (_rec.optimizedLong !== _rec.currentLong) {
-        console.log(`      LONG: $${formatLargeNumber(_rec.currentLong)} → $${formatLargeNumber(_rec.optimizedLong)} (+$${_rec.longImprovement.toFixed(2)}/day)`);
+        console.log(`      LONG: $${formatLargeNumber(_rec.currentLong)} ??? $${formatLargeNumber(_rec.optimizedLong)} (+$${_rec.longImprovement.toFixed(2)}/day)`);
       }
       if (_rec.optimizedShort !== _rec.currentShort) {
-        console.log(`      SHORT: $${formatLargeNumber(_rec.currentShort)} → $${formatLargeNumber(_rec.optimizedShort)} (+$${_rec.shortImprovement.toFixed(2)}/day)`);
+        console.log(`      SHORT: $${formatLargeNumber(_rec.currentShort)} ??? $${formatLargeNumber(_rec.optimizedShort)} (+$${_rec.shortImprovement.toFixed(2)}/day)`);
       }
-      console.log(`      Trade Size (L/S): $${_rec.currentTradeSize.toFixed(2)} → $${_rec.optimizedTradeSize.toFixed(2)} / $${_rec.currentShortTradeSize.toFixed(2)} → $${_rec.optimizedShortTradeSize.toFixed(2)}`);
-      console.log(`      TP/SL: ${_rec.currentTp.toFixed(2)}%/${_rec.currentSl.toFixed(2)}% → ${_rec.optimizedTp.toFixed(2)}%/${_rec.optimizedSl.toFixed(2)}%`);
-      console.log(`      Leverage: ${_rec.currentLeverage.toFixed(2)}x → ${_rec.optimizedLeverage.toFixed(2)}x`);
+      console.log(`      Trade Size (L/S): $${_rec.currentLongTradeSize.toFixed(2)} ??? $${_rec.optimizedLongTradeSize.toFixed(2)} / $${_rec.currentShortTradeSize.toFixed(2)} ??? $${_rec.optimizedShortTradeSize.toFixed(2)}`);
+      console.log(`      TP/SL: ${_rec.currentTp.toFixed(2)}%/${_rec.currentSl.toFixed(2)}% ??? ${_rec.optimizedTp.toFixed(2)}%/${_rec.optimizedSl.toFixed(2)}%`);
+      console.log(`      Leverage: ${_rec.currentLeverage.toFixed(2)}x ??? ${_rec.optimizedLeverage.toFixed(2)}x`);
       if (_rec.optimizedScore !== undefined) {
-        console.log(`      Score: ${_rec.optimizedScore.toFixed(2)} (PnL: 50%, Sharpe: 30%, Drawdown: 20%)`);
+        console.log(`      Score: ${_rec.optimizedScore.toFixed(2)} (PnL: ${formatWeightPercent(scoringWeights.percent.pnl)}, Sharpe: ${formatWeightPercent(scoringWeights.percent.sharpe)}, Drawdown: ${formatWeightPercent(scoringWeights.percent.drawdown)})`);
       }
     }
   });
@@ -1880,7 +2240,7 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
 
   // Capital allocation recommendations
   if (capitalOptimization.isOverallocated) {
-    console.log('⚠️  CAPITAL ALLOCATION WARNING:');
+    console.log('??????  CAPITAL ALLOCATION WARNING:');
     console.log(`   Current: $${formatLargeNumber(capitalOptimization.currentAllocation)}`);
     console.log(`   Safe Max: $${formatLargeNumber(capitalOptimization.maxSafeAllocation)}`);
     console.log(`   Overallocated by: $${formatLargeNumber(capitalOptimization.currentAllocation - capitalOptimization.maxSafeAllocation)}\n`);
@@ -1888,7 +2248,7 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
 
   if (recommendedGlobalMax) {
     const currentGlobal = config.global?.maxOpenPositions;
-    console.log('🔢 Global Position Capacity:');
+    console.log('???? Global Position Capacity:');
     console.log(`   Current maxOpenPositions: ${currentGlobal ?? 'n/a'}`);
     console.log(`   Recommended maxOpenPositions: ${recommendedGlobalMax}`);
     console.log();
@@ -1914,16 +2274,20 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
       settings: {
         current: {
           tradeSize: _rec.currentTradeSize,
+          longTradeSize: _rec.currentLongTradeSize,
           shortTradeSize: _rec.currentShortTradeSize,
           maxPositionMarginUSDT: _rec.currentMargin,
           leverage: _rec.currentLeverage,
           tpPercent: _rec.currentTp,
           slPercent: _rec.currentSl,
           maxPositionsLong: _rec.currentLongMaxPositions,
-          maxPositionsShort: _rec.currentShortMaxPositions
+          maxPositionsShort: _rec.currentShortMaxPositions,
+          thresholdTimeWindow: _rec.currentTimeWindow,
+          thresholdCooldown: _rec.currentCooldown
         },
         optimized: {
           tradeSize: _rec.optimizedTradeSize,
+          longTradeSize: _rec.optimizedLongTradeSize,
           shortTradeSize: _rec.optimizedShortTradeSize,
           maxPositionMarginUSDT: _rec.optimizedMargin,
           leverage: _rec.optimizedLeverage,
@@ -1931,6 +2295,8 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
           slPercent: _rec.optimizedSl,
           maxPositionsLong: _rec.optimizedLongMaxPositions,
           maxPositionsShort: _rec.optimizedShortMaxPositions,
+          thresholdTimeWindow: _rec.optimizedTimeWindow,
+          thresholdCooldown: _rec.optimizedCooldown,
           vwapProtection: _rec.optimizedConfig?.vwapProtection
         }
       },
@@ -1977,7 +2343,16 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
         finalScore: _rec.optimizedScore,
         sharpeRatio: _rec.optimizedSharpe,
         drawdownScore: _rec.optimizedDrawdownScore,
-        weights: { pnl: 0.5, sharpe: 0.3, drawdown: 0.2 }
+        weights: {
+          pnl: normalizedScoringWeights.pnl,
+          sharpe: normalizedScoringWeights.sharpe,
+          drawdown: normalizedScoringWeights.drawdown
+        },
+        weightPercent: {
+          pnl: scoringWeights.percent.pnl,
+          sharpe: scoringWeights.percent.sharpe,
+          drawdown: scoringWeights.percent.drawdown
+        }
       }
     })),
     capitalAllocation: capitalOptimization,
@@ -1991,7 +2366,7 @@ function generateOptimizationSummary(recommendations, capitalOptimization, optim
     JSON.stringify(exportData, null, 2)
   );
 
-  console.log('💾 Results saved to: optimization-results.json\n');
+  console.log('???? Results saved to: optimization-results.json\n');
 
   return exportData;
 }
@@ -2039,23 +2414,28 @@ async function maybeApplyOptimizedConfig(originalConfig, optimizedConfig, summar
   }
 
   if (!confirm) {
-    console.log('�sT�,?  Keeping existing config.user.json');
+    console.log('???sT???,?  Keeping existing config.user.json');
     return;
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupPath = path.join(__dirname, `config.user.backup-${timestamp}.json`);
+  const configPath = path.join(__dirname, 'config.user.json');
 
   fs.writeFileSync(backupPath, JSON.stringify(originalConfig, null, 2));
   fs.writeFileSync(configPath, JSON.stringify(optimizedConfig, null, 2));
 
   console.log(`dY-,  Backup saved to ${backupPath}`);
-  console.log('�o. config.user.json overwritten with optimized settings');
+  console.log('???o. config.user.json overwritten with optimized settings');
 }
 
 async function main() {
   try {
-    console.log('🔄 Fetching complete account snapshot...\n');
+    const weightSummary = `${formatWeightPercent(scoringWeights.percent.pnl)} / ${formatWeightPercent(scoringWeights.percent.sharpe)} / ${formatWeightPercent(scoringWeights.percent.drawdown)}`;
+    const weightLabel = scoringWeights.isDefault ? ' (default)' : '';
+    console.log(`???? Using scoring weights (PnL / Sharpe / Drawdown): ${weightSummary}${weightLabel}\n`);
+
+    console.log('???? Fetching complete account snapshot...\n');
     const [balance, accountInfo, positions] = await Promise.all([
       getAccountBalance(config.api),
       getAccountInfo(config.api),
@@ -2084,14 +2464,14 @@ async function main() {
 
     await maybeApplyOptimizedConfig(config, optimizedConfig, optimizationResults.summary);
 
-    console.log('🎉 Optimization analysis complete!');
+    console.log('???? Optimization analysis complete!');
     const totalValue = parseFloat(accountInfo?.totalMarginBalance || balance.totalWalletBalance || 0);
-    console.log(`💰 Total account value: $${formatLargeNumber(totalValue)}`);
-    console.log('💡 Strategy: Accumulate positions during cascades, profit on rebounds');
-    console.log('\n📊 Review optimization-results.json for detailed recommendations and the fully optimized config snapshot');
+    console.log(`???? Total account value: $${formatLargeNumber(totalValue)}`);
+    console.log('???? Strategy: Accumulate positions during cascades, profit on rebounds');
+    console.log('\n???? Review optimization-results.json for detailed recommendations and the fully optimized config snapshot');
 
   } catch (error) {
-    console.error('❌ Error:', error.message);
+    console.error('??? Error:', error.message);
     console.error(error.stack);
   } finally {
     db.close();
@@ -2100,5 +2480,6 @@ async function main() {
 
 // Run the analysis
 main();
+
 
 

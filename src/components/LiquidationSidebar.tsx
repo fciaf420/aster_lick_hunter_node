@@ -50,17 +50,21 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
   const _containerRef = useRef<HTMLDivElement>(null);
   const prevEventsRef = useRef<LiquidationEvent[]>([]);
 
+  // Capture initial values to avoid re-running effect when props change
+  const initialMaxEvents = useRef(maxEvents);
+  const initialVolumeThresholds = useRef(volumeThresholds);
+
   // Load historical liquidations and threshold statuses on mount
   useEffect(() => {
     const loadHistoricalLiquidations = async () => {
       try {
-        const response = await fetch(`/api/liquidations?limit=${maxEvents}`);
+        const response = await fetch(`/api/liquidations?limit=${initialMaxEvents.current}`);
         if (response.ok) {
           const result = await response.json();
           if (result.success && result.data) {
             const historicalEvents = result.data.map((liq: any) => {
               const volume = liq.volume_usdt || (liq.quantity * liq.price);
-              const threshold = volumeThresholds[liq.symbol] || 10000;
+              const threshold = initialVolumeThresholds.current[liq.symbol] || 10000;
               return {
                 symbol: liq.symbol,
                 side: liq.side,
@@ -107,7 +111,7 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
 
     loadHistoricalLiquidations();
     loadThresholdStatuses();
-  }, []); // Only run once on mount
+  }, []); // Only run once on mount - using refs for current values
 
   // Handle WebSocket messages for real-time updates
   useEffect(() => {
@@ -275,15 +279,14 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
             </Badge>
           </div>
         </div>
+        {/* Threshold Progress Section (only when the threshold system has symbols) */}
+        {Object.keys(thresholdStatuses).length > 0 && (
+          <div className="border-b p-2 flex-shrink-0 bg-card/30 backdrop-blur-sm">
+            <div className="flex items-center gap-1.5 mb-2">
+              <Target className="h-3 w-3 text-muted-foreground" />
+              <span className="text-xs font-medium text-muted-foreground">Thresholds (60s)</span>
+            </div>
 
-        {/* Threshold Progress Section */}
-        <div className="border-b p-2 flex-shrink-0 bg-card/30 backdrop-blur-sm">
-          <div className="flex items-center gap-1.5 mb-2">
-            <Target className="h-3 w-3 text-muted-foreground" />
-            <span className="text-xs font-medium text-muted-foreground">Thresholds (60s)</span>
-          </div>
-
-          {Object.keys(thresholdStatuses).length > 0 ? (
             <div className="space-y-1.5 max-h-40 overflow-y-auto scrollbar-hide transition-all duration-300">
               {Object.entries(thresholdStatuses)
                 .filter(([_, status]: [string, any]) => status.longThreshold > 0 || status.shortThreshold > 0)
@@ -415,12 +418,8 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
                   );
                 })}
             </div>
-          ) : (
-            <div className="text-center py-2 text-muted-foreground text-[10px]">
-              No symbols configured
-            </div>
-          )}
-        </div>
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto scrollbar-hide">
           {isLoading ? (
             Array.from({ length: 8 }).map((_, i) => (
@@ -430,9 +429,9 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
               </div>
             ))
           ) : events.length > 0 ? (
-            events.map((event, _index) => {
-              const eventId = `${event.symbol}-${event.eventTime}`;
-              const isNew = newEventIds.has(eventId);
+            events.map((event, index) => {
+              const eventId = `${event.symbol}-${event.eventTime}-${index}`;
+              const isNew = newEventIds.has(`${event.symbol}-${event.eventTime}`);
               const _volumeColor = getVolumeColor(event.volume);
               const intensity = getLiquidationIntensity(event.volume);
               // SELL liquidation = Longs getting liquidated (should be GREEN - they were bullish)

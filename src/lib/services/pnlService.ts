@@ -77,7 +77,8 @@ class PnLService extends EventEmitter {
     this.lastUpdateTime = Date.now();
   }
 
-  public updateFromAccountEvent(event: any): void {
+  // marginAsset: the venue's collateral asset (exchange capabilities.marginAsset; USDT on Aster)
+  public updateFromAccountEvent(event: any, marginAsset: string = 'USDT'): void {
     const now = Date.now();
 
     // Parse ACCOUNT_UPDATE event
@@ -87,10 +88,10 @@ class PnLService extends EventEmitter {
 
       // Update balances
       if (accountData.B && accountData.B.length > 0) {
-        const usdtBalance = accountData.B.find((b: any) => b.a === 'USDT');
-        if (usdtBalance) {
-          const walletBalance = parseFloat(usdtBalance.wb);
-          const balanceChange = parseFloat(usdtBalance.bc || '0');
+        const marginBalance = accountData.B.find((b: any) => b.a === marginAsset);
+        if (marginBalance) {
+          const walletBalance = parseFloat(marginBalance.wb);
+          const balanceChange = parseFloat(marginBalance.bc || '0');
 
           // Initialize start balance if this is the first update
           if (this.sessionPnL.startBalance === 0) {

@@ -2,356 +2,631 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Type
-This is a cryptocurrency liquidation hunting bot built with Next.js 15 and TypeScript. The application monitors liquidation events on the Aster Finance exchange and automatically places trades to capitalize on price movements, with both a web UI for monitoring and a backend bot service.
+## Quick Reference
+
+**Project Type**: Cryptocurrency liquidation hunting bot (Next.js 15 + TypeScript)
+**Architecture**: Dual-process (Web UI + Standalone Bot Service)
+**Trading Strategy**: Contrarian liquidation trading with VWAP protection
+**Exchange**: Aster Finance futures API
+
+**⚠️ IMPORTANT FOR CLAUDE CODE**:
+- **NEVER** run `npm run dev` or start the development server (user manages this)
+- **ALWAYS** run `npx tsc --noEmit` after code changes to verify TypeScript
+- **NEVER** commit API keys or `config.user.json` to version control
+- **ALWAYS** create a temporary feature/fix branch before making changes
+- **ALWAYS** merge to `dev` branch first (never directly to `main`)
 
 ## Development Commands
 
 ```bash
-# Install dependencies
-npm install
+# Installation & Setup
+npm install                  # Install dependencies
+npm run setup               # Full setup (install + config + build)
+npm run setup:config        # Setup configuration only
 
-# Run both web UI and bot concurrently (development)
-npm run dev
+# Development
+npm run dev                 # Run both web UI and bot (development)
+npm run dev:web             # Run only web UI
+npm run dev:bot             # Run only bot with watch mode
+npm run bot                 # Run bot once (no watch)
 
-# Run only the web UI (development)
-npm run dev:web
+# Production
+npm run build               # Build for production
+npm start                   # Start production (both web and bot)
 
-# Run only the bot (development with watch mode)
-npm run dev:bot
+# Code Quality
+npm run lint                # Run ESLint
+npx tsc --noEmit           # Check TypeScript types
 
-# Build for production
-npm run build
+# Testing
+npm test                    # Run all tests
+npm run test:hunter         # Test Hunter component
+npm run test:position       # Test PositionManager
+npm run test:rate          # Test rate limiting
+npm run test:ws            # Test WebSocket functionality
+npm run test:errors        # Test error logging
+npm run test:integration   # Test trading flow integration
+npm run test:watch         # Run tests in watch mode
 
-# Start production (both web and bot)
-npm start
-
-# Run only the bot (one-time)
-npm run bot
-
-# Run linting
-npm run lint
-
-# Check TypeScript types
-npx tsc --noEmit
-
-# Run tests
-npm test                   # Test limit orders
-npm run test:simulation    # Test bot simulation
-npm run test:flow         # Test limit order flow
-npm run test:all          # Run all test suites
-
-# Setup (install + build + config migration)
-npm run setup
-
-# Configuration management
-npm run setup:config       # Migrate/create user configuration
-
-# Testing error scenarios
-npm run test:errors        # Generate test errors for development
-npm run test:errors:clear  # Clear test errors
+# Utilities
+npm run optimize:ui         # Run configuration optimizer
 ```
 
 ## Architecture Overview
 
-The application has a dual architecture:
-1. **Web UI**: Next.js application for configuration and monitoring
-2. **Bot Service**: Standalone Node.js service that runs the trading logic
+### Dual-Process System
 
-### Key Components
+1. **Web UI** (Next.js 15)
+   - Dashboard for monitoring positions and P&L
+   - Configuration interface at `/config`
+   - API routes in `src/app/api/*`
+   - NextAuth authentication with password protection
+   - Real-time WebSocket connection to bot service
 
-- **Hunter** (`src/lib/bot/hunter.ts`): Monitors liquidation WebSocket streams and triggers trades
-- **PositionManager** (`src/lib/bot/positionManager.ts`): Manages open positions, SL/TP orders, and user data streams
-- **AsterBot** (`src/bot/index.ts`): Main bot orchestrator that coordinates Hunter and PositionManager
-- **StatusBroadcaster** (`src/bot/websocketServer.ts`): WebSocket server for real-time status updates to web UI
-- **Services**: Helper services for balance (`balanceService.ts`), pricing (`priceService.ts`), VWAP calculations (`vwapService.ts`), and WebSocket management (`websocketService.ts`)
-- **Database** (`src/lib/db/liquidationDb.ts`): SQLite database for persisting liquidation history and analytics
+2. **Bot Service** (Standalone Node.js)
+   - Entry point: `src/bot/index.ts`
+   - Runs independently of web UI
+   - Connects to Aster Finance exchange
+   - Broadcasts status updates via WebSocket (port 8080)
+
+3. **Process Manager** (`scripts/process-manager.js`)
+   - Cross-platform process orchestration (Windows/Unix)
+   - Graceful shutdown handling
+   - Manages both web and bot processes
+
+### Core Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **Hunter** | `src/lib/bot/hunter.ts` | Monitors liquidation streams, triggers trades |
+| **PositionManager** | `src/lib/bot/positionManager.ts` | Manages positions, SL/TP orders, user data streams |
+| **AsterBot** | `src/bot/index.ts` | Main orchestrator coordinating Hunter and PositionManager |
+| **StatusBroadcaster** | `src/bot/websocketServer.ts` | WebSocket server for real-time UI updates |
+| **ProcessManager** | `scripts/process-manager.js` | Cross-platform process lifecycle management |
+
+### Services (`src/lib/services/`)
+
+- **balanceService.ts**: Real-time balance tracking via WebSocket
+- **priceService.ts**: Real-time mark price streaming
+- **vwapService.ts** + **vwapStreamer.ts**: VWAP calculations for entry filtering
+- **errorLogger.ts**: Centralized error logging to SQLite
+- **configManager.ts**: Hot-reload configuration management
+- **pnlService.ts**: Real-time P&L tracking and session metrics
+- **thresholdMonitor.ts**: 60-second rolling volume threshold tracking
+
+### API Layer (`src/lib/api/`)
+
+- **auth.ts**: HMAC SHA256 authentication for exchange API
+- **market.ts**: Market data (prices, order book, positions, balance)
+- **orders.ts**: Order placement, cancellation, leverage management
+- **rateLimitManager.ts**: Intelligent rate limit management with queuing
+- **positionMode.ts**: Position mode management (ONE_WAY vs HEDGE)
+- **userDataStream.ts**: User data stream (account updates, order fills)
 
 ### Data Flow
-1. Hunter connects to `wss://fstream.asterdex.com/ws/!forceOrder@arr` for liquidation events
-2. When a qualifying liquidation occurs, Hunter analyzes order book depth and places intelligent limit orders
-3. PositionManager monitors user data stream for order fills and automatically places SL/TP orders
-4. Status updates are broadcasted to the web UI via internal WebSocket server on port 8080
 
-### Process Management
-The bot uses a sophisticated process management system:
-- **ProcessManager** (`scripts/process-manager.js`): Orchestrates both web UI and bot service with graceful shutdown
-- **Cross-platform Support**: Handles differences between Windows and Unix-like systems
-- **Graceful Shutdown**: Properly cleans up WebSocket connections and child processes on Ctrl+C
-- **Auto-restart**: Monitors processes and handles failures
-- **Port Management**: Automatically detects and manages port conflicts
-
-## Project Structure
-
-- **src/app/**: Next.js pages and API routes
-- **src/bot/**: Standalone bot service entry point and WebSocket server
-- **src/lib/**: Shared business logic
-  - `types.ts`: Core TypeScript interfaces for trading data
-  - `api/`: Exchange API interaction (auth, orders, market data)
-  - `bot/`: Bot components (hunter, position manager, config)
-- **src/components/**: React components for the web UI
-- **config.user.json**: User-specific trading configuration (API keys, symbols, risk parameters)
-- **config.default.json**: Default configuration template with safe defaults
-- **config.example.json**: Example configuration for reference
+```
+Liquidation Stream (WSS) → Hunter → Analyzes → Places Order
+                                         ↓
+                              User Data Stream → PositionManager
+                                         ↓
+                              Places SL/TP Orders → Monitors Position
+                                         ↓
+                              StatusBroadcaster → Web UI (WebSocket)
+```
 
 ## Configuration System
 
-The bot uses a dual-configuration system for security and flexibility:
+### Dual Configuration Files
 
-### Configuration Files
-- **`config.user.json`**: User-specific configuration (not tracked by git)
-  - Contains your API keys and custom settings
-  - Auto-created on first run if missing
-  - This file is in `.gitignore` to protect your credentials
+**`config.user.json`** (Your settings - NOT in git):
+- API keys and secrets
+- Custom trading parameters
+- Auto-created on first run from defaults
+- In `.gitignore` for security
 
-- **`config.default.json`**: Default configuration template (tracked by git)
-  - Contains safe default values
-  - Used as a fallback for missing fields
-  - New settings are automatically merged to user config
-
-- **`config.example.json`**: Example configuration (tracked by git)
-  - Documentation reference with all available options
-
-### Initial Setup
-Run `npm run setup:config` to:
-- Migrate existing `config.json` to `config.user.json` (if it exists)
-- Create `config.user.json` from defaults (if no config exists)
-- Remove `config.json` from git tracking (if applicable)
-- Merge new configuration fields from defaults automatically
+**`config.default.json`** (Template - tracked in git):
+- Safe default values
+- Fallback for missing fields
+- Source for new installations
 
 ### Configuration Structure
-- **api**: API credentials for Aster Finance exchange
-- **symbols**: Per-symbol trading configuration (volume thresholds, leverage, SL/TP percentages, VWAP settings)
-- **global**: Global settings (paper mode, risk percentage, max positions)
-- **server**: Dashboard and WebSocket server configuration (ports, passwords, remote access)
-- **rateLimits**: API rate limiting and request batching configuration
-- **version**: Config schema version for automatic migrations
 
-Example symbol configuration:
 ```json
-"BTCUSDT": {
-  "longVolumeThresholdUSDT": 10000,  // Min liquidation volume for long trades (buy on sell liquidations)
-  "shortVolumeThresholdUSDT": 10000, // Min liquidation volume for short trades (sell on buy liquidations)
-  "tradeSize": 100,                  // Base margin amount in USDT
-  "leverage": 5,                     // Leverage multiplier
-  "tpPercent": 5,                    // Take profit percentage
-  "slPercent": 2,                    // Stop loss percentage
-  "priceOffsetBps": 2,              // Basis points offset for limit orders
-  "maxSlippageBps": 50,             // Maximum allowed slippage
-  "orderType": "LIMIT",             // Order type (LIMIT or MARKET)
-  "vwapProtection": true,           // Enable VWAP-based entry filtering
-  "vwapTimeframe": "5m",            // Timeframe for VWAP calculation
-  "vwapLookback": 100               // Number of candles for VWAP
+{
+  "api": {
+    "apiKey": "your-api-key",
+    "secretKey": "your-secret-key"
+  },
+  "symbols": {
+    "BTCUSDT": {
+      "longVolumeThresholdUSDT": 10000,    // Min liquidation $ to trigger long
+      "shortVolumeThresholdUSDT": 10000,   // Min liquidation $ to trigger short
+      "tradeSize": 0.001,                  // Base trade size in BTC
+      "longTradeSize": 100,                // Optional: margin in USDT for longs
+      "shortTradeSize": 100,               // Optional: margin in USDT for shorts
+      "maxPositionMarginUSDT": 200,        // Max margin exposure per symbol
+      "leverage": 10,                      // Leverage (1-125)
+      "tpPercent": 5,                      // Take profit %
+      "slPercent": 2,                      // Stop loss %
+      "priceOffsetBps": 2,                 // Limit order price offset (basis points)
+      "maxSlippageBps": 50,                // Max acceptable slippage
+      "orderType": "LIMIT",                // LIMIT or MARKET
+      "vwapProtection": true,              // Enable VWAP entry filtering
+      "vwapTimeframe": "5m",               // VWAP timeframe (1m, 5m, 15m, 30m, 1h)
+      "vwapLookback": 200,                 // Number of candles for VWAP
+      "useThreshold": false,               // Enable 60s rolling threshold
+      "thresholdTimeWindow": 60000,        // Time window for volume accumulation (ms)
+      "thresholdCooldown": 30000           // Cooldown between triggers (ms)
+    }
+  },
+  "global": {
+    "paperMode": true,                     // Safe testing mode (no real trades)
+    "riskPercent": 90,                     // Max risk % of account balance
+    "positionMode": "HEDGE",               // ONE_WAY or HEDGE
+    "maxOpenPositions": 5,                 // Max concurrent positions
+    "useThresholdSystem": false,           // Enable global threshold system
+    "server": {
+      "dashboardPassword": "your-password", // Web UI password
+      "dashboardPort": 3000,               // Web UI port
+      "websocketPort": 8080,               // Bot WebSocket port
+      "useRemoteWebSocket": false,         // Enable remote access
+      "websocketHost": null                // Custom WebSocket host (null = auto)
+    },
+    "rateLimit": {
+      "maxRequestWeight": 2400,            // Max weight per minute
+      "maxOrderCount": 1200,               // Max orders per minute
+      "reservePercent": 30,                // Reserve % for critical ops
+      "enableBatching": true,              // Batch order operations
+      "queueTimeout": 30000,               // Queue timeout (ms)
+      "enableDeduplication": true,         // Deduplicate requests
+      "deduplicationWindowMs": 1000,       // Deduplication window
+      "parallelProcessing": true,          // Process requests in parallel
+      "maxConcurrentRequests": 3           // Max concurrent API calls
+    }
+  },
+  "version": "1.1.0"
 }
 ```
 
-## API Integration
+## Trading Strategy
 
-Connects to Aster Finance exchange API (`https://fapi.asterdex.com`):
-- **Authentication**: HMAC SHA256 signatures with API key/secret
-- **Market Data**: WebSocket streams for liquidations, mark prices, klines
-- **User Data**: WebSocket stream for account updates and order fills
-- **Trading**: REST API for placing orders, setting leverage, managing positions
+The bot implements a **contrarian liquidation hunting strategy**:
+
+1. **Liquidation Detection**: Monitors `wss://fstream.asterdex.com/ws/!forceOrder@arr`
+2. **Opportunity Analysis**:
+   - Long liquidations (forced sells) → Buy opportunity
+   - Short liquidations (forced buys) → Sell opportunity
+3. **VWAP Protection**: Only enter when price is favorable relative to volume-weighted average
+4. **Smart Order Placement**: Analyzes order book depth, uses intelligent limit orders
+5. **Automatic Risk Management**: Immediate SL/TP orders on every position
+
+**Key Features**:
+- Volume thresholds filter insignificant liquidations
+- VWAP filtering prevents bad entries during trends
+- Smart limit orders improve fill rates and reduce slippage
+- Threshold system can accumulate volume over 60-second windows
+- Multi-symbol support with independent configurations
+
+See `docs/STRATEGY.md` for comprehensive strategy documentation.
 
 ## Operating Modes
 
-### Paper Mode
-- Set `"paperMode": true` in config.json
-- Simulates trading without placing real orders
-- Generates mock liquidation events for testing
-- Safe for development and testing
+### Paper Mode (`"paperMode": true`)
+- Simulates trading without real orders
+- Generates mock liquidation events
+- Safe for testing and development
+- No API keys required
 
-### Live Mode
-- Requires valid API keys in config.json
-- Places real orders on the exchange
-- Monitors real liquidation streams
+### Live Mode (`"paperMode": false`)
+- Requires valid API keys
+- Places real orders on exchange
 - Manages actual positions with real money
+- **Start with small amounts!**
 
-## Key Dependencies
+## Project Structure
 
-- **concurrently**: Runs web UI and bot service simultaneously
-- **tsx**: TypeScript execution for bot service with watch mode
-- **ws**: WebSocket client for exchange connections and internal status server
-- **axios**: HTTP client for REST API calls
-- **@radix-ui/***: UI component library for the web interface
-- **recharts**: Charts for displaying trading data
-- **tailwindcss**: v4 for styling
-- **ethers**: Ethereum utilities (for additional blockchain functionality)
-- **zod**: Schema validation for configuration and API responses
-- **sonner**: Toast notifications for the web UI
+```
+src/
+├── app/                    # Next.js pages and API routes
+│   ├── api/               # REST endpoints for bot communication
+│   ├── config/            # Configuration page
+│   └── page.tsx           # Main dashboard
+├── bot/                   # Standalone bot service
+│   ├── index.ts          # Bot entry point (AsterBot class)
+│   └── websocketServer.ts # Status broadcasting WebSocket server
+├── lib/
+│   ├── api/              # Exchange API interaction
+│   ├── bot/              # Bot components (Hunter, PositionManager)
+│   ├── db/               # Database operations (SQLite)
+│   ├── errors/           # Custom error types (TradingErrors.ts)
+│   ├── services/         # Shared services
+│   ├── validation/       # Trade size and config validation
+│   └── types.ts          # Core TypeScript interfaces
+├── components/           # React components for web UI
+├── hooks/               # React hooks
+└── middleware.ts        # NextAuth authentication middleware
 
-## Development Workflow
+scripts/                  # Build and process management
+tests/                   # Comprehensive test suite
+config.user.json         # User configuration (NOT in git)
+config.default.json      # Default configuration template
+```
 
-1. Configure `config.json` with your trading parameters (start in paper mode)
-2. Run `npm run dev` to start both web UI and bot
-3. Access web UI at http://localhost:3000 to monitor bot status
-4. Bot logs will show in the terminal with detailed trade information
-5. Use `/config` page to adjust settings without restarting
+## Database Operations
 
-## Trading Strategy
+**Liquidation Database** (`src/lib/db/liquidationDb.ts`):
+- Stores all liquidation events
+- 7-day automatic cleanup via `cleanupScheduler`
+- Used for pattern analysis and performance tracking
 
-The bot implements a **momentum-driven contrarian strategy** that exploits price dislocations from forced liquidations:
-- **Long Liquidations** (forced SELL orders) → Price depression → **BUY opportunity**
-- **Short Liquidations** (forced BUY orders) → Price spike → **SELL opportunity**
+**Error Logs Database** (`src/lib/db/errorLogsDb.ts`):
+- Persists all application errors with full context
+- Includes stack traces, timestamps, and trading data
+- Accessible via web UI at `/errors`
 
-### Key Features
-- **Volume-based filtering**: Only trades significant liquidations that can move markets
-- **VWAP protection**: Ensures favorable entry prices relative to volume-weighted average
-- **Intelligent execution**: Smart limit order placement using order book analysis
-- **Risk management**: Automatic stop-loss and take-profit on all positions
+## Error Handling
 
-## Safety Features
+### Custom Error Types (`src/lib/errors/TradingErrors.ts`)
 
-- Paper mode for safe testing with mock liquidation generation
-- Automatic stop-loss and take-profit orders on all positions
-- Risk management with configurable risk percentage per trade
-- WebSocket auto-reconnection with exponential backoff
-- Graceful shutdown handling (Ctrl+C to stop) with cross-platform support
-- Intelligent limit orders with order book analysis and slippage protection
-- Exchange filter validation (price, quantity, notional limits)
-- VWAP-based entry filtering to avoid adverse price movements
-- SQLite database for liquidation history and pattern analysis
-- API rate limiting and request batching to prevent exchange penalties
+- **NotionalError**: Order value too small for exchange
+- **RateLimitError**: API rate limit exceeded
+- **InsufficientBalanceError**: Insufficient account balance
+- **ReduceOnlyError**: Invalid reduce-only order
+- **PricePrecisionError**: Invalid price precision
+- **QuantityPrecisionError**: Invalid quantity precision
 
-## Web UI Structure
+All errors are:
+- Logged to SQLite with full context
+- Displayed in web UI error dashboard
+- Include timestamps and stack traces
 
-The Next.js application uses App Router with key pages:
-- `/` (dashboard): Main trading dashboard with positions, liquidation feed, and bot status
-- `/config`: Configuration page for editing trading parameters and API keys
-- `/api/*`: REST endpoints for bot communication (balance, positions, trades, config)
+## API Integration
 
-## Important Instructions for Claude Code
+**Base URL**: `https://fapi.asterdex.com`
+**Authentication**: HMAC SHA256 signatures
+**Documentation**: `docs/aster-finance-futures-api.md`
 
-**SECURITY NOTE**: User configuration is stored in `config.user.json` which is automatically excluded from git. Never commit API keys or sensitive configuration to version control.
-
-## Making API Calls to Aster Finance Exchange
-
-When you need to check or verify data from the Aster Finance exchange (e.g., account balance, positions, order status, market data), you can make API calls using the configured API credentials. Here's how to do it:
-
-### Loading Configuration
-
-First, load the API credentials from the configuration:
+### Making API Calls
 
 ```typescript
 import { loadConfig } from './src/lib/bot/config';
+import { getBalance, getPositions, getMarkPrice } from './src/lib/api/market';
+import { placeOrder, cancelOrder } from './src/lib/api/orders';
 
+// Load credentials
 const config = await loadConfig();
-const credentials = config.api; // { apiKey: string, secretKey: string }
-```
-
-Or use the config loader directly:
-
-```typescript
-import { configLoader } from './src/lib/config/configLoader';
-
-const config = await configLoader.loadConfig();
 const credentials = config.api;
-```
 
-### Authentication and API Calls
-
-The bot uses HMAC SHA256 authentication. You can use the existing auth utilities:
-
-#### For Account Data (Balance, Positions, Orders):
-```typescript
-import { getBalance, getPositions, getOpenOrders, getAccountInfo } from './src/lib/api/market';
-
-// Get account balance
+// Account data (requires auth)
 const balance = await getBalance(credentials);
-
-// Get current positions
 const positions = await getPositions(credentials);
 
-// Get open orders
-const openOrders = await getOpenOrders(undefined, credentials);
-
-// Get account info (includes positions and account details)
-const accountInfo = await getAccountInfo(credentials);
-```
-
-#### For Market Data (Public, no authentication needed):
-```typescript
-import { getMarkPrice, getKlines, getExchangeInfo, getOrderBook, getBookTicker } from './src/lib/api/market';
-
-// Get current mark prices for all symbols
+// Market data (public, no auth)
 const markPrices = await getMarkPrice();
-
-// Get klines (candlestick data)
-const klines = await getKlines('BTCUSDT', '1m', 100);
-
-// Get exchange information (symbols, price/quantity precision, etc.)
-const exchangeInfo = await getExchangeInfo();
-
-// Get order book depth
 const orderBook = await getOrderBook('BTCUSDT', 5);
 
-// Get best bid/ask prices
-const bookTicker = await getBookTicker('BTCUSDT');
+// Trading (requires auth)
+const order = await placeOrder({
+  symbol: 'BTCUSDT',
+  side: 'BUY',
+  type: 'LIMIT',
+  quantity: 0.001,
+  price: 50000,
+  timeInForce: 'GTC'
+}, credentials);
 ```
 
-#### For Order Management:
+### Rate Limiting
+
+The API includes intelligent rate limit management:
+- Automatic retry with exponential backoff
+- Request queuing when limits approached
+- Deduplication to prevent redundant requests
+- Visual indicators in web UI
+- Configurable limits per endpoint
+
+## Testing Architecture
+
+```bash
+# Run all tests with detailed reporting
+npm test
+
+# Individual test suites
+npm run test:hunter          # Hunter liquidation detection
+npm run test:position        # PositionManager SL/TP logic
+npm run test:rate           # Rate limit manager
+npm run test:ws             # WebSocket functionality
+npm run test:errors         # Error logging system
+npm run test:integration    # End-to-end trading flow
+```
+
+**Test Structure**:
+- **Unit Tests**: Individual component testing
+- **Integration Tests**: End-to-end flow validation
+- **API Tests**: Income API, position closing
+- **Performance Tests**: Metrics tracking
+- **Test Helpers**: `tests/utils/test-helpers.ts`
+
+## Git Branching Strategy
+
+**Git Flow Lite** - optimized for small teams:
+
+```
+main (production releases only)
+  └── dev (primary integration - all work merges here)
+         └── feature/* (temporary branches)
+         └── fix/* (temporary branches)
+         └── hotfix/* (critical production fixes)
+```
+
+### Workflow Rules
+
+**✅ ALWAYS**:
+- Create a temporary `feature/*` or `fix/*` branch for new work
+- Pull latest `dev` before creating a branch: `git pull origin dev`
+- Merge to `dev` first (never directly to `main`)
+- Delete temporary branches after merging to `dev`
+- Use `main` ONLY for stable production releases
+
+**❌ NEVER**:
+- Commit directly to `dev` or `main`
+- Push to `dev` without a PR
+- Create PRs from `dev` to `main` unless releasing to production
+- Work directly on `dev` or `main` branches
+
+### Standard Feature Development
+
+```bash
+# 1. Start new feature (ALWAYS create temp branch)
+git checkout dev
+git pull origin dev
+git checkout -b feature/my-feature
+
+# 2. Work on feature, commit regularly
+git add .
+git commit -m "feat: add my feature"
+
+# 3. Push and create PR to dev (NOT main)
+git push -u origin feature/my-feature
+gh pr create --base dev --title "feat: add my feature" --body "Description"
+
+# 4. After PR merged to dev, clean up
+git checkout dev
+git pull origin dev
+git branch -d feature/my-feature
+git push origin --delete feature/my-feature
+```
+
+### Commit Message Conventions
+
+Follow conventional commits:
+- `feat:` New feature
+- `fix:` Bug fix
+- `docs:` Documentation changes
+- `style:` Code formatting
+- `refactor:` Code refactoring
+- `test:` Test changes
+- `chore:` Maintenance tasks
+- `perf:` Performance improvements
+
+### Releasing to Production
+
+```bash
+# 1. Create PR from dev to main
+gh pr create --base main --head dev --title "Release: v1.2.0" --body "Release notes..."
+
+# 2. After PR merged, tag the release
+git checkout main
+git pull origin main
+git tag -a v1.2.0 -m "Release version 1.2.0"
+git push origin v1.2.0
+
+# 3. Sync release back to dev
+git checkout dev
+git merge main
+git push origin dev
+```
+
+## Authentication & Security
+
+### Dashboard Authentication
+
+The web UI uses NextAuth for password protection:
+- Configure password in `config.user.json` → `global.server.dashboardPassword`
+- Default is `"admin"` - **CHANGE THIS!**
+- Middleware protects all routes except `/api/auth/*`
+- Session-based authentication
+
+**Security Warnings**:
+- Bot displays warnings for default/weak passwords on startup
+- Extra warnings when remote WebSocket access is enabled
+- Minimum recommended password length: 8 characters
+
+### Remote Access
+
+Enable remote monitoring from other devices on your network:
+
+1. **Via Web UI** (Recommended):
+   - Go to http://localhost:3000/config
+   - Server Settings → Enable Remote WebSocket Access
+   - Save configuration
+
+2. **Via Environment Variable**:
+   - Set `NEXT_PUBLIC_WS_HOST=your_server_ip` in `.env.local`
+   - Restart application
+
+**Network Configuration**:
+- Port 3000: Web UI (HTTP)
+- Port 8080: WebSocket status server
+- Both must be accessible on network for remote access
+
+## Safety Features
+
+- **Paper mode** for risk-free testing
+- **Automatic stop-loss** on every position (STOP_MARKET orders)
+- **Automatic take-profit** on every position (LIMIT orders)
+- **Position size limits** per symbol and globally
+- **Leverage limits** configurable per symbol
+- **WebSocket auto-reconnection** with exponential backoff
+- **Graceful shutdown** handling (Ctrl+C) - cross-platform
+- **Exchange filter validation** (price, quantity, notional limits)
+- **VWAP-based entry filtering** to avoid adverse price movements
+- **Trade size validation** against exchange minimums
+- **Rate limit protection** with automatic queuing and backoff
+- **Comprehensive error logging** to SQLite database
+
+## Key Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `next` 15.5.4 | Web UI framework |
+| `react` 19.1.0 | UI components |
+| `ws` | WebSocket client/server |
+| `axios` | HTTP client for REST API |
+| `tsx` | TypeScript execution with watch mode |
+| `concurrently` | Run web + bot simultaneously |
+| `@radix-ui/*` | UI component library |
+| `recharts` | Trading charts |
+| `tailwindcss` v4 | Styling |
+| `sqlite3` | Database for history and logs |
+| `better-sqlite3` | Synchronous SQLite |
+| `zod` | Schema validation |
+| `sonner` | Toast notifications |
+| `next-auth` | Dashboard authentication |
+
+## Development Workflow
+
+1. **Initial Setup**:
+   ```bash
+   git clone <repo>
+   cd aster_lick_hunter_node
+   npm run setup
+   ```
+
+2. **Configure Bot**:
+   - Open http://localhost:3000/config
+   - Add API keys (or use paper mode)
+   - Configure symbols and risk parameters
+   - Set strong dashboard password
+
+3. **Start Development**:
+   ```bash
+   npm run dev  # User manages this, not Claude Code!
+   ```
+
+4. **Monitor**:
+   - Dashboard: http://localhost:3000
+   - Configuration: http://localhost:3000/config
+   - Errors: http://localhost:3000/errors
+   - Terminal logs show detailed bot activity
+
+5. **Make Changes**:
+   - Create feature branch: `git checkout -b feature/my-change`
+   - Make changes, test with `npx tsc --noEmit`
+   - Commit and push
+   - Create PR to `dev` branch
+
+6. **Test Changes**:
+   ```bash
+   npm test                    # Run all tests
+   npx tsc --noEmit           # Type checking
+   npm run lint               # Code quality
+   ```
+
+## Common Tasks
+
+### Updating Configuration
+- **Via Web UI**: http://localhost:3000/config (hot-reloads automatically)
+- **Via File**: Edit `config.user.json` (auto-detected and reloaded)
+
+### Checking Account Data
 ```typescript
-import { queryOrder, getAllOrders, setLeverage } from './src/lib/api/orders';
+import { getBalance, getPositions } from './src/lib/api/market';
+import { loadConfig } from './src/lib/bot/config';
 
-// Query specific order
-const orderDetails = await queryOrder({ symbol: 'BTCUSDT', orderId: 12345 }, credentials);
-
-// Get all orders for a symbol
-const allOrders = await getAllOrders('BTCUSDT', credentials);
-
-// Change leverage
-const leverageResponse = await setLeverage('BTCUSDT', 10, credentials);
+const config = await loadConfig();
+const balance = await getBalance(config.api);
+const positions = await getPositions(config.api);
 ```
 
-### Base URL and Headers
+### Viewing Errors
+- Web UI: http://localhost:3000/errors
+- Database: `liquidations.db` (errors table)
+- Terminal: Real-time error logging
 
-All API calls use:
-- **Base URL**: `https://fapi.asterdex.com`
-- **Request Headers**:
-  - `X-MBX-APIKEY`: Your API key
-  - `Content-Type`: `application/x-www-form-urlencoded` (for POST requests)
+### Database Access
+```bash
+# Open SQLite database
+sqlite3 liquidations.db
 
-### Authentication Building Blocks
+# View liquidations
+SELECT * FROM liquidations ORDER BY timestamp DESC LIMIT 10;
 
-If you need to construct custom API calls:
-
-```typescript
-import { buildSignedQuery, buildSignedForm, getTimestamp } from './src/lib/api/auth';
-
-// For GET requests (sign query parameters)
-const queryString = buildSignedQuery({ symbol: 'BTCUSDT' }, credentials);
-const response = await axios.get(`https://fapi.asterdex.com/fapi/v1/openOrders?${queryString}`, {
-  headers: { 'X-MBX-APIKEY': credentials.apiKey }
-});
-
-// For POST requests (sign form data)
-const formData = buildSignedForm({ symbol: 'BTCUSDT', leverage: 10 }, credentials);
-const response = await axios.post('https://fapi.asterdex.com/fapi/v1/leverage', formData, {
-  headers: {
-    'X-MBX-APIKEY': credentials.apiKey,
-    'Content-Type': 'application/x-www-form-urlencoded'
-  }
-});
+# View errors
+SELECT * FROM error_logs ORDER BY timestamp DESC LIMIT 10;
 ```
 
-### Important Notes
+## Process Management
 
-- All signed requests include timestamp and are valid for 5 seconds (recvWindow: 5000ms)
-- Always check the API documentation at `docs/aster-finance-futures-api.md` for endpoint details
-- Use paper mode (`"paperMode": true` in config.user.json) when testing to avoid real trades
-- API responses include detailed error information in `error.response?.data` for debugging
+The custom process manager (`scripts/process-manager.js`) handles:
+- Cross-platform process spawning (Windows uses `cmd.exe`, Unix uses shell)
+- Graceful shutdown of all child processes
+- Process group management for clean termination
+- Colored console output for debugging
+- Timeout-based force kill as fallback
+- Signal handling (SIGINT, SIGTERM, SIGBREAK on Windows)
 
-## Additional Documentation
+**Graceful Shutdown**:
+- Press Ctrl+C to stop bot
+- 5-second timeout for graceful shutdown
+- Force kill if timeout exceeded
+- All services stop cleanly (WebSockets, databases, streams)
 
-For comprehensive understanding of the trading strategy, refer to:
-- **`docs/STRATEGY.md`**: Complete trading strategy documentation with examples and optimization guidelines
-- **`docs/CONFIG_MIGRATION.md`**: Configuration migration and versioning details
-- **`docs/aster-finance-futures-api.md`**: Complete API documentation for the Aster Finance exchange
+## Troubleshooting
 
-## Development Tips
+### Bot won't start
+1. Check API keys in `config.user.json`
+2. Verify `npm install` completed successfully
+3. Run `npx tsc --noEmit` to check for TypeScript errors
+4. Check port 3000 and 8080 are not in use
 
-- The bot uses TypeScript interfaces in `src/lib/types.ts` for all trading data structures
-- Configuration is validated using Zod schemas for type safety
-- All WebSocket connections include automatic reconnection with exponential backoff
-- Position management includes underwater position handling for volatile market entries
-- The bot supports both one-way and hedge position modes for flexible trading strategies
+### Orders rejected
+1. Check trade size meets exchange minimums (bot validates on startup)
+2. Verify sufficient account balance
+3. Check position mode matches config (ONE_WAY vs HEDGE)
+4. Review error logs at `/errors`
+
+### WebSocket connection issues
+1. Check `websocketPort` in config (default: 8080)
+2. Verify firewall allows port 8080
+3. For remote access, ensure `useRemoteWebSocket: true`
+4. Check browser console for connection errors
+
+### Rate limit errors
+1. Reduce `maxRequestWeight` and `maxOrderCount` in config
+2. Increase `reservePercent` for more headroom
+3. Enable `enableBatching` to batch requests
+4. Monitor rate limits in web UI
+
+## Important Notes for Claude Code
+
+1. **Server Management**: User controls when to start/stop the server. Never run `npm run dev`, `npm start`, or any server commands.
+
+2. **Type Safety**: Always run `npx tsc --noEmit` after making changes to ensure TypeScript compilation succeeds.
+
+3. **Security**: Never commit `config.user.json` or API keys to version control. This file is in `.gitignore`.
+
+4. **Branching**: Always create a temporary `feature/*` or `fix/*` branch before making changes. Never commit directly to `dev` or `main`.
+
+5. **Testing**: Run relevant tests before committing. Use `npm test` for full test suite or individual test commands for specific components.
+
+6. **Configuration**: Configuration changes can be made via web UI at `/config` and will hot-reload automatically. Manual file edits are also detected.
+
+7. **Error Investigation**: Check `/errors` page in web UI and `error_logs` table in database for detailed error context.
+
+8. **API Calls**: Use existing API utilities in `src/lib/api/` rather than making raw axios calls. They include proper authentication, rate limiting, and error handling.
+
+9. **Paper Mode**: Always recommend starting in paper mode when testing new features or strategies.
+
+10. **Documentation**: Refer to `docs/STRATEGY.md` for trading strategy details and `docs/aster-finance-futures-api.md` for API documentation.

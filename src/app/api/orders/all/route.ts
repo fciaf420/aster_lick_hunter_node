@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllOrders } from '@/lib/api/orders';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
 import { loadConfig } from '@/lib/bot/config';
 import { Order, OrderStatus } from '@/lib/types/order';
-import { getIncomeHistory } from '@/lib/api/income';
 
 // Cache for orders to reduce API calls
 let ordersCache: { data: Order[]; timestamp: number } | null = null;
@@ -11,6 +10,7 @@ const CACHE_TTL = 10000; // 10 seconds
 export async function GET(request: NextRequest) {
   try {
     const config = await loadConfig();
+    const exchange = createExchangeAdapter(config);
     const searchParams = request.nextUrl.searchParams;
 
     // Extract query parameters
@@ -21,14 +21,35 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '100');
     const force = searchParams.get('force') === 'true';
 
-    // Get configured symbols
-    const configuredSymbols = config.symbols ? Object.keys(config.symbols) : [];
+    // Get configured/active symbols only
+    let configuredSymbols = config.symbols ? Object.keys(config.symbols) : [];
+
+    // If no symbols configured, try to get symbols from recent income history
+    if (configuredSymbols.length === 0 && !symbol) {
+      try {
+        const recentIncome = await exchange.history.getIncomeHistory({
+          startTime: Date.now() - 30 * 24 * 60 * 60 * 1000, // Last 30 days
+          limit: 1000,
+        });
+        // Extract unique symbols from income records
+        const symbolSet = new Set<string>();
+        recentIncome.forEach(record => {
+          if (record.symbol && record.symbol !== '') {
+            symbolSet.add(record.symbol);
+          }
+        });
+        configuredSymbols = Array.from(symbolSet);
+        console.log(`[Orders API] No configured symbols, discovered ${configuredSymbols.length} symbols from income history:`, configuredSymbols);
+      } catch (err) {
+        console.error('[Orders API] Failed to fetch income history for symbol discovery:', err);
+      }
+    }
 
     // Determine which symbol to fetch - use provided symbol or first configured symbol
     const fetchSymbol = symbol || (configuredSymbols.length > 0 ? configuredSymbols[0] : 'BTCUSDT');
 
     // If no API key is configured, return empty array
-    if (!config.api.apiKey || !config.api.secretKey) {
+    if (!exchange.hasCredentials()) {
       return NextResponse.json([]);
     }
 
@@ -39,43 +60,45 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-      // Fetch orders from exchange - we can only fetch one symbol at a time from the API
-      // So we'll fetch for the requested symbol or iterate through configured symbols
+      // Fetch orders from exchange - only from configured/active symbols
       let allOrders: any[] = [];
 
       if (symbol && symbol !== 'ALL') {
         // Fetch for specific symbol
-        const orders = await getAllOrders(
+        const orders = await exchange.history.getAllOrders(
           symbol,
-          config.api,
           startTime ? parseInt(startTime) : undefined,
           endTime ? parseInt(endTime) : undefined,
           Math.min(limit * 2, 1000)
         );
         allOrders = orders;
       } else if (configuredSymbols.length > 0) {
-        // Fetch for all configured symbols (up to a reasonable limit)
-        const symbolsToFetch = configuredSymbols.slice(0, 5); // Limit to 5 symbols to avoid too many API calls
+        // Fetch for all configured/active symbols
+        console.log(`[Orders API] Fetching orders from ${configuredSymbols.length} configured symbols...`);
 
-        for (const sym of symbolsToFetch) {
+        // Fetch generous amount per symbol to ensure we get enough orders
+        // The limit will be applied AFTER filtering and sorting all orders from all symbols
+        const perSymbolLimit = Math.max(200, limit * 2);
+
+        for (const sym of configuredSymbols) {
           try {
-            const orders = await getAllOrders(
+            const orders = await exchange.history.getAllOrders(
               sym,
-              config.api,
               startTime ? parseInt(startTime) : undefined,
               endTime ? parseInt(endTime) : undefined,
-              Math.min(limit, 200) // Limit per symbol when fetching multiple
+              Math.min(perSymbolLimit, 500)
             );
+            console.log(`[Orders API] Fetched ${orders.length} orders from ${sym}`);
             allOrders = allOrders.concat(orders);
           } catch (err) {
             console.error(`Failed to fetch orders for ${sym}:`, err);
           }
         }
+        console.log(`[Orders API] Total orders fetched from all symbols: ${allOrders.length}`);
       } else {
         // Fallback to default symbol
-        const orders = await getAllOrders(
+        const orders = await exchange.history.getAllOrders(
           fetchSymbol,
-          config.api,
           startTime ? parseInt(startTime) : undefined,
           endTime ? parseInt(endTime) : undefined,
           Math.min(limit * 2, 1000)
@@ -83,61 +106,52 @@ export async function GET(request: NextRequest) {
         allOrders = orders;
       }
 
-      // Fetch income history to get realized PnL for filled orders
-      let incomeRecords: any[] = [];
-      try {
-        // Fetch income history for the same time period
-        const incomeParams = {
-          startTime: startTime ? parseInt(startTime) : Date.now() - 7 * 24 * 60 * 60 * 1000, // Default to 7 days
-          endTime: endTime ? parseInt(endTime) : Date.now(),
-          incomeType: 'REALIZED_PNL' as any,
-          limit: 1000,
-        };
-        incomeRecords = await getIncomeHistory(config.api, incomeParams);
-      } catch (err) {
-        console.error('Failed to fetch income history:', err);
-      }
+      // Fetch user trades to get realized PnL for filled orders
+      const pnlMap = new Map<number, number>(); // orderId → total realizedPnl
 
-      // Bucket realized PnL by symbol/time window and preserve every fill
-      const pnlBuckets = new Map<string, number[]>();
-      incomeRecords
-        .filter(record => record?.incomeType === 'REALIZED_PNL' && record?.symbol)
-        .sort((a, b) => (a.time || 0) - (b.time || 0))
-        .forEach(record => {
-          const rawIncome = typeof record.income === 'string' ? parseFloat(record.income) : Number(record.income);
-          if (!Number.isFinite(rawIncome)) {
-            return;
+      if (symbol && symbol !== 'ALL') {
+        // Fetch trades for specific symbol
+        try {
+          const trades = await exchange.history.getUserTrades(symbol, {
+            startTime: startTime ? parseInt(startTime) : Date.now() - 7 * 24 * 60 * 60 * 1000,
+            endTime: endTime ? parseInt(endTime) : Date.now(),
+            limit: 1000,
+          });
+
+          // Aggregate PnL by orderId (handle multiple fills per order)
+          trades.forEach(trade => {
+            const existing = pnlMap.get(trade.orderId) || 0;
+            pnlMap.set(trade.orderId, existing + parseFloat(trade.realizedPnl));
+          });
+        } catch (err) {
+          console.error(`Failed to fetch trades for ${symbol}:`, err);
+        }
+      } else if (configuredSymbols.length > 0) {
+        // Fetch trades for all configured symbols
+        for (const sym of configuredSymbols) {
+          try {
+            const trades = await exchange.history.getUserTrades(sym, {
+              startTime: startTime ? parseInt(startTime) : Date.now() - 7 * 24 * 60 * 60 * 1000,
+              endTime: endTime ? parseInt(endTime) : Date.now(),
+              limit: 1000,
+            });
+
+            // Aggregate PnL by orderId (handle multiple fills per order)
+            trades.forEach(trade => {
+              const existing = pnlMap.get(trade.orderId) || 0;
+              pnlMap.set(trade.orderId, existing + parseFloat(trade.realizedPnl));
+            });
+          } catch (err) {
+            console.error(`Failed to fetch trades for ${sym}:`, err);
           }
-
-          const timeWindow = Math.floor((record.time || 0) / 5000) * 5000; // 5 second window
-          const key = `${record.symbol}_${timeWindow}`;
-
-          const bucket = pnlBuckets.get(key) || [];
-          bucket.push(rawIncome);
-          pnlBuckets.set(key, bucket);
-        });
+        }
+      }
 
       // Transform and enrich order data
       const transformedOrders: Order[] = allOrders.map(order => {
-        // Try to find matching PnL from income history
-        let realizedPnl = '0';
-
-        // For filled orders, try to match PnL by symbol and time
-        if (order.status === 'FILLED' && order.updateTime) {
-          const timeWindow = Math.floor(order.updateTime / 5000) * 5000;
-          const key = `${order.symbol}_${timeWindow}`;
-          const bucket = pnlBuckets.get(key);
-          if (bucket && bucket.length > 0) {
-            const amount = bucket.shift() ?? 0;
-            realizedPnl = Number.isFinite(amount) ? amount.toString() : '0';
-
-            if (bucket.length === 0) {
-              pnlBuckets.delete(key);
-            } else {
-              pnlBuckets.set(key, bucket);
-            }
-          }
-        }
+        // Get realized PnL from trades map using orderId
+        const realizedPnl = pnlMap.get(order.orderId);
+        const realizedPnlStr = realizedPnl !== undefined ? realizedPnl.toString() : '0';
 
         return {
           symbol: order.symbol,
@@ -162,7 +176,7 @@ export async function GET(request: NextRequest) {
           priceProtect: order.priceProtect || false,
           avgPrice: order.avgPrice || order.price,
           origType: order.origType || order.type,
-          realizedProfit: realizedPnl,
+          realizedProfit: realizedPnlStr,
         };
       });
 

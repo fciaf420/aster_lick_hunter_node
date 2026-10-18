@@ -9,8 +9,9 @@ import { ApiCredentials, Order } from '../types';
 import { buildSignedForm } from './auth';
 import { getRateLimitedAxios } from './requestInterceptor';
 import { RequestPriority } from './rateLimitManager';
+import { ASTER_REST_BASE_URL } from '../exchange/aster/constants';
 
-const BASE_URL = 'https://fapi.asterdex.com';
+const BASE_URL = ASTER_REST_BASE_URL;
 
 export interface BatchOrderParams {
   symbol: string;

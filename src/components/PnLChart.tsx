@@ -24,7 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Skeleton } from '@/components/ui/skeleton';
+import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import {
   BarChart3,
@@ -34,12 +34,15 @@ import {
   TrendingDown,
   Target,
   Percent,
+  Loader2,
 } from 'lucide-react';
 import websocketService from '@/lib/services/websocketService';
 import { useConfig } from '@/components/ConfigProvider';
+import IncomeBreakdownChart from '@/components/IncomeBreakdownChart';
+import PerSymbolPerformanceTable from '@/components/PerSymbolPerformanceTable';
 
 type TimeRange = '24h' | '7d' | '30d' | '90d' | '1y' | 'all';
-type ChartType = 'daily' | 'cumulative';
+type ChartType = 'daily' | 'cumulative' | 'breakdown' | 'symbols';
 type DisplayMode = 'usdt' | 'percent';
 
 interface DailyPnL {
@@ -47,6 +50,10 @@ interface DailyPnL {
   realizedPnl: number;
   commission: number;
   fundingFee: number;
+  insuranceClear: number;
+  marketMerchantReward: number;
+  apolloxRebate: number;
+  usdfReward: number;
   netPnl: number;
   tradeCount: number;
   cumulativePnl?: number; // Optional field added when chartType is 'cumulative'
@@ -54,6 +61,13 @@ interface DailyPnL {
 
 interface PerformanceMetrics {
   totalPnl: number;
+  totalRealizedPnl: number;
+  totalCommission: number;
+  totalFundingFee: number;
+  totalInsuranceClear: number;
+  totalMarketMerchantReward: number;
+  totalApolloxRebate: number;
+  totalUsdfReward: number;
   winRate: number;
   profitableDays: number;
   lossDays: number;
@@ -69,6 +83,7 @@ interface PnLData {
   dailyPnL: DailyPnL[];
   metrics: PerformanceMetrics;
   range: string;
+  recordCount?: number;
   error?: string;
 }
 
@@ -83,9 +98,26 @@ export default function PnLChart() {
   const [realtimePnL, setRealtimePnL] = useState<any>(null);
   const [totalBalance, setTotalBalance] = useState<number>(0);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
 
   // Check if API keys are configured
   const hasApiKeys = config?.api?.apiKey && config?.api?.secretKey;
+
+  // Animate loading progress
+  useEffect(() => {
+    if (isLoading) {
+      setLoadingProgress(0);
+      const interval = setInterval(() => {
+        setLoadingProgress(prev => {
+          if (prev >= 90) return 90; // Cap at 90% until data loads
+          return prev + Math.random() * 15;
+        });
+      }, 200);
+      return () => clearInterval(interval);
+    } else {
+      setLoadingProgress(100);
+    }
+  }, [isLoading]);
 
   // Data validation helper
   const validateDailyPnLData = (data: any[]): DailyPnL[] => {
@@ -203,7 +235,7 @@ export default function PnLChart() {
     console.log(`[PnL Chart] - Session data available: ${!!realtimePnL?.session}`);
 
     const today = new Date().toISOString().split('T')[0];
-    let processedData = [...pnlData.dailyPnL];
+    const processedData = [...pnlData.dailyPnL];
 
     // Log initial data state
     const todayInHistorical = processedData.find(d => d.date === today);
@@ -225,27 +257,18 @@ export default function PnLChart() {
       console.log(`[PnL Chart] Date range: ${processedData[0].date} to ${processedData[processedData.length - 1].date}`);
     }
 
-    // CRITICAL FIX: Remove client-side filtering for shorter ranges
-    // The API already filters correctly, and client-side filtering can cause data inconsistencies
-    if (timeRange === '1y' || timeRange === 'all') {
-      // Only filter for very long ranges where we might want to limit chart performance
-      const cutoffDate = new Date();
-      if (timeRange === '1y') {
-        cutoffDate.setFullYear(cutoffDate.getFullYear() - 1);
-      } else {
-        // For 'all', limit to 2 years for performance
-        cutoffDate.setFullYear(cutoffDate.getFullYear() - 2);
-      }
-      const cutoffDateString = cutoffDate.toISOString().split('T')[0];
-      console.log(`[PnL Chart] Filtering ${timeRange}: cutoff date = ${cutoffDateString}`);
+    // CRITICAL FIX: Trust API filtering for all ranges
+    // The API already applies correct time-based filtering with proper pagination
+    // Client-side filtering caused data inconsistencies, especially for 24h, 7d, 30d ranges
+    console.log(`[PnL Chart] Using API-filtered data directly for ${timeRange} (no client-side filtering)`);
 
-      const beforeFilter = processedData.length;
-      processedData = processedData.filter(d => d.date >= cutoffDateString);
-
-      console.log(`[PnL Chart] After filtering: ${processedData.length} days (removed ${beforeFilter - processedData.length})`);
-    } else {
-      console.log(`[PnL Chart] No client-side filtering for ${timeRange} - using API-filtered data directly`);
-    }
+    // Note: The API handles all time ranges correctly:
+    // - 24h: Last 24 hours of income records
+    // - 7d: Last 7 days
+    // - 30d: Last 30 days
+    // - 90d: Last 90 days
+    // - 1y: Last 365 days
+    // - all: Last 2 years (with pagination to fetch all records)
 
     // Calculate cumulative PnL if needed
     if (chartType === 'cumulative') {
@@ -280,7 +303,18 @@ export default function PnLChart() {
   const formatDateTick = (value: string) => {
     // CRITICAL FIX: Parse date string correctly to avoid timezone shift
     // "2025-09-26" should display as 9/26, not 9/25
-    const [year, month, day] = value.split('-').map(Number);
+    // Use direct string parsing instead of Date object to avoid timezone issues
+    if (!value || typeof value !== 'string') return '';
+
+    const parts = value.split('-');
+    if (parts.length !== 3) return value; // Return as-is if not in expected format
+
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10);
+    const day = parseInt(parts[2], 10);
+
+    // Validate parsed values
+    if (isNaN(year) || isNaN(month) || isNaN(day)) return value;
 
     switch (timeRange) {
       case '24h':
@@ -292,7 +326,8 @@ export default function PnLChart() {
         return `${month}/${day}`;
       case '1y':
       case 'all':
-        return `${year}-${month.toString().padStart(2, '0')}`;
+        // For long ranges, show year-month to save space
+        return `${year.toString().slice(2)}-${month.toString().padStart(2, '0')}`;
       default:
         return `${month}/${day}`;
     }
@@ -314,9 +349,21 @@ export default function PnLChart() {
       const isDaily = chartType === 'daily';
       const displayValue = isDaily ? data.netPnl : data.cumulativePnl;
 
+      // Format date without timezone conversion
+      const formatTooltipDate = (dateStr: string) => {
+        const parts = dateStr.split('-');
+        if (parts.length === 3) {
+          const year = parseInt(parts[0], 10);
+          const month = parseInt(parts[1], 10);
+          const day = parseInt(parts[2], 10);
+          return `${month}/${day}/${year}`;
+        }
+        return dateStr;
+      };
+
       return (
         <div className="bg-background/95 backdrop-blur border rounded-md shadow-lg p-1.5">
-          <p className="text-[10px] font-medium text-muted-foreground">{new Date(label).toLocaleDateString()}</p>
+          <p className="text-[10px] font-medium text-muted-foreground">{formatTooltipDate(label)}</p>
           <div className="flex items-center gap-2 mt-0.5">
             <span className={`text-sm font-semibold ${displayValue >= 0 ? 'text-green-500' : 'text-red-500'}`}>
               {formatTooltipValue(displayValue)}
@@ -328,9 +375,17 @@ export default function PnLChart() {
             )}
           </div>
           {isDaily && (
-            <div className="flex gap-2 mt-1 text-[10px] text-muted-foreground">
-              <span>Real: {formatTooltipValue(data.realizedPnl)}</span>
-              <span>Fee: {formatTooltipValue(Math.abs(data.commission))}</span>
+            <div className="flex flex-col gap-0.5 mt-1 text-[10px] text-muted-foreground">
+              <div className="flex gap-2">
+                <span>Real: {formatTooltipValue(data.realizedPnl)}</span>
+                <span>Fee: {formatTooltipValue(data.commission + data.fundingFee)}</span>
+              </div>
+              {(data.insuranceClear !== 0 || data.marketMerchantReward !== 0) && (
+                <div className="flex gap-2">
+                  {data.insuranceClear !== 0 && <span>Ins: {formatTooltipValue(data.insuranceClear)}</span>}
+                  {data.marketMerchantReward !== 0 && <span>Reward: {formatTooltipValue(data.marketMerchantReward)}</span>}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -342,11 +397,22 @@ export default function PnLChart() {
   if (isLoading) {
     return (
       <Card>
-        <CardHeader>
-          <Skeleton className="h-6 w-48" />
+        <CardHeader className="pb-2">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4" />
+            <CardTitle className="text-base font-medium">Performance</CardTitle>
+          </div>
         </CardHeader>
         <CardContent>
-          <Skeleton className="h-[400px] w-full" />
+          <div className="flex flex-col items-center justify-center h-[300px] space-y-4">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <div className="w-full max-w-xs space-y-2">
+              <Progress value={loadingProgress} className="h-1.5" />
+              <p className="text-xs text-center text-muted-foreground">
+                Loading performance data...
+              </p>
+            </div>
+          </div>
         </CardContent>
       </Card>
     );
@@ -438,10 +504,16 @@ export default function PnLChart() {
     if (!metrics || !chartData.length || totalBalance <= 0) return 0;
 
     const daysWithData = chartData.length;
+
+    // Avoid division by zero or invalid calculations
+    if (daysWithData === 0) return 0;
+
     const totalReturn = metrics.totalPnl / totalBalance;
 
-    // Annualize the return based on actual trading days
-    const annualizedReturn = (totalReturn / daysWithData) * 365;
+    // Use compound annual growth rate (CAGR) formula: (1 + totalReturn)^(365/days) - 1
+    // This accounts for compounding effects, unlike simple linear extrapolation
+    const annualizedReturn = Math.pow(1 + totalReturn, 365 / daysWithData) - 1;
+
     return annualizedReturn * 100; // Convert to percentage
   };
 
@@ -501,6 +573,8 @@ export default function PnLChart() {
                 <TabsList className="h-7">
                   <TabsTrigger value="daily" className="h-6 text-xs">Daily</TabsTrigger>
                   <TabsTrigger value="cumulative" className="h-6 text-xs">Total</TabsTrigger>
+                  <TabsTrigger value="breakdown" className="h-6 text-xs">Breakdown</TabsTrigger>
+                  <TabsTrigger value="symbols" className="h-6 text-xs">Per Symbol</TabsTrigger>
                 </TabsList>
               </Tabs>
             </div>
@@ -509,6 +583,16 @@ export default function PnLChart() {
       </CardHeader>
       {!isCollapsed && (
         <CardContent>
+        {/* Data Quality Info - Show record count for large datasets */}
+        {pnlData?.recordCount && pnlData.recordCount >= 1000 && (
+          <div className="mb-2 p-2 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-md">
+            <div className="flex items-center gap-2 text-xs text-blue-700 dark:text-blue-400">
+              <span className="font-medium">ℹ️ Large Dataset</span>
+              <span>Loaded {pnlData.recordCount.toLocaleString()} income records using pagination.</span>
+            </div>
+          </div>
+        )}
+
         {/* Performance Summary - Minimal inline design */}
         {safeMetrics && (
           <div className="flex flex-wrap items-center gap-3 mb-3 pb-3 border-b">
@@ -567,50 +651,59 @@ export default function PnLChart() {
               <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
           )}
-          <ResponsiveContainer width="100%" height={200}>
-            {chartType === 'daily' ? (
-            <BarChart data={chartData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 10 }}
-                tickFormatter={formatDateTick}
-                domain={['dataMin', 'dataMax']}
-                padding={{ left: 10, right: 10 }}
-              />
-              <YAxis tick={{ fontSize: 10 }} width={40} />
-              <Tooltip content={<CustomTooltip />} />
-              <ReferenceLine y={0} stroke="#666" />
-              <Bar
-                dataKey="netPnl"
-                radius={[4, 4, 0, 0]}
-              >
-                {chartData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.netPnl >= 0 ? '#10b981' : '#ef4444'} />
-                ))}
-              </Bar>
-            </BarChart>
+          {chartType === 'breakdown' ? (
+            <IncomeBreakdownChart data={pnlData?.dailyPnL || []} timeRange={timeRange} />
+          ) : chartType === 'symbols' ? (
+            <PerSymbolPerformanceTable timeRange={timeRange} />
           ) : (
-            <AreaChart data={chartData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 10 }}
-                tickFormatter={formatDateTick}
-              />
-              <YAxis tick={{ fontSize: 10 }} width={40} />
-              <Tooltip content={<CustomTooltip />} />
-              <ReferenceLine y={0} stroke="#666" />
-              <Area
-                type="monotone"
-                dataKey="cumulativePnl"
-                stroke={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "#10b981" : "#ef4444"}
-                fill={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "#10b98140" : "#ef444440"}
-                strokeWidth={2}
-              />
-            </AreaChart>
+            <ResponsiveContainer width="100%" height={200}>
+              {chartType === 'daily' ? (
+              <BarChart data={chartData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10 }}
+                  tickFormatter={formatDateTick}
+                  padding={{ left: 10, right: 10 }}
+                  interval={chartData.length <= 5 ? 0 : chartData.length <= 20 ? 'preserveStartEnd' : 'preserveStart'}
+                  minTickGap={chartData.length <= 10 ? 10 : 20}
+                />
+                <YAxis tick={{ fontSize: 10 }} width={40} />
+                <Tooltip content={<CustomTooltip />} />
+                <ReferenceLine y={0} stroke="#666" />
+                <Bar
+                  dataKey="netPnl"
+                  radius={[4, 4, 0, 0]}
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.netPnl >= 0 ? '#10b981' : '#ef4444'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            ) : (
+              <AreaChart data={chartData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10 }}
+                  tickFormatter={formatDateTick}
+                  interval={chartData.length <= 5 ? 0 : chartData.length <= 20 ? 'preserveStartEnd' : 'preserveStart'}
+                  minTickGap={chartData.length <= 10 ? 10 : 20}
+                />
+                <YAxis tick={{ fontSize: 10 }} width={40} />
+                <Tooltip content={<CustomTooltip />} />
+                <ReferenceLine y={0} stroke="#666" />
+                <Area
+                  type="monotone"
+                  dataKey="cumulativePnl"
+                  stroke={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "#10b981" : "#ef4444"}
+                  fill={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "#10b98140" : "#ef444440"}
+                  strokeWidth={2}
+                />
+              </AreaChart>
+            )}
+          </ResponsiveContainer>
           )}
-        </ResponsiveContainer>
         </div>
 
         {/* Additional Metrics - Inline badges */}

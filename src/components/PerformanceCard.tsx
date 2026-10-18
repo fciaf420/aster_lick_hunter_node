@@ -12,6 +12,8 @@ interface DailyPnL {
   realizedPnl: number;
   commission: number;
   fundingFee: number;
+  insuranceClear: number;
+  marketMerchantReward: number;
   netPnl: number;
   tradeCount: number;
 }
@@ -21,6 +23,8 @@ interface PnLMetrics {
   totalRealizedPnl: number;
   totalCommission: number;
   totalFundingFee: number;
+  totalInsuranceClear: number;
+  totalMarketMerchantReward: number;
   winRate: number;
   profitableDays: number;
   lossDays: number;
@@ -77,7 +81,13 @@ export default function PerformanceCard() {
       if (message.type === 'pnl_update' || message.type === 'trade_update') {
         // Refresh 24h data when trades occur
         fetch('/api/income?range=24h')
-          .then(r => r.json())
+          .then(async r => {
+            const contentType = r.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+              return r.json();
+            }
+            throw new Error('Non-JSON response');
+          })
           .then(pnlData => setPnlData(pnlData))
           .catch(error => console.error('Failed to refresh PnL data:', error));
       }
@@ -197,6 +207,33 @@ export default function PerformanceCard() {
                 {formatCurrency(pnlData.metrics.totalCommission + pnlData.metrics.totalFundingFee)}
               </p>
             </div>
+            {/* Show Insurance & Rewards if non-zero */}
+            {(pnlData.metrics.totalInsuranceClear !== 0 || pnlData.metrics.totalMarketMerchantReward !== 0) && (
+              <>
+                {pnlData.metrics.totalInsuranceClear !== 0 && (
+                  <div>
+                    <p className="text-muted-foreground">Insurance</p>
+                    <p className={cn(
+                      "font-medium",
+                      pnlData.metrics.totalInsuranceClear >= 0 ? "text-green-500" : "text-red-500"
+                    )}>
+                      {formatCurrency(pnlData.metrics.totalInsuranceClear)}
+                    </p>
+                  </div>
+                )}
+                {pnlData.metrics.totalMarketMerchantReward !== 0 && (
+                  <div>
+                    <p className="text-muted-foreground">Rewards</p>
+                    <p className={cn(
+                      "font-medium",
+                      pnlData.metrics.totalMarketMerchantReward >= 0 ? "text-green-500" : "text-red-500"
+                    )}>
+                      {formatCurrency(pnlData.metrics.totalMarketMerchantReward)}
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
 

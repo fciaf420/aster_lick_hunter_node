@@ -1,6 +1,5 @@
-import { UserDataStream, AccountUpdate } from '../api/userDataStream';
-import { getAccountInfo } from '../api/market';
-import { ApiCredentials } from '../types';
+import type { AccountUpdate } from '../api/userDataStream';
+import type { AccountStream, ExchangeAdapter } from '../exchange/types';
 import { EventEmitter } from 'events';
 
 export interface BalanceData {
@@ -12,7 +11,7 @@ export interface BalanceData {
 }
 
 export class BalanceService extends EventEmitter {
-  private userDataStream: UserDataStream | null = null;
+  private userDataStream: AccountStream | null = null;
   private currentBalance: BalanceData = {
     totalBalance: 0,
     availableBalance: 0,
@@ -20,7 +19,7 @@ export class BalanceService extends EventEmitter {
     totalPnL: 0,
     lastUpdate: 0
   };
-  private credentials: ApiCredentials | null = null;
+  private exchange: ExchangeAdapter | null = null;
   private initialized = false;
   private connectionError: string | null = null;
   private lastSuccessfulUpdate = 0;
@@ -33,14 +32,14 @@ export class BalanceService extends EventEmitter {
     super();
   }
 
-  async initialize(credentials: ApiCredentials): Promise<void> {
+  async initialize(exchange: ExchangeAdapter): Promise<void> {
 
     // Validate credentials
-    if (!credentials.apiKey || !credentials.secretKey) {
+    if (!exchange.hasCredentials()) {
       throw new Error('Invalid credentials: API key and secret key are required');
     }
 
-    this.credentials = credentials;
+    this.exchange = exchange;
     this.connectionError = null;
     this.retryCount = 0;
 
@@ -49,7 +48,7 @@ export class BalanceService extends EventEmitter {
       await this.fetchInitialBalance();
 
       // Start WebSocket stream for real-time updates
-      this.userDataStream = new UserDataStream(credentials);
+      this.userDataStream = exchange.createAccountStream();
       await this.userDataStream.start(this.handleAccountUpdate.bind(this));
 
       this.initialized = true;
@@ -108,11 +107,11 @@ export class BalanceService extends EventEmitter {
   }
 
   public async fetchInitialBalance(): Promise<void> {
-    if (!this.credentials) throw new Error('No credentials available');
+    if (!this.exchange) throw new Error('No credentials available');
 
     const attemptFetch = async (): Promise<void> => {
       try {
-        const accountData = await getAccountInfo(this.credentials!);
+        const accountData = await this.exchange!.getAccountInfo();
 
         if (accountData) {
           // availableBalance is the free balance available for trading
@@ -180,13 +179,14 @@ export class BalanceService extends EventEmitter {
   private updateBalanceFromStream(update: AccountUpdate): void {
     const { balances, positions } = update.updateData;
 
-    // Find USDT balance update
-    const usdtBalance = balances.find(b => b.asset === 'USDT');
-    if (usdtBalance) {
+    // Find the margin asset's balance update (USDT on Aster, USDC on Lighter)
+    const marginAsset = this.exchange?.capabilities.marginAsset ?? 'USDT';
+    const marginBalance = balances.find(b => b.asset === marginAsset);
+    if (marginBalance) {
       // walletBalance is the total balance in the account
       // crossWalletBalance is the balance across all margin assets (usually same as wallet for single asset mode)
-      const walletBalance = parseFloat(usdtBalance.walletBalance);
-      const _crossWalletBalance = parseFloat(usdtBalance.crossWalletBalance);
+      const walletBalance = parseFloat(marginBalance.walletBalance);
+      const _crossWalletBalance = parseFloat(marginBalance.crossWalletBalance);
 
       // Calculate available balance (wallet balance minus margin used in positions)
       // We'll calculate margin from positions below, then derive available
@@ -247,7 +247,7 @@ export class BalanceService extends EventEmitter {
   }
 
   private async attemptFullReconnection(): Promise<void> {
-    if (!this.credentials) return;
+    if (!this.exchange) return;
 
     try {
 
@@ -261,7 +261,7 @@ export class BalanceService extends EventEmitter {
       await this.fetchInitialBalance();
 
       // Restart WebSocket
-      this.userDataStream = new UserDataStream(this.credentials);
+      this.userDataStream = this.exchange.createAccountStream();
       await this.userDataStream.start(this.handleAccountUpdate.bind(this));
 
       this.connectionError = null;
@@ -279,10 +279,10 @@ export function getBalanceService(): BalanceService | null {
   return balanceService;
 }
 
-export async function initializeBalanceService(credentials: ApiCredentials): Promise<void> {
+export async function initializeBalanceService(exchange: ExchangeAdapter): Promise<void> {
   balanceService = new BalanceService();
   try {
-    await balanceService.initialize(credentials);
+    await balanceService.initialize(exchange);
   } catch (error) {
     // Keep the service instance even if initialization fails
     // so we can try to get balance via REST API fallback

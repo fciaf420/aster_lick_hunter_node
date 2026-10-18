@@ -13,8 +13,10 @@ import {
   HelpCircle,
   RefreshCw,
   Bug,
+  Target,
 } from "lucide-react"
 
+import { RateLimitSidebar } from "@/components/RateLimitSidebar"
 import {
   Sidebar,
   SidebarContent,
@@ -35,6 +37,7 @@ import { useConfig } from "@/components/ConfigProvider"
 import { useBotStatus } from "@/hooks/useBotStatus"
 import websocketService from '@/lib/services/websocketService'
 import dataStore from '@/lib/services/dataStore'
+import { VersionChecker } from '@/components/VersionChecker'
 
 const navigation = [
   {
@@ -46,6 +49,11 @@ const navigation = [
     title: "Configuration",
     icon: Settings,
     href: "/config",
+  },
+  {
+    title: "Optimizer",
+    icon: Target,
+    href: "/optimizer",
   },
   {
     title: "Wiki & Help",
@@ -65,7 +73,13 @@ export function AppSidebar() {
   const { config } = useConfig()
   const { status, isConnected } = useBotStatus()
   const [positions, setPositions] = React.useState<any[]>([])
+  const [isMounted, setIsMounted] = React.useState(false)
   const isPaperMode = config?.global?.paperMode
+
+  // Track client-side mount to prevent hydration mismatch
+  React.useEffect(() => {
+    setIsMounted(true)
+  }, [])
 
   // Load positions and listen for updates
   React.useEffect(() => {
@@ -132,9 +146,10 @@ export function AppSidebar() {
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild
-                    isActive={pathname === item.href}
+                    isActive={isMounted ? pathname === item.href : false}
+                    suppressHydrationWarning
                   >
-                    <Link href={item.href}>
+                    <Link href={item.href} suppressHydrationWarning>
                       <item.icon className="h-4 w-4" />
                       <span>{item.title}</span>
                     </Link>
@@ -184,6 +199,13 @@ export function AppSidebar() {
                   </div>
                 </>
               )}
+
+              {/* Rate Limits */}
+              {isConnected && (
+                <div className="mt-3 pt-3 border-t border-sidebar-border">
+                  <RateLimitSidebar />
+                </div>
+              )}
             </div>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -210,7 +232,7 @@ export function AppSidebar() {
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Restart Tutorial
               </Button>
-              <Link href="/wiki/getting-started">
+              <Link href="/wiki/getting-started" suppressHydrationWarning>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -226,23 +248,29 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter>
-        <div className="px-2 py-1.5 text-xs text-muted-foreground">
-          <div className="flex items-center justify-between">
-            <span>Connection</span>
-            <div className="flex items-center gap-1">
-              {isConnected ? (
-                <>
-                  <Activity className="h-3 w-3 text-green-500 animate-pulse" />
-                  <span className="text-green-500">Connected</span>
-                </>
-              ) : (
-                <>
-                  <Activity className="h-3 w-3 text-red-500" />
-                  <span className="text-red-500">Disconnected</span>
-                </>
-              )}
+        <div className="space-y-1">
+          {/* Connection Status */}
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            <div className="flex items-center justify-between">
+              <span>Connection</span>
+              <div className="flex items-center gap-1">
+                {isConnected ? (
+                  <>
+                    <Activity className="h-3 w-3 text-green-500 animate-pulse" />
+                    <span className="text-green-500">Connected</span>
+                  </>
+                ) : (
+                  <>
+                    <Activity className="h-3 w-3 text-red-500" />
+                    <span className="text-red-500">Disconnected</span>
+                  </>
+                )}
+              </div>
             </div>
           </div>
+
+          {/* Version Status */}
+          <VersionChecker />
         </div>
       </SidebarFooter>
 

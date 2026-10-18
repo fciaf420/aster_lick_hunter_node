@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { DashboardLayout } from '@/components/dashboard-layout';
-// import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -18,7 +17,9 @@ import LiquidationSidebar from '@/components/LiquidationSidebar';
 import PositionTable from '@/components/PositionTable';
 import PnLChart from '@/components/PnLChart';
 import PerformanceCardInline from '@/components/PerformanceCardInline';
+import SessionPerformanceCard from '@/components/SessionPerformanceCard';
 import RecentOrdersTable from '@/components/RecentOrdersTable';
+import { TradeSizeWarningModal } from '@/components/TradeSizeWarningModal';
 import { useConfig } from '@/components/ConfigProvider';
 import websocketService from '@/lib/services/websocketService';
 import { useOrderNotifications } from '@/hooks/useOrderNotifications';
@@ -26,6 +27,7 @@ import { useErrorToasts } from '@/hooks/useErrorToasts';
 import { useWebSocketUrl } from '@/hooks/useWebSocketUrl';
 import { RateLimitToastListener } from '@/hooks/useRateLimitToasts';
 import dataStore, { AccountInfo, Position } from '@/lib/services/dataStore';
+import { signOut } from 'next-auth/react';
 
 interface BalanceStatus {
   source?: string;
@@ -47,11 +49,9 @@ export default function DashboardPage() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [markPrices, setMarkPrices] = useState<Record<string, number>>({});
 
-  // Initialize order notifications with configurable URL
-  useOrderNotifications(wsUrl || undefined);
-
-  // Initialize error toasts with configurable URL
-  useErrorToasts(wsUrl || undefined);
+  // Initialize toast notifications
+  useOrderNotifications();
+  useErrorToasts();
 
   useEffect(() => {
     // Update websocketService URL when wsUrl is available
@@ -210,6 +210,17 @@ export default function DashboardPage() {
     }
   };
 
+  const _handleLogout = async () => {
+    try {
+      await signOut({
+        callbackUrl: '/login',
+        redirect: true
+      });
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
+  };
+
   const _handleUpdateSL = async (_symbol: string, _side: 'LONG' | 'SHORT', _price: number) => {
     try {
       // TODO: Implement stop loss update API call
@@ -228,6 +239,9 @@ export default function DashboardPage() {
 
   return (
     <DashboardLayout>
+      {/* Trade Size Warning Modal */}
+      <TradeSizeWarningModal />
+
       {/* Rate Limit Toast Listener */}
       <RateLimitToastListener />
 
@@ -333,8 +347,13 @@ export default function DashboardPage() {
 
             <div className="w-px h-8 bg-border" />
 
-            {/* Session Performance - Inline */}
+            {/* 24h Performance - Inline */}
             <PerformanceCardInline />
+
+            <div className="w-px h-8 bg-border" />
+
+            {/* Live Session Performance */}
+            <SessionPerformanceCard />
 
             <div className="w-px h-8 bg-border" />
 

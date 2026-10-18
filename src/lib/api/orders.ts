@@ -1,22 +1,23 @@
 import { AxiosResponse } from 'axios';
 import { ApiCredentials, Order } from '../types';
+import { Trade } from '../types/order';
 import { buildSignedForm, buildSignedQuery } from './auth';
 import { getRateLimitedAxios } from './requestInterceptor';
 import { symbolPrecision } from '../utils/symbolPrecision';
 import { getMarkPrice } from './market';
+import { ASTER_REST_BASE_URL } from '../exchange/aster/constants';
 
-const BASE_URL = 'https://fapi.asterdex.com';
+const BASE_URL = ASTER_REST_BASE_URL;
 
 // Place a new order (POST)
 export async function placeOrder(params: {
   symbol: string;
   side: 'BUY' | 'SELL';
   type: 'MARKET' | 'LIMIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
-  quantity?: number;
+  quantity: number;
   price?: number;
   stopPrice?: number;
   reduceOnly?: boolean;
-  closePosition?: boolean;
   positionSide?: 'BOTH' | 'LONG' | 'SHORT';
   timeInForce?: 'GTC' | 'IOC' | 'FOK' | 'GTX';
 }, credentials: ApiCredentials): Promise<Order> {
@@ -46,11 +47,19 @@ export async function placeOrder(params: {
       }
     }
     
+    // Closing orders (SL/TP, reduce-only, or hedge-mode orders against the position side) must keep
+    // the position's size, so they skip the min-notional bump (a price of 0 disables that check)
+    const isClosingOrder = params.reduceOnly === true ||
+      params.type === 'STOP_MARKET' ||
+      params.type === 'TAKE_PROFIT_MARKET' ||
+      (params.positionSide === 'LONG' && params.side === 'SELL') ||
+      (params.positionSide === 'SHORT' && params.side === 'BUY');
+
     // Validate and adjust quantity
     const { quantity: adjustedQty, adjusted } = symbolPrecision.validateAndAdjustQuantity(
       params.symbol,
       params.quantity,
-      priceForValidation
+      isClosingOrder ? 0 : priceForValidation
     );
     
     if (adjusted) {
@@ -105,17 +114,16 @@ type OrderParams = {
   symbol: string;
   side: 'BUY' | 'SELL';
   type: 'MARKET' | 'LIMIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
-  quantity?: number;
+  quantity: number;
   price?: number;
   stopPrice?: number;
   reduceOnly?: boolean;
-  closePosition?: boolean;
   positionSide?: 'BOTH' | 'LONG' | 'SHORT';
   timeInForce?: 'GTC' | 'IOC' | 'FOK' | 'GTX';
 };
 
 // Place multiple orders (batch)
-export async function placeBatchOrders(orders: Array<Omit<OrderParams, 'positionSide' | 'reduceOnly' | 'stopPrice' | 'closePosition'>>, credentials: ApiCredentials): Promise<any> {
+export async function placeBatchOrders(orders: Array<Omit<OrderParams, 'positionSide' | 'reduceOnly' | 'stopPrice'>>, credentials: ApiCredentials): Promise<any> {
   // For simplicity, loop and place individually for now
   const results = [];
   for (const order of orders) {
@@ -235,6 +243,41 @@ export async function getPositions(credentials: ApiCredentials): Promise<any[]> 
       'X-MBX-APIKEY': credentials.apiKey
     }
   });
+  return response.data;
+}
+
+// Get user trades for a specific symbol
+export async function getUserTrades(
+  symbol: string,
+  credentials: ApiCredentials,
+  params?: {
+    startTime?: number;
+    endTime?: number;
+    fromId?: number;
+    limit?: number;
+  }
+): Promise<Trade[]> {
+  const queryParams: Record<string, any> = {
+    symbol,
+    limit: params?.limit || 500,
+  };
+
+  if (params?.startTime) queryParams.startTime = params.startTime;
+  if (params?.endTime) queryParams.endTime = params.endTime;
+  if (params?.fromId) queryParams.fromId = params.fromId;
+
+  const query = buildSignedQuery(queryParams, credentials);
+
+  const axios = getRateLimitedAxios();
+  const response: AxiosResponse<Trade[]> = await axios.get(
+    `${BASE_URL}/fapi/v1/userTrades?${query}`,
+    {
+      headers: {
+        'X-MBX-APIKEY': credentials.apiKey
+      }
+    }
+  );
+
   return response.data;
 }
 

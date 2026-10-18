@@ -1,9 +1,11 @@
 import WebSocket from 'ws';
 import { ApiCredentials } from '../types';
 import { getRateLimitedAxios } from './requestInterceptor';
+import { logWithTimestamp, logErrorWithTimestamp, logWarnWithTimestamp } from '../utils/timestamp';
+import { ASTER_REST_BASE_URL, ASTER_STREAM_BASE_URL } from '../exchange/aster/constants';
 
-const BASE_URL = 'https://fapi.asterdex.com';
-const WS_BASE_URL = 'wss://fstream.asterdex.com';
+const BASE_URL = ASTER_REST_BASE_URL;
+const WS_BASE_URL = ASTER_STREAM_BASE_URL;
 
 export interface BalanceUpdate {
   asset: string;
@@ -54,28 +56,28 @@ export class UserDataStream {
     this.onAccountUpdate = onAccountUpdate;
 
     try {
-      console.log('[UserDataStream] Getting listen key...');
+logWithTimestamp('[UserDataStream] Getting listen key...');
       // Get listen key
       this.listenKey = await this.getListenKey();
-      console.log('[UserDataStream] Listen key obtained:', this.listenKey ? 'yes' : 'no');
+logWithTimestamp('[UserDataStream] Listen key obtained:', this.listenKey ? 'yes' : 'no');
 
       // Connect to WebSocket
-      console.log('[UserDataStream] Connecting to WebSocket...');
+logWithTimestamp('[UserDataStream] Connecting to WebSocket...');
       await this.connect();
 
       // Start keepalive
       this.startKeepAlive();
 
-      console.log('[UserDataStream] User data stream started successfully');
+logWithTimestamp('[UserDataStream] User data stream started successfully');
     } catch (error) {
-      console.error('[UserDataStream] Failed to start user data stream:', error instanceof Error ? error.message : error);
+logErrorWithTimestamp('[UserDataStream] Failed to start user data stream:', error instanceof Error ? error.message : error);
       this.isConnected = false;
       throw error;
     }
   }
 
   async stop(): Promise<void> {
-    console.log('[UserDataStream] Stopping user data stream...');
+logWithTimestamp('[UserDataStream] Stopping user data stream...');
     this.isConnected = false;
 
     // Stop keepalive
@@ -102,7 +104,7 @@ export class UserDataStream {
       this.listenKey = null;
     }
 
-    console.log('[UserDataStream] User data stream stopped');
+logWithTimestamp('[UserDataStream] User data stream stopped');
   }
 
   private async getListenKey(): Promise<string> {
@@ -115,9 +117,9 @@ export class UserDataStream {
       });
       return response.data.listenKey;
     } catch (error) {
-      console.error('[UserDataStream] Failed to get listen key:', error instanceof Error ? error.message : error);
+logErrorWithTimestamp('[UserDataStream] Failed to get listen key:', error instanceof Error ? error.message : error);
       if ((error as any).response) {
-        console.error('[UserDataStream] Response data:', (error as any).response?.data);
+logErrorWithTimestamp('[UserDataStream] Response data:', (error as any).response?.data);
       }
       throw error;
     }
@@ -133,9 +135,9 @@ export class UserDataStream {
           'X-MBX-APIKEY': this.credentials.apiKey
         }
       });
-      console.log('[UserDataStream] Listen key keepalive sent successfully');
+logWithTimestamp('[UserDataStream] Listen key keepalive sent successfully');
     } catch (error) {
-      console.error('[UserDataStream] Failed to keepalive listen key:', error instanceof Error ? error.message : error);
+logErrorWithTimestamp('[UserDataStream] Failed to keepalive listen key:', error instanceof Error ? error.message : error);
     }
   }
 
@@ -157,7 +159,7 @@ export class UserDataStream {
       this.ws = new WebSocket(`${WS_BASE_URL}/ws/${this.listenKey}`);
 
       this.ws.on('open', () => {
-        console.log('User data stream WebSocket connected');
+logWithTimestamp('User data stream WebSocket connected');
         this.reconnectAttempts = 0;
         resolve();
       });
@@ -167,17 +169,17 @@ export class UserDataStream {
           const message = JSON.parse(data);
           this.handleMessage(message);
         } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
+logErrorWithTimestamp('Error parsing WebSocket message:', error);
         }
       });
 
       this.ws.on('error', (error) => {
-        console.error('User data stream WebSocket error:', error);
+logErrorWithTimestamp('User data stream WebSocket error:', error);
         reject(error);
       });
 
       this.ws.on('close', () => {
-        console.log('User data stream WebSocket closed');
+logWithTimestamp('User data stream WebSocket closed');
         this.ws = null;
         this.attemptReconnect();
       });
@@ -215,10 +217,10 @@ export class UserDataStream {
         this.onAccountUpdate(accountUpdate);
       }
     } else if (message.e === 'listenKeyExpired') {
-      console.log('Listen key expired, refreshing...');
+logWithTimestamp('Listen key expired, refreshing...');
       this.refreshConnection();
     } else if (message.e) {
-      console.log('[UserDataStream] Received event type:', message.e);
+logWithTimestamp('[UserDataStream] Received event type:', message.e);
     }
   }
 
@@ -232,7 +234,7 @@ export class UserDataStream {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         const timeSinceLastPing = Date.now() - this.lastPingTime;
         if (timeSinceLastPing > 60000) { // No ping for 60 seconds
-          console.warn('[UserDataStream] No ping received for 60 seconds, connection may be stale');
+logWarnWithTimestamp('[UserDataStream] No ping received for 60 seconds, connection may be stale');
         }
       }
     }, 30000); // Check every 30 seconds
@@ -248,27 +250,27 @@ export class UserDataStream {
       try {
         await this.keepAliveListenKey();
       } catch (error) {
-        console.error('[UserDataStream] Failed to send keepalive:', error);
+logErrorWithTimestamp('[UserDataStream] Failed to send keepalive:', error);
       }
     }, 50 * 60 * 1000);
   }
 
   private async attemptReconnect(): Promise<void> {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('Max reconnection attempts reached');
+logErrorWithTimestamp('Max reconnection attempts reached');
       return;
     }
 
     this.reconnectAttempts++;
     const delay = Math.pow(2, this.reconnectAttempts) * 1000; // Exponential backoff
 
-    console.log(`Attempting to reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
+logWithTimestamp(`Attempting to reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
     setTimeout(async () => {
       try {
         await this.refreshConnection();
       } catch (error) {
-        console.error('Reconnection failed:', error);
+logErrorWithTimestamp('Reconnection failed:', error);
         this.attemptReconnect();
       }
     }, delay);

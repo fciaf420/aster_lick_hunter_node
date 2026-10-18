@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, Suspense } from 'react';
+import { useState, Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { signIn, useSession } from 'next-auth/react';
+import { useConfig } from '@/components/ConfigProvider';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,29 +16,52 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectUrl = searchParams.get('redirect') || '/';
+  const redirectUrl = searchParams.get('callbackUrl') || '/';
+  const { data: _session, status } = useSession();
+  const { config } = useConfig();
+
+  // Check if a custom password is configured (not the default "admin")
+  const isPasswordConfigured = config?.global?.server?.dashboardPassword &&
+    config.global.server.dashboardPassword.trim().length > 0 &&
+    config.global.server.dashboardPassword !== 'admin';
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (status === 'authenticated') {
+      router.push(redirectUrl);
+    }
+  }, [status, router, redirectUrl]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
+    // Client-side validation
+    if (!password || password.trim().length === 0) {
+      setError('Password is required');
+      setLoading(false);
+      return;
+    }
+
+    // Allow "admin" as default password even if it's less than 4 characters
+    if (password.length < 4 && !(password === 'admin' && !isPasswordConfigured)) {
+      setError('Password must be at least 4 characters');
+      setLoading(false);
+      return;
+    }
+
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ password }),
+      const result = await signIn('credentials', {
+        password,
+        redirect: false,
       });
 
-      const data = await response.json();
-
-      if (response.ok && data.success) {
+      if (result?.error) {
+        setError('Invalid password');
+      } else if (result?.ok) {
+        // Redirect to the intended page
         router.push(redirectUrl);
-        router.refresh();
-      } else {
-        setError(data.error || 'Invalid password');
       }
     } catch (_err) {
       setError('Failed to login. Please try again.');
@@ -44,6 +69,15 @@ function LoginForm() {
       setLoading(false);
     }
   };
+
+  // Show loading while checking session
+  if (status === 'loading') {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div>Loading...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
@@ -54,7 +88,10 @@ function LoginForm() {
           </div>
           <CardTitle>Dashboard Login</CardTitle>
           <CardDescription>
-            Enter your dashboard password to continue
+            {isPasswordConfigured
+              ? 'Enter your dashboard password to continue'
+              : 'No password configured. Use "admin" as default password'
+            }
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -64,17 +101,29 @@ function LoginForm() {
               <Input
                 id="password"
                 type="password"
-                placeholder="Enter dashboard password"
+                placeholder={isPasswordConfigured
+                  ? "Enter dashboard password (min 4 characters)"
+                  : "admin (default password)"
+                }
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 autoFocus
               />
+              {password.length > 0 && password.length < 4 && !(password === 'admin' && !isPasswordConfigured) && (
+                <p className="text-xs text-muted-foreground">
+                  Password must be at least 4 characters
+                </p>
+              )}
             </div>
             {error && (
               <div className="text-sm text-destructive">{error}</div>
             )}
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={loading || (password.length < 4 && !(password === 'admin' && !isPasswordConfigured))}
+            >
               {loading ? 'Logging in...' : 'Login'}
             </Button>
           </form>

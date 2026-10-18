@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getPositions } from '@/lib/api/orders';
-import { getOpenOrders } from '@/lib/api/market';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
+import { isLighterReadOnlyError } from '@/lib/exchange/lighter/runtime';
 import { loadConfig } from '@/lib/bot/config';
+import { withAuth } from '@/lib/auth/with-auth';
 
 // Simple in-memory cache
 interface CacheEntry {
@@ -12,7 +13,7 @@ interface CacheEntry {
 const cache: Map<string, CacheEntry> = new Map();
 const CACHE_TTL = 5000; // 5 seconds
 
-export async function GET(request: NextRequest) {
+export const GET = withAuth(async (request: NextRequest, _user) => {
   const cacheKey = 'positions';
 
   // Check if force refresh is requested
@@ -30,16 +31,21 @@ export async function GET(request: NextRequest) {
 
   try {
     const config = await loadConfig();
+    const exchange = createExchangeAdapter(config);
 
     // If no API key is configured, return empty positions
-    if (!config.api.apiKey || !config.api.secretKey) {
+    if (!exchange.hasCredentials()) {
       return NextResponse.json([]);
     }
 
-    // Get positions and open orders from exchange
+    // Get positions and open orders from exchange. Lighter open orders need an auth token, which only the
+    // bot process can sign: there the SL/TP flags are left unknown instead of failing the whole list.
     const [positions, openOrders] = await Promise.all([
-      getPositions(config.api),
-      getOpenOrders(undefined, config.api)
+      exchange.getPositions(),
+      exchange.getOpenOrders().catch((error: unknown) => {
+        if (isLighterReadOnlyError(error)) return null;
+        throw error;
+      })
     ]);
 
     // Filter out positions with zero amount and format for UI
@@ -56,15 +62,15 @@ export async function GET(request: NextRequest) {
         const currentNotionalValue = quantity * markPrice;
         const side = positionAmt > 0 ? 'LONG' : 'SHORT';
 
-        // Check for active SL/TP orders for this position
-        const hasStopLoss = openOrders.some(order =>
+        // Check for active SL/TP orders for this position (undefined when open orders are unavailable)
+        const hasStopLoss = openOrders?.some(order =>
           order.symbol === pos.symbol &&
           (order.type === 'STOP_MARKET' || order.type === 'STOP') &&
           order.reduceOnly === true &&
           ((side === 'LONG' && order.side === 'SELL') || (side === 'SHORT' && order.side === 'BUY'))
         );
 
-        const hasTakeProfit = openOrders.some(order =>
+        const hasTakeProfit = openOrders?.some(order =>
           order.symbol === pos.symbol &&
           (order.type === 'TAKE_PROFIT_MARKET' || order.type === 'TAKE_PROFIT' ||
            (order.type === 'LIMIT' && order.reduceOnly === true)) &&
@@ -101,4 +107,4 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

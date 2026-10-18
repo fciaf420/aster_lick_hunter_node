@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getOpenOrders } from '@/lib/api/market';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
 import { loadConfig } from '@/lib/bot/config';
+import { withAuth } from '@/lib/auth/with-auth';
 
-export async function GET(request: NextRequest) {
+export const GET = withAuth(async (request: NextRequest, _user) => {
   try {
     const config = await loadConfig();
+    const exchange = createExchangeAdapter(config);
 
     // If no API key is configured, return empty orders
-    if (!config.api.apiKey || !config.api.secretKey) {
+    if (!exchange.hasCredentials()) {
       return NextResponse.json([]);
     }
 
@@ -16,7 +18,7 @@ export async function GET(request: NextRequest) {
     const symbol = searchParams.get('symbol') || undefined;
 
     // Get open orders from exchange
-    const orders = await getOpenOrders(symbol, config.api);
+    const orders = await exchange.getOpenOrders(symbol);
 
     // Filter and format orders for UI
     const formattedOrders = orders.map(order => ({
@@ -40,4 +42,4 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

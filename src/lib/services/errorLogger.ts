@@ -10,6 +10,19 @@ interface ErrorContext {
   symbol?: string;
   userAction?: string;
   metadata?: Record<string, any>;
+  marketSnapshot?: MarketConditions;
+  recentActions?: string[];
+  correlationId?: string;
+}
+
+interface MarketConditions {
+  timestamp: string;
+  symbol?: string;
+  price?: number;
+  volume24h?: number;
+  openInterest?: number;
+  recentLiquidations?: number;
+  volatility?: number;
 }
 
 interface SystemInfo {
@@ -31,10 +44,14 @@ class ErrorLogger {
   private flushInterval: NodeJS.Timeout | null = null;
   private maxBufferSize = 50;
   private flushIntervalMs = 5000;
+  private recentActionBuffer: string[] = [];
+  private maxActionBufferSize = 20;
+  private errorPatterns: Map<string, { pattern: string; suggestedFix: string }> = new Map();
 
   private constructor() {
     this.sessionId = uuidv4();
     this.startFlushInterval();
+    this.initializeErrorPatterns();
 
     // Handle uncaught exceptions
     process.on('uncaughtException', (error) => {
@@ -67,6 +84,51 @@ class ErrorLogger {
       ErrorLogger.instance = new ErrorLogger();
     }
     return ErrorLogger.instance;
+  }
+
+  private initializeErrorPatterns(): void {
+    // Common error patterns and their suggested fixes
+    this.errorPatterns.set('-4164', {
+      pattern: 'MIN_NOTIONAL',
+      suggestedFix: 'Increase order size or leverage to meet minimum notional requirement'
+    });
+    this.errorPatterns.set('-1003', {
+      pattern: 'RATE_LIMIT',
+      suggestedFix: 'Implement exponential backoff and request queuing'
+    });
+    this.errorPatterns.set('-2019', {
+      pattern: 'INSUFFICIENT_BALANCE',
+      suggestedFix: 'Check available balance before placing orders'
+    });
+    this.errorPatterns.set('-1111', {
+      pattern: 'PRICE_PRECISION',
+      suggestedFix: 'Round price to exchange-required tick size'
+    });
+    this.errorPatterns.set('-1013', {
+      pattern: 'QUANTITY_PRECISION',
+      suggestedFix: 'Round quantity to exchange-required step size'
+    });
+    this.errorPatterns.set('ECONNREFUSED', {
+      pattern: 'CONNECTION_REFUSED',
+      suggestedFix: 'Check network connectivity and API endpoint availability'
+    });
+    this.errorPatterns.set('ETIMEDOUT', {
+      pattern: 'TIMEOUT',
+      suggestedFix: 'Increase timeout duration or improve network stability'
+    });
+  }
+
+  public trackAction(action: string): void {
+    const timestampedAction = `[${new Date().toISOString()}] ${action}`;
+    this.recentActionBuffer.push(timestampedAction);
+
+    if (this.recentActionBuffer.length > this.maxActionBufferSize) {
+      this.recentActionBuffer.shift();
+    }
+  }
+
+  public getRecentActions(): string[] {
+    return [...this.recentActionBuffer];
   }
 
   private startFlushInterval(): void {
@@ -372,6 +434,126 @@ class ErrorLogger {
       },
       uptime: process.uptime()
     };
+  }
+
+  public generateAIOptimizedDebugInfo(error: ErrorLog, context?: ErrorContext): string {
+    let debugInfo = `## AI-Optimized Debug Report\n\n`;
+
+    // Error classification
+    debugInfo += `### Error Classification\n`;
+    debugInfo += `- **Type**: ${error.error_type}\n`;
+    debugInfo += `- **Severity**: ${error.severity}\n`;
+    debugInfo += `- **Component**: ${error.component || 'Unknown'}\n`;
+    if (error.error_code) {
+      debugInfo += `- **Error Code**: ${error.error_code}\n`;
+      const pattern = this.errorPatterns.get(error.error_code);
+      if (pattern) {
+        debugInfo += `- **Pattern**: ${pattern.pattern}\n`;
+      }
+    }
+    debugInfo += `\n`;
+
+    // Environment and context
+    debugInfo += `### Environment\n`;
+    const systemInfo = this.getSystemInfo();
+    debugInfo += `- **Platform**: ${systemInfo.platform}\n`;
+    debugInfo += `- **Node Version**: ${systemInfo.version}\n`;
+    debugInfo += `- **Memory Usage**: ${Math.round(systemInfo.memory.used / 1024 / 1024)}MB / ${Math.round(systemInfo.memory.total / 1024 / 1024)}MB\n`;
+    debugInfo += `- **Session ID**: ${error.session_id}\n`;
+    debugInfo += `- **Timestamp**: ${error.timestamp}\n`;
+    debugInfo += `\n`;
+
+    // Market conditions if available
+    if (context?.marketSnapshot) {
+      debugInfo += `### Market Conditions at Error Time\n`;
+      const snapshot = context.marketSnapshot;
+      if (snapshot.symbol) debugInfo += `- **Symbol**: ${snapshot.symbol}\n`;
+      if (snapshot.price) debugInfo += `- **Price**: $${snapshot.price}\n`;
+      if (snapshot.volume24h) debugInfo += `- **24h Volume**: $${snapshot.volume24h.toLocaleString()}\n`;
+      if (snapshot.volatility) debugInfo += `- **Volatility**: ${snapshot.volatility.toFixed(2)}%\n`;
+      if (snapshot.recentLiquidations) debugInfo += `- **Recent Liquidations**: ${snapshot.recentLiquidations}\n`;
+      debugInfo += `\n`;
+    }
+
+    // Recent actions leading to error
+    const recentActions = context?.recentActions || this.getRecentActions();
+    if (recentActions.length > 0) {
+      debugInfo += `### Recent Actions (Reproduction Steps)\n`;
+      recentActions.forEach((action, idx) => {
+        debugInfo += `${idx + 1}. ${action}\n`;
+      });
+      debugInfo += `\n`;
+    }
+
+    // Error details
+    debugInfo += `### Error Details\n`;
+    debugInfo += `\`\`\`\n${error.message}\n\`\`\`\n\n`;
+
+    if (error.details) {
+      debugInfo += `### Additional Context\n`;
+      debugInfo += `\`\`\`json\n${typeof error.details === 'string' ? error.details : JSON.stringify(error.details, null, 2)}\n\`\`\`\n\n`;
+    }
+
+    if (error.stack_trace) {
+      debugInfo += `### Stack Trace\n`;
+      debugInfo += `<details>\n<summary>Click to expand</summary>\n\n`;
+      debugInfo += `\`\`\`\n${error.stack_trace}\n\`\`\`\n`;
+      debugInfo += `</details>\n\n`;
+    }
+
+    // AI-friendly investigation steps and fixes
+    debugInfo += `### Suggested Investigation\n`;
+    const errorCode = error.error_code;
+    const pattern = errorCode ? this.errorPatterns.get(errorCode) : null;
+
+    if (pattern) {
+      debugInfo += `**Known Pattern Detected**: ${pattern.pattern}\n\n`;
+      debugInfo += `**Suggested Fix**: ${pattern.suggestedFix}\n\n`;
+    }
+
+    // Generic investigation steps based on error type
+    switch (error.error_type) {
+      case 'api':
+        debugInfo += `1. Check API endpoint status and connectivity\n`;
+        debugInfo += `2. Verify API credentials and permissions\n`;
+        debugInfo += `3. Review rate limiting and request throttling\n`;
+        break;
+      case 'trading':
+        debugInfo += `1. Verify order parameters meet exchange requirements\n`;
+        debugInfo += `2. Check account balance and margin requirements\n`;
+        debugInfo += `3. Review symbol trading rules and filters\n`;
+        break;
+      case 'websocket':
+        debugInfo += `1. Check WebSocket connection stability\n`;
+        debugInfo += `2. Review reconnection logic and backoff strategy\n`;
+        debugInfo += `3. Verify message parsing and error handling\n`;
+        break;
+      case 'system':
+        debugInfo += `1. Check system resources (CPU, memory, disk)\n`;
+        debugInfo += `2. Review process health and crash logs\n`;
+        debugInfo += `3. Verify environment configuration\n`;
+        break;
+    }
+
+    debugInfo += `\n### Correlation\n`;
+    if (context?.correlationId) {
+      debugInfo += `**Correlation ID**: ${context.correlationId}\n`;
+      debugInfo += `Use this ID to find related errors and trace the full error chain.\n`;
+    }
+
+    // Check for similar recent errors
+    const errorKey = `${error.error_type}:${error.error_code || 'NO_CODE'}`;
+    const similarError = this.recentErrors.get(errorKey);
+    if (similarError && similarError.count > 1) {
+      debugInfo += `\n### Pattern Recognition\n`;
+      debugInfo += `This error has occurred **${similarError.count} times** in the current session.\n`;
+      debugInfo += `Last seen: ${similarError.lastSeen.toISOString()}\n`;
+    }
+
+    debugInfo += `\n---\n`;
+    debugInfo += `*Generated for AI-assisted debugging. Copy this report to Claude, ChatGPT, or GitHub Copilot for analysis.*\n`;
+
+    return debugInfo;
   }
 
   public async generateBugReport(hours: number = 24): Promise<string> {

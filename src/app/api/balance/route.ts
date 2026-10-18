@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getBalance, getAccountInfo } from '@/lib/api/market';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
 import { loadConfig } from '@/lib/bot/config';
 import { getBalanceService } from '@/lib/services/balanceService';
+import { withAuth } from '@/lib/auth/with-auth';
+import { getRateLimitManager, RequestPriority } from '@/lib/api/rateLimitManager';
 
 // Simple in-memory cache
 interface CacheEntry {
@@ -12,7 +14,7 @@ interface CacheEntry {
 const cache: Map<string, CacheEntry> = new Map();
 const CACHE_TTL = 5000; // 5 seconds
 
-export async function GET(request: NextRequest) {
+export const GET = withAuth(async (request: NextRequest, _user) => {
   const startTime = Date.now();
   const cacheKey = 'balance';
 
@@ -34,9 +36,10 @@ export async function GET(request: NextRequest) {
 
   try {
     const config = await loadConfig();
+    const exchange = createExchangeAdapter(config);
 
     // If no API key is configured, return mock data
-    if (!config.api.apiKey || !config.api.secretKey) {
+    if (!exchange.hasCredentials()) {
       return NextResponse.json({
         totalBalance: 10000,
         availableBalance: 8500,
@@ -85,9 +88,26 @@ export async function GET(request: NextRequest) {
     } else {
     }
 
+    // Check rate limit before making REST API call
+    const rateLimitManager = getRateLimitManager();
+    const canMakeRequest = rateLimitManager.canMakeRequest(5, false, RequestPriority.MEDIUM);
+
+    if (!canMakeRequest) {
+      // Return cached data if available when rate limited
+      const cached = cache.get(cacheKey);
+      if (cached) {
+        return NextResponse.json({
+          ...cached.data,
+          cached: true,
+          rateLimited: true,
+          responseTime: Date.now() - startTime,
+        });
+      }
+    }
+
     // Fallback to REST API if WebSocket service is not available or data is stale
     try {
-      const accountData = await getAccountInfo(config.api);
+      const accountData = await exchange.getAccountInfo();
 
       if (accountData) {
         // Use pre-calculated USDT-equivalent totals from account endpoint
@@ -124,7 +144,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Final fallback to balance API
-    const balanceData = await getBalance(config.api);
+    const balanceData = await exchange.getBalance();
 
     let totalBalance = 0;
     let availableBalance = 0;
@@ -132,7 +152,8 @@ export async function GET(request: NextRequest) {
     let totalPnL = 0;
 
     if (balanceData && Array.isArray(balanceData)) {
-      const usdtAsset = balanceData.find((a: any) => a.asset === 'USDT');
+      // The venue's margin asset: USDT on Aster, USDC on Lighter
+      const usdtAsset = balanceData.find((a: any) => a.asset === exchange.capabilities.marginAsset);
       if (usdtAsset) {
         // balance is the wallet balance
         totalBalance = parseFloat(usdtAsset.balance || '0');
@@ -181,4 +202,4 @@ export async function GET(request: NextRequest) {
       responseTime: Date.now() - startTime,
     }, { status: 500 });
   }
-}
+});

@@ -1,0 +1,113 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    # Optional: Only run on specific file changes
+    # paths:
+    #   - "src/**/*.ts"
+    #   - "src/**/*.tsx"
+    #   - "src/**/*.js"
+    #   - "src/**/*.jsx"
+
+# Set permissions at workflow level
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  # First determine if this is a fork PR
+  check-source:
+    runs-on: ubuntu-latest
+    outputs:
+      is_fork: ${{ steps.check.outputs.is_fork }}
+    steps:
+      - name: Check PR source
+        id: check
+        run: |
+          if [[ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
+            echo "is_fork=true" >> $GITHUB_OUTPUT
+            echo "This is a fork PR - will post comment instead of running review"
+          else
+            echo "is_fork=false" >> $GITHUB_OUTPUT
+            echo "This is an internal PR - will run Claude review"
+          fi
+
+  # Handle fork PRs with a helpful comment
+  fork-comment:
+    needs: check-source
+    if: needs.check-source.outputs.is_fork == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment on fork PR
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "## 🤖 Claude Code Review
+
+          This PR is from a fork and cannot be automatically reviewed due to GitHub Actions security limitations.
+
+          ### To get a Claude review:
+
+          **Option 1:** Use @claude mentions
+          - Comment \`@claude review this PR\` on this PR
+          - Claude will respond to your comment
+
+          **Option 2:** Manual workflow (for maintainers)
+          1. Go to [Actions tab](https://github.com/${{ github.repository }}/actions/workflows/claude-review-fork.yml)
+          2. Click 'Run workflow'
+          3. Enter PR number: ${{ github.event.pull_request.number }}
+          4. Claude will review and comment on this PR
+
+          *Note: Fork PRs cannot access repository secrets in automated workflows for security reasons.*"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Run Claude review only for internal PRs
+  claude-review:
+    needs: check-source
+    if: needs.check-source.outputs.is_fork == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Please review this pull request and provide feedback on:
+            - Code quality and best practices
+            - Potential bugs or issues
+            - Performance considerations
+            - Security concerns
+            - Test coverage
+
+            CRITICAL SECURITY CHECKS (HIGHEST PRIORITY):
+            - Check if any new packages are being added to package.json, package-lock.json, or any other dependency files
+            - Verify that any new dependencies are legitimate, well-maintained packages from reputable sources
+            - Look for any suspicious package names that could be typosquatting or malicious
+            - Check for any code that attempts to exfiltrate data, access environment variables inappropriately, or execute remote code
+            - Verify no hardcoded secrets, API keys, or sensitive data are being added
+            - Check for any obfuscated or encoded code that could hide malicious intent
+            - Look for any unexpected network requests, file system access, or process execution
+            - Ensure no backdoors, reverse shells, or crypto miners are being introduced
+
+            If you detect ANY suspicious packages or potentially malicious code, IMMEDIATELY flag this as a critical security issue in your review.
+
+            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+
+            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+          
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://docs.claude.com/en/docs/claude-code/sdk#command-line for available options
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+

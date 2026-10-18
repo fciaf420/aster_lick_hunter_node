@@ -36,9 +36,7 @@ export class ThresholdMonitor extends EventEmitter {
     symbols: {},
     global: { paperMode: true, riskPercent: 1 },
     api: { apiKey: '', secretKey: '' },
-    server: {},
-    rateLimits: {},
-    version: 1
+    version: '1'
   };
   private thresholdStatuses: Map<string, ThresholdStatus> = new Map();
   private timeWindow: number = 60 * 1000; // 60 seconds default (matches your requirement)
@@ -57,42 +55,15 @@ export class ThresholdMonitor extends EventEmitter {
   }
 
   private initializeThresholds(): void {
-    // Initialize threshold status for all configured symbols
-    for (const [symbol, symbolConfig] of Object.entries(this.config.symbols)) {
-      this.thresholdStatuses.set(symbol, {
-        symbol,
-        longThreshold: symbolConfig.longVolumeThresholdUSDT ?? symbolConfig.volumeThresholdUSDT ?? 10000,
-        shortThreshold: symbolConfig.shortVolumeThresholdUSDT ?? symbolConfig.volumeThresholdUSDT ?? 10000,
-        recentLongVolume: 0,
-        recentShortVolume: 0,
-        longProgress: 0,
-        shortProgress: 0,
-        timeWindow: this.timeWindow,
-        lastUpdate: Date.now(),
-        lastLongTrigger: 0,
-        lastShortTrigger: 0,
-        recentLiquidations: {
-          long: [],
-          short: []
-        }
-      });
+    // Only initialize if threshold system is enabled globally
+    if (!this.config.global.useThresholdSystem) {
+      return;
     }
-  }
 
-  public updateConfig(newConfig: Config): void {
-    this.config = newConfig;
-
-    // Update existing thresholds or add new ones
-    for (const [symbol, symbolConfig] of Object.entries(newConfig.symbols)) {
-      const existing = this.thresholdStatuses.get(symbol);
-      if (existing) {
-        // Update thresholds
-        existing.longThreshold = symbolConfig.longVolumeThresholdUSDT ?? symbolConfig.volumeThresholdUSDT ?? 10000;
-        existing.shortThreshold = symbolConfig.shortVolumeThresholdUSDT ?? symbolConfig.volumeThresholdUSDT ?? 10000;
-        existing.lastUpdate = Date.now();
-        this.recalculateProgress(existing);
-      } else {
-        // Add new symbol
+    // Initialize threshold status for symbols with threshold enabled
+    for (const [symbol, symbolConfig] of Object.entries(this.config.symbols)) {
+      // Only process symbols that have threshold enabled
+      if (symbolConfig.useThreshold) {
         this.thresholdStatuses.set(symbol, {
           symbol,
           longThreshold: symbolConfig.longVolumeThresholdUSDT ?? symbolConfig.volumeThresholdUSDT ?? 10000,
@@ -101,7 +72,7 @@ export class ThresholdMonitor extends EventEmitter {
           recentShortVolume: 0,
           longProgress: 0,
           shortProgress: 0,
-          timeWindow: this.timeWindow,
+          timeWindow: symbolConfig.thresholdTimeWindow || this.timeWindow,
           lastUpdate: Date.now(),
           lastLongTrigger: 0,
           lastShortTrigger: 0,
@@ -112,11 +83,65 @@ export class ThresholdMonitor extends EventEmitter {
         });
       }
     }
+  }
 
-    // Remove symbols no longer in config
-    const configSymbols = new Set(Object.keys(newConfig.symbols));
+  public updateConfig(newConfig: Config): void {
+    this.config = newConfig;
+
+    // Clear all if threshold system is disabled globally
+    if (!newConfig.global.useThresholdSystem) {
+      this.thresholdStatuses.clear();
+      return;
+    }
+
+    // Update existing thresholds or add new ones
+    for (const [symbol, symbolConfig] of Object.entries(newConfig.symbols)) {
+      // Only process symbols with threshold enabled
+      if (symbolConfig.useThreshold) {
+        const existing = this.thresholdStatuses.get(symbol);
+        if (existing) {
+          // Update thresholds and time window
+          existing.longThreshold = symbolConfig.longVolumeThresholdUSDT ?? symbolConfig.volumeThresholdUSDT ?? 10000;
+          existing.shortThreshold = symbolConfig.shortVolumeThresholdUSDT ?? symbolConfig.volumeThresholdUSDT ?? 10000;
+          existing.timeWindow = symbolConfig.thresholdTimeWindow || this.timeWindow;
+          existing.lastUpdate = Date.now();
+          // Clean up old liquidations with new time window
+          this.cleanOldLiquidations(existing, Date.now());
+          this.recalculateProgress(existing);
+        } else {
+          // Add new symbol
+          this.thresholdStatuses.set(symbol, {
+            symbol,
+            longThreshold: symbolConfig.longVolumeThresholdUSDT ?? symbolConfig.volumeThresholdUSDT ?? 10000,
+            shortThreshold: symbolConfig.shortVolumeThresholdUSDT ?? symbolConfig.volumeThresholdUSDT ?? 10000,
+            recentLongVolume: 0,
+            recentShortVolume: 0,
+            longProgress: 0,
+            shortProgress: 0,
+            timeWindow: symbolConfig.thresholdTimeWindow || this.timeWindow,
+            lastUpdate: Date.now(),
+            lastLongTrigger: 0,
+            lastShortTrigger: 0,
+            recentLiquidations: {
+              long: [],
+              short: []
+            }
+          });
+        }
+      } else {
+        // Remove symbol if threshold is disabled
+        this.thresholdStatuses.delete(symbol);
+      }
+    }
+
+    // Remove symbols no longer in config or with threshold disabled
+    const enabledSymbols = new Set(
+      Object.entries(newConfig.symbols)
+        .filter(([_, config]) => config.useThreshold)
+        .map(([symbol, _]) => symbol)
+    );
     for (const symbol of this.thresholdStatuses.keys()) {
-      if (!configSymbols.has(symbol)) {
+      if (!enabledSymbols.has(symbol)) {
         this.thresholdStatuses.delete(symbol);
       }
     }
@@ -124,20 +149,14 @@ export class ThresholdMonitor extends EventEmitter {
 
   public processLiquidation(liquidation: LiquidationEvent): ThresholdStatus | null {
     const status = this.thresholdStatuses.get(liquidation.symbol);
-    if (!status) {
-      console.log(`⚠️  ThresholdMonitor: No status found for symbol ${liquidation.symbol}`);
-      return null;
-    }
+    if (!status) return null;
 
     const now = Date.now();
-    const volumeUSDT = liquidation.qty * liquidation.price;
 
     // Determine which side this liquidation affects
     // SELL liquidation means longs are getting liquidated, we might want to BUY (long)
     // BUY liquidation means shorts are getting liquidated, we might want to SELL (short)
     const isLongOpportunity = liquidation.side === 'SELL';
-
-    console.log(`📈 ThresholdMonitor: Processing ${liquidation.symbol} ${liquidation.side} liquidation - $${volumeUSDT.toFixed(0)} (${isLongOpportunity ? 'LONG' : 'SHORT'} opportunity)`);
 
     if (isLongOpportunity) {
       status.recentLiquidations.long.push(liquidation);
@@ -153,10 +172,14 @@ export class ThresholdMonitor extends EventEmitter {
 
     status.lastUpdate = now;
 
+    // Get symbol-specific cooldown from config
+    const symbolConfig = this.config.symbols[liquidation.symbol];
+    const cooldownPeriod = symbolConfig?.thresholdCooldown || this.cooldownPeriod;
+
     // Emit threshold updates with cooldown logic
     if (isLongOpportunity && status.longThreshold > 0) {
       const thresholdMet = status.recentLongVolume >= status.longThreshold;
-      const cooledDown = (now - status.lastLongTrigger) >= this.cooldownPeriod;
+      const cooledDown = (now - status.lastLongTrigger) >= cooldownPeriod;
       const willTrigger = thresholdMet && cooledDown;
 
       // Update last trigger time if we're triggering
@@ -164,7 +187,7 @@ export class ThresholdMonitor extends EventEmitter {
         status.lastLongTrigger = now;
       }
 
-      const thresholdUpdate = {
+      this.emit('thresholdUpdate', {
         symbol: liquidation.symbol,
         side: 'long',
         currentVolume: status.recentLongVolume,
@@ -173,13 +196,10 @@ export class ThresholdMonitor extends EventEmitter {
         remainingVolume: Math.max(0, status.longThreshold - status.recentLongVolume),
         recentLiquidations: status.recentLiquidations.long.slice(-5), // Last 5 liquidations
         willTrigger
-      } as ThresholdUpdate;
-
-      console.log(`🎯 Emitting LONG threshold update: ${liquidation.symbol} - ${status.longProgress.toFixed(1)}% ($${status.recentLongVolume.toFixed(0)}/$${status.longThreshold})`);
-      this.emit('thresholdUpdate', thresholdUpdate);
+      } as ThresholdUpdate);
     } else if (!isLongOpportunity && status.shortThreshold > 0) {
       const thresholdMet = status.recentShortVolume >= status.shortThreshold;
-      const cooledDown = (now - status.lastShortTrigger) >= this.cooldownPeriod;
+      const cooledDown = (now - status.lastShortTrigger) >= cooldownPeriod;
       const willTrigger = thresholdMet && cooledDown;
 
       // Update last trigger time if we're triggering
@@ -187,7 +207,7 @@ export class ThresholdMonitor extends EventEmitter {
         status.lastShortTrigger = now;
       }
 
-      const thresholdUpdate = {
+      this.emit('thresholdUpdate', {
         symbol: liquidation.symbol,
         side: 'short',
         currentVolume: status.recentShortVolume,
@@ -196,17 +216,14 @@ export class ThresholdMonitor extends EventEmitter {
         remainingVolume: Math.max(0, status.shortThreshold - status.recentShortVolume),
         recentLiquidations: status.recentLiquidations.short.slice(-5), // Last 5 liquidations
         willTrigger
-      } as ThresholdUpdate;
-
-      console.log(`🎯 Emitting SHORT threshold update: ${liquidation.symbol} - ${status.shortProgress.toFixed(1)}% ($${status.recentShortVolume.toFixed(0)}/$${status.shortThreshold})`);
-      this.emit('thresholdUpdate', thresholdUpdate);
+      } as ThresholdUpdate);
     }
 
     return { ...status }; // Return copy
   }
 
   private cleanOldLiquidations(status: ThresholdStatus, now: number): void {
-    const cutoff = now - this.timeWindow;
+    const cutoff = now - status.timeWindow;
 
     status.recentLiquidations.long = status.recentLiquidations.long.filter(
       liq => liq.eventTime > cutoff

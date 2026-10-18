@@ -1,15 +1,42 @@
+/**
+ * @jest-environment node
+ */
 import { getRateLimitManager, resetRateLimitManager, RequestPriority } from '../../src/lib/api/rateLimitManager';
 // Using _ prefix to indicate intentionally unused import for test setup
 import _axios from 'axios';
 
 describe('Rate Limit Manager', () => {
+  // RateLimitManager starts intervals in its constructor and a queue-timeout timer per queued
+  // request (30s by default), and never clears them, so track the timers each test creates
+  // and clear them afterwards, otherwise jest can't exit
+  const realSetInterval = global.setInterval;
+  const realSetTimeout = global.setTimeout;
+  let intervals: ReturnType<typeof setInterval>[] = [];
+  let timeouts: ReturnType<typeof setTimeout>[] = [];
+
   beforeEach(() => {
+    intervals = [];
+    timeouts = [];
+    jest.spyOn(global, 'setInterval').mockImplementation(((...args: Parameters<typeof setInterval>) => {
+      const handle = realSetInterval(...args);
+      intervals.push(handle);
+      return handle;
+    }) as typeof setInterval);
+    jest.spyOn(global, 'setTimeout').mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+      const handle = realSetTimeout(...args);
+      timeouts.push(handle);
+      return handle;
+    }) as typeof setTimeout);
+
     // Reset singleton for each test
     resetRateLimitManager();
   });
 
   afterEach(() => {
     resetRateLimitManager();
+    intervals.forEach(clearInterval);
+    timeouts.forEach(clearTimeout);
+    jest.restoreAllMocks();
   });
 
   describe('Basic Functionality', () => {
@@ -68,9 +95,11 @@ describe('Rate Limit Manager', () => {
 
   describe('Queue Management', () => {
     it('should queue requests when at capacity', async () => {
+      // Short window so used capacity frees up while the queued requests wait
       const manager = getRateLimitManager({
         maxRequestWeight: 10,
-        queueTimeout: 2000
+        windowMs: 500,
+        queueTimeout: 5000
       });
 
       // Fill capacity
@@ -101,19 +130,21 @@ describe('Rate Limit Manager', () => {
     it('should prioritize critical requests', async () => {
       const manager = getRateLimitManager({
         maxRequestWeight: 5,
+        windowMs: 500,
         queueTimeout: 2000
       });
 
       const results: number[] = [];
 
-      // Add low priority request
+      // Add low priority request (weight 3 fits the non-reserved 70% of capacity;
+      // a non-critical request heavier than that can never run)
       const lowPromise = manager.executeRequest(
         async () => {
           await new Promise(resolve => setTimeout(resolve, 50));
           results.push(1);
           return 1;
         },
-        5,
+        3,
         false,
         RequestPriority.LOW
       );
@@ -163,8 +194,8 @@ describe('Rate Limit Manager', () => {
       await Promise.all(requests);
       const duration = Date.now() - startTime;
 
-      // Should complete in ~100ms if parallel, not 300ms
-      expect(duration).toBeLessThan(200);
+      // Parallel: ~100ms plus up to one 100ms queue poll; sequential would need at least 300ms
+      expect(duration).toBeLessThan(300);
     });
   });
 

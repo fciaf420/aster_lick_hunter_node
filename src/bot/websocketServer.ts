@@ -2,6 +2,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { EventEmitter } from 'events';
 import { LiquidationEvent } from '../lib/types';
 import { errorLogger } from '../lib/services/errorLogger';
+import { getRateLimitManager } from '../lib/api/rateLimitManager';
+import { withoutSecrets } from '../lib/config/redact';
 
 export interface BotStatus {
   isRunning: boolean;
@@ -13,6 +15,13 @@ export interface BotStatus {
   positionsOpen: number;
   totalPnL: number;
   errors: string[];
+  rateLimit?: {
+    weight: number;
+    orders: number;
+    weightPercent: number;
+    orderPercent: number;
+    queueLength: number;
+  };
 }
 
 export class StatusBroadcaster extends EventEmitter {
@@ -63,9 +72,10 @@ export class StatusBroadcaster extends EventEmitter {
                 const { configManager } = await import('../lib/services/configManager');
                 try {
                   const newConfig = await configManager.reloadConfig();
+                  // Every dashboard client receives this: never include credentials
                   this.broadcast('config_reload_success', {
                     timestamp: new Date(),
-                    config: newConfig,
+                    config: withoutSecrets(newConfig),
                   });
                   console.log('✅ Config reloaded via WebSocket command');
                 } catch (error: any) {
@@ -82,7 +92,10 @@ export class StatusBroadcaster extends EventEmitter {
                 break;
 
               default:
-                console.log('Unknown message type:', message.type);
+                // Only log truly unknown message types
+                if (!['pong'].includes(message.type)) {
+                  console.log('Unknown message type:', message.type);
+                }
             }
           } catch (error) {
             console.error('Failed to parse WebSocket message:', error);
@@ -103,11 +116,18 @@ export class StatusBroadcaster extends EventEmitter {
         ws.on('ping', () => ws.pong());
       });
 
-      // Update uptime every second
+      // Update uptime every second and rate limits every 2 seconds
+      let counter = 0;
       this.uptimeInterval = setInterval(() => {
         if (this.status.isRunning && this.status.startTime) {
           this.status.uptime = Date.now() - this.status.startTime.getTime();
           this._broadcast('status', this.status);
+        }
+
+        // Update rate limits every 2 seconds
+        counter++;
+        if (counter % 2 === 0) {
+          this.updateRateLimit();
         }
       }, 1000);
 
@@ -118,20 +138,26 @@ export class StatusBroadcaster extends EventEmitter {
   }
 
   stop(): void {
+    // Send shutdown message before closing
+    this._broadcast('shutdown', { reason: 'Bot service stopping' });
+
     if (this.uptimeInterval) {
       clearInterval(this.uptimeInterval);
     }
 
-    this.clients.forEach(client => {
-      client.close();
-    });
+    // Give clients a moment to receive the shutdown message
+    setTimeout(() => {
+      this.clients.forEach(client => {
+        client.close();
+      });
 
-    this.clients.clear();
+      this.clients.clear();
 
-    if (this.wss) {
-      this.wss.close();
-      this.wss = null;
-    }
+      if (this.wss) {
+        this.wss.close();
+        this.wss = null;
+      }
+    }, 100);
   }
 
   updateStatus(updates: Partial<BotStatus>): void {
@@ -163,6 +189,21 @@ export class StatusBroadcaster extends EventEmitter {
   clearErrors(): void {
     this.status.errors = [];
     this._broadcast('status', this.status);
+  }
+
+  updateRateLimit(): void {
+    const rateLimitManager = getRateLimitManager();
+    const usage = rateLimitManager.getCurrentUsage();
+
+    this.status.rateLimit = {
+      weight: usage.weight,
+      orders: usage.orders,
+      weightPercent: usage.weightPercent,
+      orderPercent: usage.orderPercent,
+      queueLength: usage.queueLength
+    };
+
+    this._broadcast('rateLimit', this.status.rateLimit);
   }
 
   // Public broadcast method for external use
@@ -471,6 +512,14 @@ export class StatusBroadcaster extends EventEmitter {
       title,
       message,
       details,
+    });
+  }
+
+  // Broadcast trade size warnings
+  broadcastTradeSizeWarnings(warnings: any[]): void {
+    this._broadcast('trade_size_warnings', {
+      warnings,
+      timestamp: new Date(),
     });
   }
 

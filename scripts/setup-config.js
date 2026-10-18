@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-/* eslint-disable @typescript-eslint/no-require-imports */
+ 
 
 const fs = require('fs').promises;
 const path = require('path');
+const { setupEnvFile } = require('./postinstall');
 
 const CONFIG_USER_FILE = 'config.user.json';
 const CONFIG_LEGACY_FILE = 'config.json';
@@ -17,8 +18,22 @@ async function fileExists(filePath) {
   }
 }
 
+async function setupNextAuthSecret() {
+  try {
+    // Use shared env setup logic from postinstall.js
+    await setupEnvFile();
+  } catch (error) {
+    console.error('⚠️  Warning: Failed to setup NEXTAUTH_SECRET:', error.message);
+    console.log('   Please manually add NEXTAUTH_SECRET to your .env.local file');
+    console.log('   Generate with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"');
+  }
+}
+
 async function setupConfig() {
   console.log('🔧 Setting up configuration...\n');
+
+  // First, setup NextAuth secret
+  await setupNextAuthSecret();
 
   const userConfigPath = path.join(process.cwd(), CONFIG_USER_FILE);
   const legacyConfigPath = path.join(process.cwd(), CONFIG_LEGACY_FILE);

@@ -1,5 +1,7 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
+import type { ExchangeAdapter } from '../exchange/types';
+import { createPublicExchangeAdapter } from '../exchange/registry';
 
 interface MarkPriceData {
   symbol: string;
@@ -16,9 +18,12 @@ export class PriceService extends EventEmitter {
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
   private isConnecting = false;
+  private readonly exchange: ExchangeAdapter;
 
-  constructor() {
+  // Mark prices stream from the given exchange, else the default venue
+  constructor(exchange?: ExchangeAdapter) {
     super();
+    this.exchange = exchange ?? createPublicExchangeAdapter();
   }
 
   async start(): Promise<void> {
@@ -35,7 +40,7 @@ export class PriceService extends EventEmitter {
 
     try {
       // Subscribe to all market mark price updates
-      this.ws = new WebSocket('wss://fstream.asterdex.com/ws/!markPrice@arr@1s');
+      this.ws = new WebSocket(this.exchange.getMarkPriceStreamUrl());
 
       this.ws.on('open', () => {
         console.log('🔗 Price Service: Connected to mark price stream');
@@ -167,9 +172,9 @@ export function getPriceService(): PriceService | null {
   return priceServiceInstance;
 }
 
-export async function initializePriceService(): Promise<PriceService> {
+export async function initializePriceService(exchange?: ExchangeAdapter): Promise<PriceService> {
   if (!priceServiceInstance) {
-    priceServiceInstance = new PriceService();
+    priceServiceInstance = new PriceService(exchange);
     await priceServiceInstance.start();
   }
   return priceServiceInstance;

@@ -1,5 +1,5 @@
 import { ConfigMigration } from './types';
-import { DEFAULT_CONFIG_VERSION } from './defaults';
+import { DEFAULT_CONFIG_VERSION, DEFAULT_LIGHTER_VENUE_SETTINGS } from './defaults';
 
 const migrations: ConfigMigration[] = [
   // Migration from v0.9.0 to v1.0.0
@@ -59,6 +59,48 @@ const migrations: ConfigMigration[] = [
       // This ensures backward compatibility
 
       console.log('Migrated to v1.1.0: Added support for separate long/short trade sizes');
+
+      return config;
+    }
+  },
+  // Migration from v1.1.0 to v1.2.0 - Add trading venue and liquidation source selection
+  {
+    fromVersion: '1.1.0',
+    toVersion: '1.2.0',
+    migrate: (config: any) => {
+      config.version = '1.2.0';
+
+      // Existing configs keep trading on Aster with Aster liquidations
+      if (config.global) {
+        config.global.exchange = config.global.exchange ?? 'aster';
+        config.global.liquidationSource = config.global.liquidationSource ?? 'aster';
+      }
+
+      console.log('Migrated to v1.2.0: Added trading venue and liquidation source selection');
+
+      return config;
+    }
+  },
+  // Migration from v1.2.0 to v1.3.0 - Lighter venue settings (network, shadow mode, SL/TP slippage, tx rate)
+  {
+    fromVersion: '1.2.0',
+    toVersion: '1.3.0',
+    migrate: (config: any) => {
+      config.version = '1.3.0';
+
+      const venues = config.venues && typeof config.venues === 'object' && !Array.isArray(config.venues) ? config.venues : {};
+      const lighter = venues.lighter && typeof venues.lighter === 'object' && !Array.isArray(venues.lighter) ? { ...venues.lighter } : {};
+
+      // The first catalog listing named the key fields apiPrivateKey / apiPublicKey
+      if (lighter.apiKeyPrivateKey === undefined && lighter.apiPrivateKey !== undefined) lighter.apiKeyPrivateKey = lighter.apiPrivateKey;
+      if (lighter.apiKeyPublicKey === undefined && lighter.apiPublicKey !== undefined) lighter.apiKeyPublicKey = lighter.apiPublicKey;
+      delete lighter.apiPrivateKey;
+      delete lighter.apiPublicKey;
+
+      // Defaults never overwrite a value the user set; credentials have no default
+      config.venues = { ...venues, lighter: { ...DEFAULT_LIGHTER_VENUE_SETTINGS, ...lighter } };
+
+      console.log('Migrated to v1.3.0: Added Lighter settings (testnet, liquidation feed in shadow mode)');
 
       return config;
     }
@@ -129,6 +171,18 @@ export function addMissingFields(userConfig: any, defaultConfig: any): any {
       if (!(field in result.global)) {
         result.global[field] = defaultConfig.global[field];
         console.log(`Added missing global field: ${field}`);
+      } else if (field === 'server' && typeof defaultConfig.global[field] === 'object' && typeof result.global[field] === 'object') {
+        // Merge server config nested fields
+        const defaultServer = defaultConfig.global.server;
+        const userServer = result.global.server || {};
+        result.global.server = { ...defaultServer, ...userServer };
+
+        // Log any new server fields that were added
+        for (const serverField in defaultServer) {
+          if (!(serverField in userServer)) {
+            console.log(`Added missing server field: ${serverField}`);
+          }
+        }
       }
     }
   }

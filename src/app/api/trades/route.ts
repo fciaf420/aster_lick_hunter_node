@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getAllOrders } from '@/lib/api/orders';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
 import { loadConfig } from '@/lib/bot/config';
 
 export async function GET(request: Request) {
@@ -9,9 +9,10 @@ export async function GET(request: Request) {
     const limit = parseInt(searchParams.get('limit') || '10');
 
     const config = await loadConfig();
+    const exchange = createExchangeAdapter(config);
 
     // If no API key is configured, return mock data
-    if (!config.api.apiKey || !config.api.secretKey) {
+    if (!exchange.hasCredentials()) {
       return NextResponse.json([
         {
           symbol: 'BTCUSDT',
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
     }
 
     // Get real trades from API
-    const trades = await getAllOrders(symbol, config.api, undefined, undefined, limit);
+    const trades = await exchange.history.getAllOrders(symbol, undefined, undefined, limit);
 
     return NextResponse.json(trades || []);
   } catch (error: any) {

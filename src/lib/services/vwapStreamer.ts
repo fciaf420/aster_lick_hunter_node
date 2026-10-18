@@ -1,7 +1,8 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import { Config } from '../types';
-import { getKlines } from '../api/market';
+import type { ExchangeAdapter } from '../exchange/types';
+import { createPublicExchangeAdapter } from '../exchange/registry';
 
 interface KlineStreamData {
   e: string;     // Event type
@@ -41,14 +42,22 @@ export class VWAPStreamer extends EventEmitter {
   private symbolConfigs: Map<string, {timeframe: string, lookback: number}> = new Map();
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private updateInterval: NodeJS.Timeout | null = null;
+  private exchange: ExchangeAdapter | null = null;
 
   constructor() {
     super();
   }
 
-  public async start(config: Config): Promise<void> {
+  // Klines come from the given exchange, else the default venue's public market data
+  private getExchange(): ExchangeAdapter {
+    this.exchange ??= createPublicExchangeAdapter();
+    return this.exchange;
+  }
+
+  public async start(config: Config, exchange?: ExchangeAdapter): Promise<void> {
     if (this.isRunning) return;
     this.isRunning = true;
+    if (exchange) this.exchange = exchange;
 
     // Collect symbols with VWAP protection enabled
     for (const [symbol, symbolConfig] of Object.entries(config.symbols)) {
@@ -84,7 +93,7 @@ export class VWAPStreamer extends EventEmitter {
     for (const [symbol, config] of this.symbolConfigs.entries()) {
       try {
         // Fetch historical klines
-        const klines = await getKlines(symbol, config.timeframe, config.lookback);
+        const klines = await this.getExchange().getKlines(symbol, config.timeframe, config.lookback);
 
         if (klines && klines.length > 0) {
           const buffer: Array<{high: number, low: number, close: number, volume: number, quoteVolume: number}> = [];
@@ -137,14 +146,9 @@ export class VWAPStreamer extends EventEmitter {
   private connectWebSocket(): void {
     if (!this.isRunning) return;
 
-    // Build stream names for all symbols with their timeframes
-    const streams: string[] = [];
-    for (const [symbol, config] of this.symbolConfigs.entries()) {
-      const stream = `${symbol.toLowerCase()}@kline_${config.timeframe}`;
-      streams.push(stream);
-    }
-
-    const streamUrl = `wss://fstream.asterdex.com/stream?streams=${streams.join('/')}`;
+    // Subscribe to klines for all symbols with their timeframes
+    const subscriptions = [...this.symbolConfigs.entries()].map(([symbol, config]) => ({ symbol, interval: config.timeframe }));
+    const streamUrl = this.getExchange().getKlineStreamUrl(subscriptions);
     console.log(`📊 VWAP Streamer: Connecting to ${streamUrl}`);
 
     this.ws = new WebSocket(streamUrl);
@@ -335,7 +339,7 @@ export class VWAPStreamer extends EventEmitter {
 
       // Load initial data for new symbol
       try {
-        const klines = await getKlines(symbol, config.timeframe, config.lookback);
+        const klines = await this.getExchange().getKlines(symbol, config.timeframe, config.lookback);
         if (klines && klines.length > 0) {
           const buffer: Array<{high: number, low: number, close: number, volume: number, quoteVolume: number}> = [];
           for (const kline of klines) {

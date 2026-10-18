@@ -1,6 +1,14 @@
-import { Config } from './types';
+import { Config, LighterVenueConfig } from './types';
 
-export const DEFAULT_CONFIG_VERSION = '1.1.0';
+export const DEFAULT_CONFIG_VERSION = '1.3.0';
+
+// Lighter settings that apply until the user changes them (credentials have no default)
+export const DEFAULT_LIGHTER_VENUE_SETTINGS = {
+  profile: 'testnet',          // Testnet until the operator explicitly picks mainnet
+  liquidationsLive: false,     // Shadow mode: Lighter liquidations are logged, never traded
+  sltpSlippagePct: 1,          // SL/TP worst price 1% beyond the trigger (Lighter frontend default)
+  sendTxPerMin: 60,            // Conservative until the standard-tier limit is known
+} as const satisfies LighterVenueConfig;
 
 export const DEFAULT_CONFIG: Config = {
   api: {
@@ -44,6 +52,18 @@ export const DEFAULT_CONFIG: Config = {
     paperMode: true,
     positionMode: 'HEDGE',
     maxOpenPositions: 10,
+    exchange: 'aster',
+    liquidationSource: 'aster',
+    server: {
+      dashboardPassword: '',
+      dashboardPort: 3000,
+      websocketPort: 8080,
+      useRemoteWebSocket: false,
+      websocketHost: null,
+    },
+  },
+  venues: {
+    lighter: { ...DEFAULT_LIGHTER_VENUE_SETTINGS },
   },
   version: DEFAULT_CONFIG_VERSION,
 };

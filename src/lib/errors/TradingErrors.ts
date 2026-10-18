@@ -1,4 +1,30 @@
+import { symbolPrecision } from '../utils/symbolPrecision';
+
+export type ErrorSubCategory =
+  | 'rate-limit'
+  | 'authentication'
+  | 'validation'
+  | 'server-error'
+  | 'notional-error'
+  | 'insufficient-balance'
+  | 'price-precision'
+  | 'quantity-precision'
+  | 'order-rejection'
+  | 'position-mode'
+  | 'connection-lost'
+  | 'reconnect-failed'
+  | 'message-parse'
+  | 'memory-leak'
+  | 'crash'
+  | 'uncaught-exception'
+  | 'general';
+
 export class TradingError extends Error {
+  public subCategory?: ErrorSubCategory;
+  public fingerprint?: string;
+  public correlationId?: string;
+  public timestamp: string;
+
   constructor(
     message: string,
     public code?: number,
@@ -7,6 +33,19 @@ export class TradingError extends Error {
   ) {
     super(message);
     this.name = 'TradingError';
+    this.timestamp = new Date().toISOString();
+    this.determineSubCategory();
+    this.generateFingerprint();
+  }
+
+  protected determineSubCategory(): void {
+    // Override in subclasses for specific categorization
+    this.subCategory = 'general';
+  }
+
+  protected generateFingerprint(): void {
+    // Create a unique fingerprint for error deduplication
+    this.fingerprint = `${this.name}-${this.code || 'NO_CODE'}-${this.symbol || 'NO_SYMBOL'}`;
   }
 }
 
@@ -30,6 +69,10 @@ export class NotionalError extends TradingError {
     });
     this.name = 'NotionalError';
   }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'notional-error';
+  }
 }
 
 export class InsufficientBalanceError extends TradingError {
@@ -42,6 +85,10 @@ export class InsufficientBalanceError extends TradingError {
     super(message, -2019, symbol, { required, available });
     this.name = 'InsufficientBalanceError';
   }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'insufficient-balance';
+  }
 }
 
 export class SymbolNotFoundError extends TradingError {
@@ -50,12 +97,20 @@ export class SymbolNotFoundError extends TradingError {
     super(message, -1121, symbol);
     this.name = 'SymbolNotFoundError';
   }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'validation';
+  }
 }
 
 export class RateLimitError extends TradingError {
   constructor(public retryAfter?: number) {
     super('Rate limit exceeded, please slow down', -1003, undefined);
     this.name = 'RateLimitError';
+  }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'rate-limit';
   }
 }
 
@@ -64,6 +119,10 @@ export class InvalidOrderTypeError extends TradingError {
     super(`Invalid order type ${orderType} for ${symbol}`, -1116, symbol);
     this.name = 'InvalidOrderTypeError';
   }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'validation';
+  }
 }
 
 export class OrderRejectedError extends TradingError {
@@ -71,19 +130,55 @@ export class OrderRejectedError extends TradingError {
     super(message, -2010, symbol, { reason });
     this.name = 'OrderRejectedError';
   }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'order-rejection';
+  }
 }
 
 export class PricePrecisionError extends TradingError {
   constructor(public symbol: string, public price: number, public tickSize: string) {
-    super(`Price ${price} doesn't meet tick size ${tickSize} for ${symbol}`, -1111, symbol);
+    const message = tickSize === 'UNKNOWN'
+      ? `Price ${price} doesn't meet exchange precision requirements for ${symbol}. Try using default tick size 0.0001`
+      : `Price ${price} doesn't meet tick size ${tickSize} for ${symbol}. Price must be a multiple of ${tickSize}`;
+    super(message, -1111, symbol, { price, tickSize });
     this.name = 'PricePrecisionError';
+  }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'price-precision';
   }
 }
 
 export class QuantityPrecisionError extends TradingError {
   constructor(public symbol: string, public quantity: number, public stepSize: string) {
-    super(`Quantity ${quantity} doesn't meet step size ${stepSize} for ${symbol}`, -1013, symbol);
+    const message = stepSize === 'UNKNOWN'
+      ? `Quantity ${quantity} doesn't meet exchange precision requirements for ${symbol}. Try using default step size 0.001`
+      : `Quantity ${quantity} doesn't meet step size ${stepSize} for ${symbol}. Quantity must be a multiple of ${stepSize}`;
+    super(message, -1013, symbol, { quantity, stepSize });
     this.name = 'QuantityPrecisionError';
+  }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'quantity-precision';
+  }
+}
+
+export class PositionModeError extends TradingError {
+  constructor(
+    public symbol: string,
+    public attemptedMode: string,
+    public requiredMode?: string
+  ) {
+    const message = requiredMode
+      ? `Position mode mismatch for ${symbol}: Attempted to use ${attemptedMode} mode, but exchange requires ${requiredMode} mode`
+      : `Order's position side does not match user's setting for ${symbol}. Attempted mode: ${attemptedMode}`;
+    super(message, -4061, symbol, { attemptedMode, requiredMode });
+    this.name = 'PositionModeError';
+  }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'position-mode';
   }
 }
 
@@ -92,6 +187,10 @@ export class ReduceOnlyError extends TradingError {
     super(`ReduceOnly order rejected for ${symbol}`, -2022, symbol);
     this.name = 'ReduceOnlyError';
   }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'order-rejection';
+  }
 }
 
 export class OrderWouldTriggerError extends TradingError {
@@ -99,9 +198,13 @@ export class OrderWouldTriggerError extends TradingError {
     super(`Order would immediately trigger for ${symbol}`, -2021, symbol, { side, price });
     this.name = 'OrderWouldTriggerError';
   }
+
+  protected determineSubCategory(): void {
+    this.subCategory = 'order-rejection';
+  }
 }
 
-export function parseExchangeError(error: any, context?: { symbol?: string; quantity?: number; price?: number; leverage?: number }): TradingError {
+export function parseExchangeError(error: any, context?: { symbol?: string; quantity?: number; price?: number; leverage?: number; positionSide?: string }): TradingError {
   const code = error.response?.data?.code;
   const msg = error.response?.data?.msg || error.message;
 
@@ -155,36 +258,21 @@ export function parseExchangeError(error: any, context?: { symbol?: string; quan
 
     case -1111:
       // BAD_PRECISION - Price precision error
-      // Try to get actual tick size from symbolPrecision
-      let tickSize = 'UNKNOWN';
-      if (context?.symbol) {
-        try {
-          const { symbolPrecision } = require('../utils/symbolPrecision');
-          if (symbolPrecision.hasSymbol(context.symbol)) {
-            const limits = symbolPrecision.getPriceLimits(context.symbol);
-            tickSize = limits.tickSize?.toString() || 'UNKNOWN';
-          }
-        } catch (e) {
-          // Fallback to UNKNOWN if symbolPrecision not available
-        }
-      }
+      // Try to extract tick size from error message, else use loaded exchange filters
+      const tickSizeMatch = msg.match(/tick size[\s:]*(\d+\.\d+)/i);
+      const tickSize = tickSizeMatch
+        ? tickSizeMatch[1]
+        : (context?.symbol && symbolPrecision.getSymbolFilter(context.symbol)?.tickSize) || 'UNKNOWN';
       return new PricePrecisionError(context?.symbol || 'UNKNOWN', context?.price || 0, tickSize);
 
     case -1013:
       // INVALID_MESSAGE - Often quantity precision
       if (msg.includes('quantity')) {
-        let stepSize = 'UNKNOWN';
-        if (context?.symbol) {
-          try {
-            const { symbolPrecision } = require('../utils/symbolPrecision');
-            if (symbolPrecision.hasSymbol(context.symbol)) {
-              const limits = symbolPrecision.getQuantityLimits(context.symbol);
-              stepSize = limits.stepSize?.toString() || 'UNKNOWN';
-            }
-          } catch (e) {
-            // Fallback to UNKNOWN if symbolPrecision not available
-          }
-        }
+        // Try to extract step size from error message, else use loaded exchange filters
+        const stepSizeMatch = msg.match(/step size[\s:]*(\d+\.\d+)/i);
+        const stepSize = stepSizeMatch
+          ? stepSizeMatch[1]
+          : (context?.symbol && symbolPrecision.getSymbolFilter(context.symbol)?.stepSize) || 'UNKNOWN';
         return new QuantityPrecisionError(context?.symbol || 'UNKNOWN', context?.quantity || 0, stepSize);
       }
       return new TradingError(msg, code, context?.symbol);
@@ -204,6 +292,14 @@ export function parseExchangeError(error: any, context?: { symbol?: string; quan
     case -1021:
       // INVALID_TIMESTAMP
       return new TradingError('Invalid timestamp - check system time sync', code, context?.symbol);
+
+    case -4061:
+      // POSITION_SIDE_NOT_MATCH
+      // Order's position side does not match user's setting
+      return new PositionModeError(
+        context?.symbol || 'UNKNOWN',
+        context?.positionSide || 'UNKNOWN'
+      );
 
     default:
       // Unknown error code
