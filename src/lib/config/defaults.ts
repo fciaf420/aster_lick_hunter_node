@@ -84,3 +84,54 @@ export const DEFAULT_SYMBOL_CONFIG = {
   vwapTimeframe: '1m',
   vwapLookback: 200,
 };
+
+// ===== What a setting left empty falls back to =====
+// The config form shows these where a field may be left empty. The bot loads a config.user.json that leaves a
+// setting out by filling it in from config.default.json (addMissingFields in migrator.ts): the global settings for
+// everyone, the symbol settings only for the symbols that file lists. Any other symbol gets the bot's own value
+// (hunter.ts, vwapStreamer.ts, thresholdMonitor.ts), or no limit. tests/lib/config/defaults.test.ts keeps the
+// values that mirror config.default.json equal to it, and the bot's own values equal to the code that applies them.
+// (DEFAULT_CONFIG.global.maxOpenPositions is not one of them: it is what a config the loader creates starts with,
+// written out, and not a fallback.)
+
+export const GLOBAL_SETTING_DEFAULTS = {
+  maxOpenPositions: 5,
+  liquidationRetentionDays: 7,
+  dashboardPort: 3000,
+  websocketPort: 8080,
+} as const;
+
+export interface SymbolSettingDefaults {
+  maxPositionMarginUSDT?: number;
+  vwapLookback?: number;
+  thresholdTimeWindow?: number;   // ms
+  thresholdCooldown?: number;     // ms
+}
+
+export type SymbolSettingDefaultField = keyof SymbolSettingDefaults;
+
+// What the bot applies to any symbol that sets none of these: no margin limit, VWAP over 100 candles, a 60 s volume
+// window and a 30 s cooldown between triggers
+export const BUILT_IN_SYMBOL_SETTING_DEFAULTS: SymbolSettingDefaults = {
+  vwapLookback: 100,
+  thresholdTimeWindow: 60_000,
+  thresholdCooldown: 30_000,
+};
+
+// What config.default.json fills in for the symbols it lists
+export const SHIPPED_SYMBOL_SETTING_DEFAULTS: Record<string, SymbolSettingDefaults> = {
+  ASTERUSDT: {
+    maxPositionMarginUSDT: 200,
+    vwapLookback: 200,
+    thresholdTimeWindow: 60_000,
+    thresholdCooldown: 30_000,
+  },
+};
+
+// The value a symbol setting has while it is empty, or undefined when it has none (no limit)
+export function symbolSettingDefault(symbol: string, field: SymbolSettingDefaultField): number | undefined {
+  const shipped = Object.prototype.hasOwnProperty.call(SHIPPED_SYMBOL_SETTING_DEFAULTS, symbol)
+    ? SHIPPED_SYMBOL_SETTING_DEFAULTS[symbol]
+    : undefined;
+  return shipped?.[field] ?? BUILT_IN_SYMBOL_SETTING_DEFAULTS[field];
+}

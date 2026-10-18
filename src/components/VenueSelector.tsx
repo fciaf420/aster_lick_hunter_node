@@ -2,8 +2,8 @@
 
 import React from 'react';
 import { AlertTriangle, ExternalLink } from 'lucide-react';
-import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   BETA_WARNING,
@@ -71,9 +71,9 @@ export function VenueSelector({
   const sourceEntry = getLiquidationSourceEntry(liquidationSource);
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <Label htmlFor="tradingVenue">Trading venue</Label>
+    <FieldGroup className="gap-6">
+      <Field className="gap-2">
+        <FieldLabel htmlFor="tradingVenue">Trading venue</FieldLabel>
         <Select value={venueEntry.id} onValueChange={(value) => onVenueChange(value as VenueId)}>
           <SelectTrigger id="tradingVenue" className="w-full">
             <SelectValue>{venueEntry.name}</SelectValue>
@@ -118,11 +118,11 @@ export function VenueSelector({
           </div>
         )}
         {venueEntry.status === 'beta' && <BetaWarning name={venueEntry.name} />}
-      </div>
+      </Field>
 
       {showLiquidationSource && onLiquidationSourceChange && (
-        <div className="space-y-2">
-          <Label htmlFor="liquidationSource">Liquidation source</Label>
+        <Field className="gap-2">
+          <FieldLabel htmlFor="liquidationSource">Liquidation source</FieldLabel>
           <Select
             value={sourceEntry.id}
             onValueChange={(value) => onLiquidationSourceChange(value as LiquidationSourceId)}
@@ -150,11 +150,11 @@ export function VenueSelector({
               ))}
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">{sourceEntry.description}</p>
+          <FieldDescription className="text-xs">{sourceEntry.description}</FieldDescription>
           {sourceEntry.status === 'beta' && <BetaWarning name={sourceEntry.name} />}
-        </div>
+        </Field>
       )}
-    </div>
+    </FieldGroup>
   );
 }
 

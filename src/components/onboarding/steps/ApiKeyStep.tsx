@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { VenueSelector } from '@/components/VenueSelector';
 import { LighterSettings, hasLighterCredentials, lighterProfileOf } from '@/components/LighterSettings';
 import { getVenueEntry } from '@/lib/exchange/catalog';
+import { lighterSettingsValid } from '@/lib/config/form';
 import type { VenueId } from '@/lib/exchange/types';
 import type { LighterVenueConfig } from '@/lib/types';
 
@@ -33,6 +34,8 @@ export function ApiKeyStep({ onNext, onBack, initialVenue, initialLighter }: Api
   const [showSecretKey, setShowSecretKey] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [lighter, setLighter] = useState<LighterVenueConfig>(initialLighter ?? {});
+  // What the fields hold can be text the server would refuse ("12.5" as an index): the fields say whether it is valid
+  const [lighterValid, setLighterValid] = useState(() => lighterSettingsValid(initialLighter ?? {}));
   const isLighter = venue === 'lighter';
 
   const handleCopy = (text: string, field: string) => {
@@ -64,7 +67,7 @@ export function ApiKeyStep({ onNext, onBack, initialVenue, initialLighter }: Api
     keysTab?.click();
   };
 
-  const lighterReady = hasLighterCredentials(lighter);
+  const lighterReady = hasLighterCredentials(lighter) && lighterValid;
 
   return (
     <div className="space-y-6">
@@ -215,7 +218,7 @@ export function ApiKeyStep({ onNext, onBack, initialVenue, initialLighter }: Api
         <TabsContent value="keys" className="space-y-4">
           {isLighter ? (
             <div className="space-y-4">
-              <LighterSettings value={lighter} onChange={setLighter} showCredentials idPrefix="onboarding-lighter" />
+              <LighterSettings value={lighter} onChange={setLighter} onValidityChange={setLighterValid} showCredentials idPrefix="onboarding-lighter" />
               <p className="text-xs text-muted-foreground">
                 Want separate long and short positions? Set up hedge mode with a second sub-account later on the config page.
               </p>
@@ -228,13 +231,15 @@ export function ApiKeyStep({ onNext, onBack, initialVenue, initialLighter }: Api
                   Use Paper Mode
                 </Button>
                 <Button onClick={handleSubmit} disabled={!lighterReady} className="flex-1">
-                  {lighterReady ? 'Continue' : 'Enter Keys'}
+                  {lighterReady || !lighterValid ? 'Continue' : 'Enter Keys'}
                 </Button>
               </div>
 
               <div className="flex justify-center">
                 {lighterReady ? (
                   <Badge variant="default">{lighterProfileOf(lighter).testnet ? 'Testnet Trading Ready' : 'Live Trading Ready'}</Badge>
+                ) : !lighterValid ? (
+                  <Badge variant="destructive">Fix the marked fields to continue</Badge>
                 ) : (
                   <Badge variant="secondary">Paper Mode Available</Badge>
                 )}

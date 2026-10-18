@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { configLoader } from '@/lib/config/configLoader';
 import { configSchema } from '@/lib/config/types';
+import { liveModeProblem } from '@/lib/config/liveMode';
 import { getLiquidationSourceEntry, getVenueEntry, isSelectableStatus } from '@/lib/exchange/catalog';
 import { PROFILES } from '@/lib/exchange/lighter/profiles';
 
@@ -76,6 +77,15 @@ export async function POST(request: Request) {
     if (lighterProfile && PROFILES[lighterProfile].gated) {
       return NextResponse.json(
         { error: 'Config validation failed', details: `${PROFILES[lighterProfile].label} is not available yet. ${PROFILES[lighterProfile].gatedReason ?? ''}`.trim() },
+        { status: 400 }
+      );
+    }
+
+    // Live trading needs what the bot checks when it loads the config: a config it would refuse is not written
+    const liveProblem = liveModeProblem(validatedConfig);
+    if (liveProblem) {
+      return NextResponse.json(
+        { error: 'Config validation failed', details: liveProblem },
         { status: 400 }
       );
     }

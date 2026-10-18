@@ -33,6 +33,7 @@
     "lighter:backfill": "tsx scripts/lighter-backfill.ts"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.9.2",
     "@tanstack/react-table": "^8.21.3",
     "@types/sqlite3": "^5.1.0",
     "@types/uuid": "^11.0.0",
@@ -50,6 +51,7 @@
     "radix-ui": "^1.8.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "react-hook-form": "^7.90.0",
     "react-is": "^19.3.1",
     "recharts": "^3.10.1",
     "server-only": "^0.0.1",

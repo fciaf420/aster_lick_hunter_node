@@ -1,11 +1,7 @@
 import React, { useState } from 'react';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import {
-  LighterSettings,
-  lighterShortAccountFieldErrors,
-  type LighterPositionMode,
-} from '@/components/LighterSettings';
+import { LighterSettings, type LighterPositionMode } from '@/components/LighterSettings';
 import SymbolConfigForm, { hedgePositionModeAvailable, lighterHedgeConfigured } from '@/components/SymbolConfigForm';
 import { LIGHTER_MAX_ACCOUNT_INDEX, LIGHTER_MAX_API_KEY_INDEX } from '@/lib/config/types';
 import type { Config, LighterVenueConfig } from '@/lib/types';
@@ -152,7 +148,7 @@ describe('LighterSettings hedge mode (two sub-accounts)', () => {
     expect(lastValue(onChange)).toMatchObject(MAIN);
   });
 
-  it('flags malformed short keys inside the hedge section only', () => {
+  it('flags malformed short keys inside the hedge section only', async () => {
     render(
       <Harness
         initial={{ ...MAIN, hedge: { enabled: true, shortAccount: { ...SHORT_ACCOUNT, apiKeyPrivateKey: 'nothex', apiKeyPublicKey: 'abc' } } }}
@@ -160,7 +156,8 @@ describe('LighterSettings hedge mode (two sub-accounts)', () => {
         showHedge
       />
     );
-    expect(within(section()).getAllByText('Expected 40 bytes of hex (80 characters)')).toHaveLength(2);
+    // Errors come from the form's asynchronous validation
+    expect(await within(section()).findAllByText('Expected 40 bytes of hex (80 characters)')).toHaveLength(2);
     expect(screen.getAllByText('Expected 40 bytes of hex (80 characters)')).toHaveLength(2);   // main keys are valid
     expect(screen.getByLabelText('Short account API private key')).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByLabelText('Short account API public key')).toHaveAttribute('aria-invalid', 'true');
@@ -169,24 +166,25 @@ describe('LighterSettings hedge mode (two sub-accounts)', () => {
     expect(status()).not.toHaveTextContent('Hedge mode active');
   });
 
-  it('flags out-of-range indexes and the main account index', () => {
+  it('flags out-of-range indexes and the main account index', async () => {
     const onChange = jest.fn();
     render(<Harness initial={{ ...MAIN, hedge: { enabled: true } }} initialMode="HEDGE" onChange={onChange} showHedge />);
 
+    // Errors come from the form's asynchronous validation
     fireEvent.change(screen.getByLabelText('Short account API key index'), { target: { value: '255' } });
-    expect(within(section()).getByText(`Must be 0-${LIGHTER_MAX_API_KEY_INDEX}`)).toBeInTheDocument();
+    expect(await within(section()).findByText(`Must be 0-${LIGHTER_MAX_API_KEY_INDEX}`)).toBeInTheDocument();
     expect(screen.getByLabelText('Short account API key index')).toHaveAttribute('aria-invalid', 'true');
 
     fireEvent.change(screen.getByLabelText('Short account index'), { target: { value: '0' } });
-    expect(within(section()).getByText(`Must be 1-${LIGHTER_MAX_ACCOUNT_INDEX}`)).toBeInTheDocument();
+    expect(await within(section()).findByText(`Must be 1-${LIGHTER_MAX_ACCOUNT_INDEX}`)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Short account index'), { target: { value: '12345' } });
-    expect(within(section()).getByText('Must differ from the main (long) account index')).toBeInTheDocument();
+    expect(await within(section()).findByText('Must differ from the main (long) account index')).toBeInTheDocument();
     expect(screen.getByLabelText('Short account index')).toHaveAttribute('aria-invalid', 'true');
 
     fireEvent.change(screen.getByLabelText('Short account index'), { target: { value: '23456' } });
     fireEvent.change(screen.getByLabelText('Short account API key index'), { target: { value: '4' } });
-    expect(within(section()).queryByText(/^Must /)).not.toBeInTheDocument();
+    await waitFor(() => expect(within(section()).queryByText(/^Must /)).not.toBeInTheDocument());
     expect(screen.getByLabelText('Short account index')).not.toHaveAttribute('aria-invalid');
   });
 
@@ -272,7 +270,9 @@ describe('LighterSettings hedge mode (two sub-accounts)', () => {
       expect(status()).toHaveTextContent(
         'Short account incomplete: API private key is missing, API public key is missing.'
       );
-      expect(status()).toHaveTextContent('does not start live');
+      // Without a trading mode (the standalone fields) it reads as paper mode: one-way on the main account
+      expect(status()).toHaveTextContent('Until it is complete the bot trades one-way on the main account');
+      expect(status()).not.toHaveTextContent('does not start live');
       expect(within(section()).queryByText(/credentials incomplete/)).not.toBeInTheDocument();
       expect(within(section()).getByText(/does not manage short account 23456/)).toBeInTheDocument();
     });
@@ -285,7 +285,7 @@ describe('LighterSettings hedge mode (two sub-accounts)', () => {
       expect(within(section()).queryByText(/does not manage short account/)).not.toBeInTheDocument();
     });
 
-    it('reports the same index as the main account as incomplete', () => {
+    it('reports the same index as the main account as incomplete', async () => {
       render(
         <Harness
           initial={{ ...MAIN, hedge: { enabled: true, shortAccount: { ...SHORT_ACCOUNT, accountIndex: MAIN.accountIndex } } }}
@@ -294,7 +294,7 @@ describe('LighterSettings hedge mode (two sub-accounts)', () => {
         />
       );
       expect(status()).toHaveTextContent('Short account incomplete: index must differ from the main (long) account index');
-      expect(within(section()).getByText('Must differ from the main (long) account index')).toBeInTheDocument();
+      expect(await within(section()).findByText('Must differ from the main (long) account index')).toBeInTheDocument();
     });
 
     it('says hedge mode is active after a restart when everything is set', () => {
@@ -319,38 +319,6 @@ describe('LighterSettings hedge mode (two sub-accounts)', () => {
     expect(screen.getAllByText(/credentials incomplete/)).toHaveLength(1);
     expect(screen.getAllByRole('switch')).toHaveLength(2);
     expect(screen.getByLabelText(/Trade on Lighter liquidations/)).toHaveAttribute('role', 'switch');
-  });
-});
-
-describe('lighterShortAccountFieldErrors', () => {
-  it('returns no errors for an empty or valid short account', () => {
-    expect(lighterShortAccountFieldErrors(undefined)).toEqual({});
-    expect(lighterShortAccountFieldErrors(MAIN)).toEqual({});
-    expect(lighterShortAccountFieldErrors(COMPLETE)).toEqual({});
-    expect(lighterShortAccountFieldErrors({ hedge: { shortAccount: { ...SHORT_ACCOUNT, apiKeyPrivateKey: `0x${SHORT_PRIVATE_KEY}` } } })).toEqual({});
-  });
-
-  it('names each bad field without echoing the keys', () => {
-    const errors = lighterShortAccountFieldErrors({
-      accountIndex: 7,
-      hedge: { shortAccount: { accountIndex: 7, apiKeyIndex: 300, apiKeyPrivateKey: 'secret-ish', apiKeyPublicKey: '0x12' } },
-    });
-    expect(errors).toEqual({
-      accountIndex: 'Must differ from the main (long) account index',
-      apiKeyIndex: `Must be 0-${LIGHTER_MAX_API_KEY_INDEX}`,
-      apiKeyPrivateKey: 'Expected 40 bytes of hex (80 characters)',
-      apiKeyPublicKey: 'Expected 40 bytes of hex (80 characters)',
-    });
-    expect(JSON.stringify(errors)).not.toContain('secret-ish');
-  });
-
-  it('checks the account index range before the main-account comparison', () => {
-    expect(lighterShortAccountFieldErrors({ hedge: { shortAccount: { accountIndex: 0 } } }).accountIndex)
-      .toBe(`Must be 1-${LIGHTER_MAX_ACCOUNT_INDEX}`);
-    expect(lighterShortAccountFieldErrors({ hedge: { shortAccount: { accountIndex: LIGHTER_MAX_ACCOUNT_INDEX + 1 } } }).accountIndex)
-      .toBe(`Must be 1-${LIGHTER_MAX_ACCOUNT_INDEX}`);
-    expect(lighterShortAccountFieldErrors({ hedge: { shortAccount: { accountIndex: LIGHTER_MAX_ACCOUNT_INDEX } } })).toEqual({});
-    expect(lighterShortAccountFieldErrors({ hedge: { shortAccount: { apiKeyIndex: 0 } } })).toEqual({});
   });
 });
 
@@ -417,7 +385,7 @@ describe('SymbolConfigForm with Lighter hedge mode', () => {
     return within(screen.getByLabelText('Position Mode')).getByRole('option', { name: /Hedge Mode/ }) as HTMLOptionElement;
   }
 
-  it('applies the hedge switch and the position mode change of one click together', () => {
+  it('applies the hedge switch and the position mode change of one click together', async () => {
     const onSave = jest.fn();
     render(<SymbolConfigForm onSave={onSave} currentConfig={lighterConfig({ ...MAIN, hedge: { shortAccount: SHORT_ACCOUNT } })} />);
 
@@ -427,7 +395,8 @@ describe('SymbolConfigForm with Lighter hedge mode', () => {
     expect(status()).toHaveTextContent('Hedge mode active after the bot restarts');
 
     fireEvent.click(screen.getByRole('button', { name: /Save Configuration/ }));
-    expect(onSave).toHaveBeenCalledTimes(1);
+    // Saving validates first, asynchronously
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     const saved = onSave.mock.calls[0][0] as Config;
     expect(saved.global.positionMode).toBe('HEDGE');
     expect(saved.venues?.lighter).toEqual({ ...MAIN, hedge: { enabled: true, shortAccount: SHORT_ACCOUNT } });

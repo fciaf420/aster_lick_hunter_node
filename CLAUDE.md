@@ -493,6 +493,7 @@ Enable remote monitoring from other devices on your network:
 | `sqlite3` | Database for history and logs |
 | `better-sqlite3` | Synchronous SQLite |
 | `zod` | Schema validation |
+| `react-hook-form` + `@hookform/resolvers` | Config form state and Zod validation (see AGENTS.md, Forms) |
 | `sonner` | Toast notifications |
 | `next-auth` | Dashboard authentication |
 

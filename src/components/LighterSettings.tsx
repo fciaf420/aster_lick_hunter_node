@@ -1,13 +1,13 @@
 'use client';
 
-import React, { useState } from 'react';
-import { AlertCircle, AlertTriangle, ArrowLeftRight, CheckCircle2, Eye, EyeOff, Globe, Radio, Wallet } from 'lucide-react';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { FormProvider, useForm, useFormContext, useFormState, useWatch } from 'react-hook-form';
+import { AlertCircle, AlertTriangle, ArrowLeftRight, CheckCircle2, Globe, Radio, Wallet } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import type { LighterHedgeAccountConfig, LighterVenueConfig } from '@/lib/types';
+import { Button } from '@/components/ui/button';
+import { NativeSelectOption } from '@/components/ui/native-select';
+import { NativeSelectField, NumberField, SwitchField, TextField } from '@/components/config-form/fields';
+import type { Config, LighterVenueConfig } from '@/lib/types';
 import {
   DEFAULT_LIGHTER_PROFILE,
   LIGHTER_PROFILE_NAMES,
@@ -20,27 +20,33 @@ import {
   LIGHTER_MAX_API_KEY_INDEX,
   LIGHTER_MAX_SEND_TX_PER_MIN,
   LIGHTER_MAX_SLTP_SLIPPAGE_PCT,
+  LIGHTER_MIN_ACCOUNT_INDEX,
+  LIGHTER_MIN_API_KEY_INDEX,
+  LIGHTER_MIN_SEND_TX_PER_MIN,
   lighterHedgeState,
   lighterShortAccountProblems,
 } from '@/lib/config/types';
+import { DEFAULT_LIGHTER_VENUE_SETTINGS } from '@/lib/config/defaults';
+import { createConfigResolver, lighterSettingsFormSchema, lighterSettingsValid, withoutClearedFields } from '@/lib/config/form';
 
 // Lighter network, credentials and liquidation-feed settings (config.venues.lighter).
 // The credentials are bound to the selected network: keys, account indexes and nonces differ per network.
-
-const HEX_KEY = /^(0x)?[0-9a-fA-F]{80}$/;
-const HEX_KEY_MESSAGE = 'Expected 40 bytes of hex (80 characters)';
-const SELECT_CLASS =
-  'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background ' +
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+//
+// LighterFields lives in a react-hook-form form and edits venues.lighter there (the config form provides one).
+// LighterSettings wraps it for hosts that hold the settings themselves (onboarding): value in, onChange out.
 
 export function lighterProfileOf(value: LighterVenueConfig | undefined): LighterProfile {
   return PROFILES[isLighterProfileName(value?.profile) ? value.profile : DEFAULT_LIGHTER_PROFILE];
 }
 
-// Whether the bot has everything it needs to sign for this account (formats are checked on save)
+const isRealNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
+const isKeyText = (value: unknown) => typeof value === 'string' && value !== '';
+
+// Whether the bot has everything it needs to sign for this account (formats are checked on save). An index that is
+// not a number is not there yet: a field keeps text it cannot read as typed ("12.5"), which the schema then flags.
 export function hasLighterCredentials(value: LighterVenueConfig | undefined): boolean {
-  return value?.accountIndex !== undefined && value?.apiKeyIndex !== undefined &&
-    !!value?.apiKeyPrivateKey && !!value?.apiKeyPublicKey;
+  return isRealNumber(value?.accountIndex) && isRealNumber(value?.apiKeyIndex) &&
+    isKeyText(value?.apiKeyPrivateKey) && isKeyText(value?.apiKeyPublicKey);
 }
 
 // Banner naming the network the bot talks to, so testnet and real funds are never confused
@@ -60,110 +66,88 @@ export function LighterNetworkBanner({ value }: { value: LighterVenueConfig | un
   );
 }
 
-function parseIndex(text: string): number | undefined {
+// Indexes and counts are typed as digits. Anything else stays in the field as typed so the schema can flag it.
+function parseIndex(text: string): number | string | null {
   const trimmed = text.trim();
-  return /^\d+$/.test(trimmed) ? Number(trimmed) : undefined;
+  if (trimmed === '') return null;
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : trimmed;
 }
 
-function parsePositive(text: string): number | undefined {
-  const value = Number(text);
-  return text.trim() !== '' && Number.isFinite(value) && value > 0 ? value : undefined;
+function parsePositive(text: string): number | string | null {
+  const trimmed = text.trim();
+  if (trimmed === '') return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? value : trimmed;
 }
+
+const parseKey = (text: string) => text.trim() || null;
 
 export type LighterPositionMode = 'ONE_WAY' | 'HEDGE';
 
-export interface LighterShortAccountFieldErrors {
-  accountIndex?: string;
-  apiKeyIndex?: string;
-  apiKeyPrivateKey?: string;
-  apiKeyPublicKey?: string;
-}
-
-// Format, range and same-index errors of the hedge-mode short account fields. Missing fields are not errors here:
-// the status line names them (lighterShortAccountProblems). Never echoes the keys.
-export function lighterShortAccountFieldErrors(value: LighterVenueConfig | undefined): LighterShortAccountFieldErrors {
-  const short = value?.hedge?.shortAccount;
-  const errors: LighterShortAccountFieldErrors = {};
-  const index = short?.accountIndex;
-  if (index !== undefined) {
-    if (!Number.isSafeInteger(index) || index < 1 || index > LIGHTER_MAX_ACCOUNT_INDEX) {
-      errors.accountIndex = `Must be 1-${LIGHTER_MAX_ACCOUNT_INDEX}`;
-    } else if (value?.accountIndex !== undefined && index === value.accountIndex) {
-      errors.accountIndex = 'Must differ from the main (long) account index';
-    }
-  }
-  const keyIndex = short?.apiKeyIndex;
-  if (keyIndex !== undefined && (!Number.isInteger(keyIndex) || keyIndex < 0 || keyIndex > LIGHTER_MAX_API_KEY_INDEX)) {
-    errors.apiKeyIndex = `Must be 0-${LIGHTER_MAX_API_KEY_INDEX}`;
-  }
-  if (short?.apiKeyPrivateKey && !HEX_KEY.test(short.apiKeyPrivateKey.trim())) errors.apiKeyPrivateKey = HEX_KEY_MESSAGE;
-  if (short?.apiKeyPublicKey && !HEX_KEY.test(short.apiKeyPublicKey.trim())) errors.apiKeyPublicKey = HEX_KEY_MESSAGE;
-  return errors;
-}
-
-interface LighterSettingsProps {
-  value: LighterVenueConfig | undefined;
-  onChange: (next: LighterVenueConfig) => void;
+interface LighterFieldsProps {
+  showNetwork?: boolean;           // The network picker (default: shown)
   showCredentials?: boolean;       // Trading on Lighter: account, API key, slippage, tx rate
   showLiquidationFeed?: boolean;   // Lighter liquidation source: shadow / live switch
   showHedge?: boolean;             // Hedge mode over two sub-accounts (needs showCredentials)
   positionMode?: LighterPositionMode;                              // global.positionMode, for the hedge status
   onPositionModeChange?: (mode: LighterPositionMode) => void;     // Sets global.positionMode
   idPrefix?: string;               // Keeps input ids unique when rendered twice on a page
+  inactiveVenue?: string;          // Name of the trading venue when it is not Lighter: these settings are shown to be fixed, not used
 }
 
-export function LighterSettings({
-  value,
-  onChange,
+// The Lighter settings as they will be saved: cleared fields (null in the form) and the objects that only hold
+// them are left out
+function useLighterSettings(): LighterVenueConfig {
+  const lighter = useWatch<Config, 'venues.lighter'>({ name: 'venues.lighter' });
+  return useMemo(() => withoutClearedFields(lighter ?? {}), [lighter]);
+}
+
+export function LighterFields({
+  showNetwork = true,
   showCredentials = true,
   showLiquidationFeed = false,
   showHedge = false,
   positionMode,
   onPositionModeChange,
   idPrefix = 'lighter',
-}: LighterSettingsProps) {
-  const [showPrivateKey, setShowPrivateKey] = useState(false);
-  const settings = value ?? {};
+  inactiveVenue,
+}: LighterFieldsProps) {
+  const { trigger } = useFormContext<Config>();
+  const settings = useLighterSettings();
+  // The config form's trading mode, for the hedge status (the standalone form has none)
+  const paperMode = useWatch<Config, 'global.paperMode'>({ name: 'global.paperMode' });
   const profile = lighterProfileOf(settings);
   const id = (name: string) => `${idPrefix}-${name}`;
-
-  const update = (patch: Partial<LighterVenueConfig>) => {
-    onChange({ ...settings, ...patch });
-  };
-
-  const privateKeyInvalid = !!settings.apiKeyPrivateKey && !HEX_KEY.test(settings.apiKeyPrivateKey.trim());
-  const publicKeyInvalid = !!settings.apiKeyPublicKey && !HEX_KEY.test(settings.apiKeyPublicKey.trim());
-  const apiKeyIndexInvalid = settings.apiKeyIndex !== undefined && settings.apiKeyIndex > LIGHTER_MAX_API_KEY_INDEX;
   const live = settings.liquidationsLive === true;
   const hedgeShown = showCredentials && showHedge;
 
+  // Settings that were saved malformed are flagged straight away, not only once they are edited
+  useEffect(() => {
+    void trigger('venues.lighter');
+  }, [trigger]);
+
   return (
     <div className="space-y-5">
-      <div className="space-y-2">
-        <Label htmlFor={id('profile')}>Lighter network</Label>
-        <select
+      {showNetwork && (
+        <NativeSelectField
+          name="venues.lighter.profile"
           id={id('profile')}
-          value={profile.name}
-          onChange={(e) => {
-            const next = e.target.value;
-            if (isLighterProfileName(next) && !PROFILES[next].gated) update({ profile: next });
-          }}
-          className={SELECT_CLASS}
+          label="Lighter network"
+          fallback={profile.name}
+          // Gated networks (Robinhood) are listed but cannot be picked
+          onValueChange={(next) => isLighterProfileName(next) && !PROFILES[next].gated}
+          aside={<LighterNetworkBanner value={settings} />}
+          description="API keys, account indexes and nonces are per network: keys created on testnet do not work on mainnet. Changing the network takes effect after the bot restarts."
         >
           {LIGHTER_PROFILE_NAMES.map((name) => (
-            <option key={name} value={name} disabled={PROFILES[name].gated}>
+            <NativeSelectOption key={name} value={name} disabled={PROFILES[name].gated}>
               {PROFILES[name].label}
               {name === DEFAULT_LIGHTER_PROFILE ? ' (default)' : ''}
               {PROFILES[name].gated ? ' - not available until verified' : ''}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
-        <LighterNetworkBanner value={settings} />
-        <p className="text-xs text-muted-foreground">
-          API keys, account indexes and nonces are per network: keys created on testnet do not work on mainnet.
-          Changing the network takes effect after the bot restarts.
-        </p>
-      </div>
+        </NativeSelectField>
+      )}
 
       {showCredentials && (
         <div className="space-y-4">
@@ -174,91 +158,60 @@ export function LighterSettings({
             </p>
           )}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor={id('accountIndex')}>Account index</Label>
-              <Input
-                id={id('accountIndex')}
-                type="number"
-                inputMode="numeric"
-                min={1}
-                max={LIGHTER_MAX_ACCOUNT_INDEX}
-                step={1}
-                value={settings.accountIndex ?? ''}
-                onChange={(e) => update({ accountIndex: parseIndex(e.target.value) })}
-                placeholder="e.g. 12345"
-                className="font-mono"
-              />
-              <p className="text-xs text-muted-foreground">Your {profile.label} account (or sub-account) index</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor={id('apiKeyIndex')}>API key index</Label>
-              <Input
-                id={id('apiKeyIndex')}
-                type="number"
-                inputMode="numeric"
-                min={0}
-                max={LIGHTER_MAX_API_KEY_INDEX}
-                step={1}
-                value={settings.apiKeyIndex ?? ''}
-                onChange={(e) => update({ apiKeyIndex: parseIndex(e.target.value) })}
-                placeholder="e.g. 3"
-                className="font-mono"
-              />
-              <p className={`text-xs ${apiKeyIndexInvalid ? 'text-red-600' : 'text-muted-foreground'}`}>
-                {apiKeyIndexInvalid ? `Must be 0-${LIGHTER_MAX_API_KEY_INDEX}` : 'Use a dedicated key, not 0 (app.lighter.xyz uses key 0)'}
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor={id('apiKeyPrivateKey')}>API private key</Label>
-            <div className="relative">
-              <Input
-                id={id('apiKeyPrivateKey')}
-                type={showPrivateKey ? 'text' : 'password'}
-                autoComplete="off"
-                value={settings.apiKeyPrivateKey ?? ''}
-                onChange={(e) => update({ apiKeyPrivateKey: e.target.value.trim() || undefined })}
-                placeholder="80 hex characters (optional 0x)"
-                className="font-mono pr-10"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={showPrivateKey ? 'Hide API private key' : 'Show API private key'}
-                className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-                onClick={() => setShowPrivateKey(!showPrivateKey)}
-              >
-                {showPrivateKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </Button>
-            </div>
-            <p className={`text-xs ${privateKeyInvalid ? 'text-red-600' : 'text-muted-foreground'}`}>
-              {privateKeyInvalid
-                ? HEX_KEY_MESSAGE
-                : 'Signs orders inside the bot process only; it is never sent to the dashboard clients'}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor={id('apiKeyPublicKey')}>API public key</Label>
-            <Input
-              id={id('apiKeyPublicKey')}
-              type="text"
-              autoComplete="off"
-              value={settings.apiKeyPublicKey ?? ''}
-              onChange={(e) => update({ apiKeyPublicKey: e.target.value.trim() || undefined })}
-              placeholder="80 hex characters (optional 0x)"
-              className="font-mono"
+            <NumberField
+              name="venues.lighter.accountIndex"
+              id={id('accountIndex')}
+              label="Account index"
+              description={`Your ${profile.label} account (or sub-account) index`}
+              inputMode="numeric"
+              min={LIGHTER_MIN_ACCOUNT_INDEX}
+              max={LIGHTER_MAX_ACCOUNT_INDEX}
+              step={1}
+              placeholder="e.g. 12345"
+              inputClassName="font-mono"
+              parse={parseIndex}
+              // The short account must differ from this one
+              deps={['venues.lighter.hedge.shortAccount.accountIndex']}
             />
-            <p className={`text-xs ${publicKeyInvalid ? 'text-red-600' : 'text-muted-foreground'}`}>
-              {publicKeyInvalid
-                ? HEX_KEY_MESSAGE
-                : 'At startup the bot checks it against the key registered for this account and key index'}
-            </p>
+            <NumberField
+              name="venues.lighter.apiKeyIndex"
+              id={id('apiKeyIndex')}
+              label="API key index"
+              description="Use a dedicated key, not 0 (app.lighter.xyz uses key 0)"
+              inputMode="numeric"
+              min={LIGHTER_MIN_API_KEY_INDEX}
+              max={LIGHTER_MAX_API_KEY_INDEX}
+              step={1}
+              placeholder="e.g. 3"
+              inputClassName="font-mono"
+              parse={parseIndex}
+            />
           </div>
 
-          {!hasLighterCredentials(settings) && (
+          <TextField
+            name="venues.lighter.apiKeyPrivateKey"
+            id={id('apiKeyPrivateKey')}
+            label="API private key"
+            description="Signs orders inside the bot process only; it is never sent to the dashboard clients"
+            reveal="API private key"
+            autoComplete="off"
+            placeholder="80 hex characters (optional 0x)"
+            inputClassName="font-mono"
+            parse={parseKey}
+          />
+
+          <TextField
+            name="venues.lighter.apiKeyPublicKey"
+            id={id('apiKeyPublicKey')}
+            label="API public key"
+            description="At startup the bot checks it against the key registered for this account and key index"
+            autoComplete="off"
+            placeholder="80 hex characters (optional 0x)"
+            inputClassName="font-mono"
+            parse={parseKey}
+          />
+
+          {!inactiveVenue && !hasLighterCredentials(settings) && (
             <div className="rounded-lg bg-muted p-4">
               <p className="text-sm text-muted-foreground flex items-center gap-2">
                 <AlertCircle className="h-4 w-4" />
@@ -268,36 +221,28 @@ export function LighterSettings({
           )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor={id('sltpSlippagePct')}>SL/TP slippage (%)</Label>
-              <Input
-                id={id('sltpSlippagePct')}
-                type="number"
-                min={0.01}
-                max={LIGHTER_MAX_SLTP_SLIPPAGE_PCT}
-                step={0.1}
-                value={settings.sltpSlippagePct ?? ''}
-                onChange={(e) => update({ sltpSlippagePct: parsePositive(e.target.value) })}
-                placeholder="1"
-              />
-              <p className="text-xs text-muted-foreground">
-                Worst fill price of a triggered stop loss / take profit, beyond the trigger (default 1%)
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor={id('sendTxPerMin')}>Transactions per minute</Label>
-              <Input
-                id={id('sendTxPerMin')}
-                type="number"
-                min={1}
-                max={LIGHTER_MAX_SEND_TX_PER_MIN}
-                step={1}
-                value={settings.sendTxPerMin ?? ''}
-                onChange={(e) => update({ sendTxPerMin: parseIndex(e.target.value) })}
-                placeholder="60"
-              />
-              <p className="text-xs text-muted-foreground">Client-side send limit (default 60); applies after a restart</p>
-            </div>
+            <NumberField
+              name="venues.lighter.sltpSlippagePct"
+              id={id('sltpSlippagePct')}
+              label="SL/TP slippage (%)"
+              description={`Worst fill price of a triggered stop loss / take profit, beyond the trigger. Empty uses ${DEFAULT_LIGHTER_VENUE_SETTINGS.sltpSlippagePct}%.`}
+              min={0.01}
+              max={LIGHTER_MAX_SLTP_SLIPPAGE_PCT}
+              step={0.1}
+              placeholder={String(DEFAULT_LIGHTER_VENUE_SETTINGS.sltpSlippagePct)}
+              parse={parsePositive}
+            />
+            <NumberField
+              name="venues.lighter.sendTxPerMin"
+              id={id('sendTxPerMin')}
+              label="Transactions per minute"
+              description={`Client-side send limit; applies after a restart. Empty uses ${DEFAULT_LIGHTER_VENUE_SETTINGS.sendTxPerMin}.`}
+              min={LIGHTER_MIN_SEND_TX_PER_MIN}
+              max={LIGHTER_MAX_SEND_TX_PER_MIN}
+              step={1}
+              placeholder={String(DEFAULT_LIGHTER_VENUE_SETTINGS.sendTxPerMin)}
+              parse={parseIndex}
+            />
           </div>
         </div>
       )}
@@ -305,33 +250,30 @@ export function LighterSettings({
       {hedgeShown && (
         <LighterHedgeSettings
           settings={settings}
-          onChange={onChange}
+          paperMode={paperMode}
           positionMode={positionMode}
           onPositionModeChange={onPositionModeChange}
+          inactiveVenue={inactiveVenue}
           id={id}
         />
       )}
 
       {showLiquidationFeed && (
         <div className="space-y-3 rounded-lg border p-4">
-          <div className="flex items-center justify-between gap-4">
-            <div className="space-y-0.5">
-              <Label htmlFor={id('liquidationsLive')} className="flex items-center gap-2">
-                <Radio className="h-4 w-4" />
-                Trade on Lighter liquidations
-                {live ? <Badge variant="destructive">Live</Badge> : <Badge variant="secondary">Shadow mode</Badge>}
-              </Label>
-              <p className="text-xs text-muted-foreground">
+          <SwitchField
+            name="venues.lighter.liquidationsLive"
+            id={id('liquidationsLive')}
+            icon={<Radio className="h-4 w-4" />}
+            label="Trade on Lighter liquidations"
+            badge={live ? <Badge variant="destructive">Live</Badge> : <Badge variant="secondary">Shadow mode</Badge>}
+            descriptionClassName="text-xs"
+            description={
+              <>
                 Off (shadow mode): the bot watches {profile.label}&apos;s trade stream, detects liquidations and logs them with
                 cross-checks, but never trades on them.
-              </p>
-            </div>
-            <Switch
-              id={id('liquidationsLive')}
-              checked={live}
-              onCheckedChange={(checked) => update({ liquidationsLive: checked })}
-            />
-          </div>
+              </>
+            }
+          />
           {live ? (
             <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/20 dark:text-red-400">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -356,45 +298,34 @@ export function LighterSettings({
 // a second sub-account with its own API key. The bot only uses it when position mode is HEDGE too (lighterHedgeState).
 function LighterHedgeSettings({
   settings,
-  onChange,
+  paperMode,
   positionMode,
   onPositionModeChange,
+  inactiveVenue,
   id,
 }: {
   settings: LighterVenueConfig;
-  onChange: (next: LighterVenueConfig) => void;
+  paperMode?: boolean;
   positionMode?: LighterPositionMode;
   onPositionModeChange?: (mode: LighterPositionMode) => void;
+  inactiveVenue?: string;
   id: (name: string) => string;
 }) {
-  const [showPrivateKey, setShowPrivateKey] = useState(false);
-  const hedge = settings.hedge ?? {};
-  const short = hedge.shortAccount ?? {};
-  const enabled = hedge.enabled === true;
-  const errors = lighterShortAccountFieldErrors(settings);
-  const hasFieldErrors = Object.keys(errors).length > 0;
+  const short = settings.hedge?.shortAccount ?? {};
+  const enabled = settings.hedge?.enabled === true;
+  // Format, range and same-index errors come from the schema; fields that are missing are named by the status line
+  const { errors } = useFormState<Config>({ name: 'venues.lighter.hedge.shortAccount' });
+  const hasFieldErrors = Object.keys(errors.venues?.lighter?.hedge?.shortAccount ?? {}).length > 0;
   const state = lighterHedgeState({ global: { exchange: 'lighter', positionMode }, venues: { lighter: settings } });
   const shortProblems = lighterShortAccountProblems(settings);
-
-  const setEnabled = (checked: boolean) => {
-    onChange({ ...settings, hedge: { ...settings.hedge, enabled: checked } });
-    // Hedge mode needs position mode HEDGE; turning it off goes back to one-way, which is what the bot then runs
-    onPositionModeChange?.(checked ? 'HEDGE' : 'ONE_WAY');
-  };
-
-  const updateShort = (patch: Partial<LighterHedgeAccountConfig>) => {
-    onChange({ ...settings, hedge: { ...settings.hedge, shortAccount: { ...settings.hedge?.shortAccount, ...patch } } });
-  };
-
-  const hint = (error: string | undefined, text: string) => (
-    <p className={`text-xs ${error ? 'text-red-600' : 'text-muted-foreground'}`}>{error ?? text}</p>
-  );
 
   // lighterShortAccountProblems names every field "short account ...": shortened after the "Short account" prefix
   const missing = (problems: string[]) => problems.map(problem => problem.replace(/^short account /, '')).join(', ');
 
   let status: React.ReactNode;
-  if (!enabled) {
+  if (inactiveVenue) {
+    status = <p className="text-muted-foreground">Not in use: the bot trades on {inactiveVenue}.</p>;
+  } else if (!enabled) {
     status = (
       <p className="text-muted-foreground">
         Hedge mode is off: the bot trades one-way on the main account (an opposite signal reduces or flips the position).
@@ -417,8 +348,10 @@ function LighterHedgeSettings({
       <p className="flex items-start gap-2 text-yellow-700 dark:text-yellow-500">
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
         <span>
-          Short account incomplete: {missing(state.problems)}. Until it is complete the bot trades one-way on the main
-          account in paper mode, and does not start live.
+          Short account incomplete: {missing(state.problems)}.{' '}
+          {paperMode === false
+            ? 'Saving is refused in live mode until it is complete: fill it in or turn hedge mode off.'
+            : 'Until it is complete the bot trades one-way on the main account. Live mode cannot be saved with it incomplete.'}
         </span>
       </p>
     );
@@ -450,21 +383,23 @@ function LighterHedgeSettings({
 
   return (
     <div className="space-y-4 rounded-lg border p-4" data-testid="lighter-hedge-section">
-      <div className="flex items-center justify-between gap-4">
-        <div className="space-y-0.5">
-          <div className="flex items-center gap-2">
-            <ArrowLeftRight className="h-4 w-4" />
-            <Label htmlFor={id('hedgeEnabled')}>Hedge mode (two sub-accounts)</Label>
-            {enabled ? <Badge>Enabled</Badge> : <Badge variant="secondary">Off</Badge>}
-          </div>
-          <p className="text-xs text-muted-foreground">
+      <SwitchField
+        name="venues.lighter.hedge.enabled"
+        id={id('hedgeEnabled')}
+        icon={<ArrowLeftRight className="h-4 w-4" />}
+        label="Hedge mode (two sub-accounts)"
+        badge={enabled ? <Badge>Enabled</Badge> : <Badge variant="secondary">Off</Badge>}
+        descriptionClassName="text-xs"
+        description={
+          <>
             Lighter nets one position per market per account. With hedge mode, longs go on the main account (above) and
             shorts on a second sub-account, so a long and a short on one symbol can be open together, each with its own
             SL/TP.
-          </p>
-        </div>
-        <Switch id={id('hedgeEnabled')} checked={enabled} onCheckedChange={setEnabled} />
-      </div>
+          </>
+        }
+        // Hedge mode needs position mode HEDGE; turning it off goes back to one-way, which is what the bot then runs
+        onCheckedChange={(checked) => onPositionModeChange?.(checked ? 'HEDGE' : 'ONE_WAY')}
+      />
 
       <div className="flex items-start gap-2 rounded-md border border-blue-300 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-400">
         <Wallet className="mt-0.5 h-4 w-4 shrink-0" />
@@ -475,83 +410,56 @@ function LighterHedgeSettings({
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor={id('shortAccountIndex')}>Short account index</Label>
-          <Input
-            id={id('shortAccountIndex')}
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={LIGHTER_MAX_ACCOUNT_INDEX}
-            step={1}
-            value={short.accountIndex ?? ''}
-            onChange={(e) => updateShort({ accountIndex: parseIndex(e.target.value) })}
-            placeholder="e.g. 23456"
-            className="font-mono"
-            aria-invalid={errors.accountIndex ? true : undefined}
-          />
-          {hint(errors.accountIndex, 'A second sub-account of the same master, for the shorts')}
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor={id('shortApiKeyIndex')}>Short account API key index</Label>
-          <Input
-            id={id('shortApiKeyIndex')}
-            type="number"
-            inputMode="numeric"
-            min={0}
-            max={LIGHTER_MAX_API_KEY_INDEX}
-            step={1}
-            value={short.apiKeyIndex ?? ''}
-            onChange={(e) => updateShort({ apiKeyIndex: parseIndex(e.target.value) })}
-            placeholder="e.g. 4"
-            className="font-mono"
-            aria-invalid={errors.apiKeyIndex ? true : undefined}
-          />
-          {hint(errors.apiKeyIndex, 'A key registered on the short account, not 0')}
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor={id('shortApiKeyPrivateKey')}>Short account API private key</Label>
-        <div className="relative">
-          <Input
-            id={id('shortApiKeyPrivateKey')}
-            type={showPrivateKey ? 'text' : 'password'}
-            autoComplete="off"
-            value={short.apiKeyPrivateKey ?? ''}
-            onChange={(e) => updateShort({ apiKeyPrivateKey: e.target.value.trim() || undefined })}
-            placeholder="80 hex characters (optional 0x)"
-            className="font-mono pr-10"
-            aria-invalid={errors.apiKeyPrivateKey ? true : undefined}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={showPrivateKey ? 'Hide short account API private key' : 'Show short account API private key'}
-            className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-            onClick={() => setShowPrivateKey(!showPrivateKey)}
-          >
-            {showPrivateKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </Button>
-        </div>
-        {hint(errors.apiKeyPrivateKey, 'Signs the short account\'s orders inside the bot process only')}
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor={id('shortApiKeyPublicKey')}>Short account API public key</Label>
-        <Input
-          id={id('shortApiKeyPublicKey')}
-          type="text"
-          autoComplete="off"
-          value={short.apiKeyPublicKey ?? ''}
-          onChange={(e) => updateShort({ apiKeyPublicKey: e.target.value.trim() || undefined })}
-          placeholder="80 hex characters (optional 0x)"
-          className="font-mono"
-          aria-invalid={errors.apiKeyPublicKey ? true : undefined}
+        <NumberField
+          name="venues.lighter.hedge.shortAccount.accountIndex"
+          id={id('shortAccountIndex')}
+          label="Short account index"
+          description="A second sub-account of the same master, for the shorts"
+          inputMode="numeric"
+          min={LIGHTER_MIN_ACCOUNT_INDEX}
+          max={LIGHTER_MAX_ACCOUNT_INDEX}
+          step={1}
+          placeholder="e.g. 23456"
+          inputClassName="font-mono"
+          parse={parseIndex}
         />
-        {hint(errors.apiKeyPublicKey, 'Checked at startup against the key registered for the short account')}
+        <NumberField
+          name="venues.lighter.hedge.shortAccount.apiKeyIndex"
+          id={id('shortApiKeyIndex')}
+          label="Short account API key index"
+          description="A key registered on the short account, not 0"
+          inputMode="numeric"
+          min={LIGHTER_MIN_API_KEY_INDEX}
+          max={LIGHTER_MAX_API_KEY_INDEX}
+          step={1}
+          placeholder="e.g. 4"
+          inputClassName="font-mono"
+          parse={parseIndex}
+        />
       </div>
+
+      <TextField
+        name="venues.lighter.hedge.shortAccount.apiKeyPrivateKey"
+        id={id('shortApiKeyPrivateKey')}
+        label="Short account API private key"
+        description="Signs the short account's orders inside the bot process only"
+        reveal="short account API private key"
+        autoComplete="off"
+        placeholder="80 hex characters (optional 0x)"
+        inputClassName="font-mono"
+        parse={parseKey}
+      />
+
+      <TextField
+        name="venues.lighter.hedge.shortAccount.apiKeyPublicKey"
+        id={id('shortApiKeyPublicKey')}
+        label="Short account API public key"
+        description="Checked at startup against the key registered for the short account"
+        autoComplete="off"
+        placeholder="80 hex characters (optional 0x)"
+        inputClassName="font-mono"
+        parse={parseKey}
+      />
 
       <div className="rounded-lg bg-muted p-3 text-sm" data-testid="lighter-hedge-status" aria-live="polite">
         {status}
@@ -567,6 +475,64 @@ function LighterHedgeSettings({
 
       <p className="text-xs text-muted-foreground">Changes apply after the bot restarts.</p>
     </div>
+  );
+}
+
+// ===== Standalone: the host holds the settings =====
+
+interface LighterSettingsProps extends LighterFieldsProps {
+  value: LighterVenueConfig | undefined;
+  onChange: (next: LighterVenueConfig) => void;
+  // Whether the settings can be saved (no field shows an error): said with every edit and once for the value given
+  onValidityChange?: (valid: boolean) => void;
+}
+
+type LighterHostValues = Pick<Config, 'venues'>;
+
+const sameSettings = (a: LighterVenueConfig, b: LighterVenueConfig) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+// Lighter settings for a host that keeps them in its own state (the onboarding step): every edit is passed to
+// onChange as the complete settings, and a value changed from outside replaces what the form holds. The host is
+// told whether they are valid, as its own state holds what was typed even where the schema refuses it ("12.5").
+export function LighterSettings({ value, onChange, onValidityChange, ...fields }: LighterSettingsProps) {
+  const [loaded] = useState<LighterHostValues>(() => ({ venues: { lighter: value ?? {} } }));
+  const resolver = useMemo(() => createConfigResolver<LighterHostValues>(lighterSettingsFormSchema, loaded), [loaded]);
+  const form = useForm<LighterHostValues>({ resolver, defaultValues: loaded, mode: 'onChange', shouldFocusError: false });
+  const { watch, reset, trigger } = form;
+
+  const onChangeRef = useRef(onChange);
+  const onValidityChangeRef = useRef(onValidityChange);
+  const emitted = useRef<LighterVenueConfig>(value ?? {});
+  useEffect(() => {
+    onChangeRef.current = onChange;
+    onValidityChangeRef.current = onValidityChange;
+  }, [onChange, onValidityChange]);
+
+  useEffect(() => {
+    const subscription = watch((values, { name }) => {
+      if (!name) return;   // A reset, not an edit
+      const next = withoutClearedFields(values.venues?.lighter ?? {}) as LighterVenueConfig;
+      emitted.current = next;
+      onChangeRef.current(next);
+      onValidityChangeRef.current?.(lighterSettingsValid(next));
+    });
+    return () => subscription.unsubscribe();
+  }, [watch]);
+
+  useEffect(() => {
+    const incoming = value ?? {};
+    // The value the host holds may be one it has not seen validated yet (the step's first render, a reload)
+    onValidityChangeRef.current?.(lighterSettingsValid(incoming));
+    if (sameSettings(incoming, emitted.current)) return;
+    emitted.current = incoming;
+    reset({ venues: { lighter: incoming } });
+    void trigger();
+  }, [value, reset, trigger]);
+
+  return (
+    <FormProvider {...form}>
+      <LighterFields {...fields} />
+    </FormProvider>
   );
 }
 
