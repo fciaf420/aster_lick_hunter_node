@@ -74,9 +74,10 @@ describe('LighterSettings', () => {
     expect(privateKey.type).toBe('text');
   });
 
-  it('flags malformed keys', () => {
+  it('flags malformed keys', async () => {
     render(<Harness initial={{ apiKeyPrivateKey: 'nothex', apiKeyPublicKey: 'abc' }} />);
-    expect(screen.getAllByText('Expected 40 bytes of hex (80 characters)')).toHaveLength(2);
+    // Errors come from the form's asynchronous validation
+    expect(await screen.findAllByText('Expected 40 bytes of hex (80 characters)')).toHaveLength(2);
   });
 
   it('starts the liquidation feed in shadow mode and explains the live switch', () => {

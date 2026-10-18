@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { LIQUIDATION_SOURCE_IDS, VENUE_IDS, type VenueId } from '../exchange/types';
 import { LIGHTER_PROFILE_NAMES } from '../exchange/lighter/profiles';
 
-export const symbolConfigSchema = z.object({
+export const symbolConfigObjectSchema = z.object({
   // Volume thresholds
   volumeThresholdUSDT: z.number().min(0).optional(),
   longVolumeThresholdUSDT: z.number().min(0).optional(),
@@ -36,11 +36,15 @@ export const symbolConfigSchema = z.object({
   thresholdTimeWindow: z.number().min(0).optional(),
   thresholdCooldown: z.number().min(0).optional(),
   hunterCooldownMs: z.number().min(0).optional(),
-}).refine(data => {
-  // Ensure we have either legacy or new volume thresholds
+});
+
+// Either the legacy threshold or both the long and short ones (also checked by the config form, per field)
+export function hasVolumeThresholds(data: Pick<z.infer<typeof symbolConfigObjectSchema>, 'volumeThresholdUSDT' | 'longVolumeThresholdUSDT' | 'shortVolumeThresholdUSDT'>): boolean {
   return data.volumeThresholdUSDT !== undefined ||
          (data.longVolumeThresholdUSDT !== undefined && data.shortVolumeThresholdUSDT !== undefined);
-}, {
+}
+
+export const symbolConfigSchema = symbolConfigObjectSchema.refine(hasVolumeThresholds, {
   message: "Either volumeThresholdUSDT or both longVolumeThresholdUSDT and shortVolumeThresholdUSDT must be provided"
 });
 
@@ -89,9 +93,12 @@ export const globalConfigSchema = z.object({
 // per network (lighter spec §1.1 rule 2). Every field is optional so a partial setup can be saved; the bot
 // refuses live trading until the credentials are complete and the startup checks pass.
 
+export const LIGHTER_MIN_ACCOUNT_INDEX = 1;
 export const LIGHTER_MAX_ACCOUNT_INDEX = 2 ** 48 - 2;
+export const LIGHTER_MIN_API_KEY_INDEX = 0;
 export const LIGHTER_MAX_API_KEY_INDEX = 254;
 export const LIGHTER_MAX_SLTP_SLIPPAGE_PCT = 10;   // Lighter frontend maximum for the SL/TP worst-price slippage
+export const LIGHTER_MIN_SEND_TX_PER_MIN = 1;
 export const LIGHTER_MAX_SEND_TX_PER_MIN = 4000;   // Premium tier; the standard tier limit is unknown (spec §9 Q16)
 
 // Empty inputs mean "not set"; digit strings (text inputs, hand-edited files) become numbers
@@ -115,9 +122,10 @@ function optionalText(value: unknown): unknown {
 }
 
 // 40 bytes of hex (80 characters), optional 0x prefix: the format lighter-go GenerateAPIKey produces
+export const LIGHTER_HEX_KEY_MESSAGE = 'must be 40 bytes of hex (80 characters, optional 0x prefix)';
 const lighterHexKeySchema = z.preprocess(
   optionalText,
-  z.string().regex(/^(0x)?[0-9a-fA-F]{80}$/, 'must be 40 bytes of hex (80 characters, optional 0x prefix)').optional()
+  z.string().regex(/^(0x)?[0-9a-fA-F]{80}$/, LIGHTER_HEX_KEY_MESSAGE).optional()
 );
 
 const lighterSymbolOverrideSchema = z.union([
@@ -125,8 +133,8 @@ const lighterSymbolOverrideSchema = z.union([
   z.object({ market: z.string().min(1), multiplier: z.number().positive().optional() }),
 ]);
 
-const lighterAccountIndexSchema = z.preprocess(optionalInteger, z.number().int().min(1).max(LIGHTER_MAX_ACCOUNT_INDEX).optional());
-const lighterApiKeyIndexSchema = z.preprocess(optionalInteger, z.number().int().min(0).max(LIGHTER_MAX_API_KEY_INDEX).optional());
+const lighterAccountIndexSchema = z.preprocess(optionalInteger, z.number().int().min(LIGHTER_MIN_ACCOUNT_INDEX).max(LIGHTER_MAX_ACCOUNT_INDEX).optional());
+const lighterApiKeyIndexSchema = z.preprocess(optionalInteger, z.number().int().min(LIGHTER_MIN_API_KEY_INDEX).max(LIGHTER_MAX_API_KEY_INDEX).optional());
 
 // Hedge mode emulation: longs on the main account, shorts on this second sub-account of the same master
 // (Lighter nets one position per market per account). Same network as the main account; its own API key.
@@ -169,7 +177,7 @@ export const lighterVenueConfigSchema = z.preprocess(
     // Worst-price slippage of stop-loss / take-profit orders after they trigger, in percent
     sltpSlippagePct: z.number().min(0.01).max(LIGHTER_MAX_SLTP_SLIPPAGE_PCT).optional(),
     // Client-side sendTx limit per minute
-    sendTxPerMin: z.number().int().min(1).max(LIGHTER_MAX_SEND_TX_PER_MIN).optional(),
+    sendTxPerMin: z.number().int().min(LIGHTER_MIN_SEND_TX_PER_MIN).max(LIGHTER_MAX_SEND_TX_PER_MIN).optional(),
     // Bot symbol -> Lighter backend symbol (e.g. "QNTUSDT": "QNT", or { "market": "1000NOT", "multiplier": 1000 })
     symbolOverrides: z.record(lighterSymbolOverrideSchema).optional(),
     // Hedge mode via two sub-accounts (the account above holds the longs)

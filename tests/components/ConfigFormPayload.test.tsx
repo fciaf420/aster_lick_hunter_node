@@ -4,6 +4,7 @@ import '@testing-library/jest-dom';
 import ConfigProvider, { useConfig } from '@/components/ConfigProvider';
 import SymbolConfigForm from '@/components/SymbolConfigForm';
 import { configSchema } from '@/lib/config/types';
+import { toast } from 'sonner';
 
 // Characterization of the config form's save payload: renders the form with a fixture config under the real
 // ConfigProvider (the object the config page hands to the form), performs a set of edits through the UI, clicks
@@ -254,7 +255,7 @@ async function openSymbols(symbol?: string) {
   }
 }
 
-async function save({ serverAccepts = true } = {}): Promise<Json> {
+async function save(): Promise<Json> {
   const before = posts.length;
   fireEvent.click(screen.getByRole('button', { name: /Save Configuration/ }));
   await waitFor(() => expect(posts).toHaveLength(before + 1));
@@ -264,7 +265,7 @@ async function save({ serverAccepts = true } = {}): Promise<Json> {
   expect(post.headers).toEqual({ 'Content-Type': 'application/json' });
   const body = JSON.parse(post.body);
   // Whatever the form sends must pass the validation /api/config applies
-  expect(configSchema.safeParse(body).success).toBe(serverAccepts);
+  expect(configSchema.safeParse(body).success).toBe(true);
   return body;
 }
 
@@ -477,6 +478,39 @@ describe('config form save payload: Aster', () => {
   });
 });
 
+describe('config form save payload: settings the form has no field for', () => {
+  const WITH_EXTRAS = edit(LIGHTER_CONFIG, (c) => {
+    c.venues.lighter.symbolOverrides = { QNTUSDT: 'QNT', NOTUSDT: { market: '1000NOT', multiplier: 1000 } };
+    c.venues.hyperliquid = { wallet: 'FAKE-WALLET-NOT-REAL' };
+    c.symbols.BTCUSDT.usePostOnly = true;
+    c.symbols.BTCUSDT.hunterCooldownMs = 90000;
+    c.global.hunterCooldownMs = 120000;
+    c.global.server.envWebSocketHost = 'env.example.test';
+    c.global.rateLimit.maxConcurrentRequests = 5;
+  });
+
+  it('saves them as they were loaded', async () => {
+    await openForm(WITH_EXTRAS);
+    expect(await save()).toEqual(WITH_EXTRAS);
+  });
+
+  it('saves them along with the edits', async () => {
+    await openForm(WITH_EXTRAS);
+    type('Account index', '999');
+    await openSymbols('BTCUSDT');
+    type('Leverage', '9');
+    openTab(/Global Settings/);
+    await screen.findByText('Risk management and trading mode configuration');
+    type('Risk Percentage', '6');
+
+    expect(await save()).toEqual(edit(WITH_EXTRAS, (c) => {
+      c.venues.lighter.accountIndex = 999;
+      c.symbols.BTCUSDT.leverage = 9;
+      c.global.riskPercent = 6;
+    }));
+  });
+});
+
 describe('config form save payload: adding and removing symbols', () => {
   it('adds a typed symbol with the default settings and removes another', async () => {
     await openForm(ASTER_CONFIG);
@@ -525,6 +559,22 @@ describe('config form save payload: adding and removing symbols', () => {
 
     expect(await save()).toEqual(edit(ASTER_CONFIG, (c) => {
       c.symbols.XRPUSDT = NEW_SYMBOL;
+    }));
+  });
+
+  it('starts a symbol that is added again from the default settings, not from what it had', async () => {
+    await openForm(ASTER_CONFIG);
+    await openSymbols('ETHUSDT');
+    fireEvent.click(screen.getByRole('button', { name: /Remove/ }));
+    fireEvent.change(screen.getByPlaceholderText('Enter symbol manually (e.g., BTCUSDT)'), { target: { value: 'ethusdt' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add Manual/ }));
+    await screen.findByText('ETHUSDT Settings');
+    // ETHUSDT had separate trade sizes and VWAP off before; the new one has neither
+    expect((control('Trade Size (USDT)') as HTMLInputElement).value).toBe('100');
+    expect(hasLabel('Long Trade Size (USDT)')).toBe(false);
+
+    expect(await save()).toEqual(edit(ASTER_CONFIG, (c) => {
+      c.symbols.ETHUSDT = NEW_SYMBOL;
     }));
   });
 
@@ -587,6 +637,20 @@ describe('config form save payload: venue and Lighter', () => {
     expect(screen.getByText(/Lighter is in beta/).closest('[role="alert"]')).toHaveTextContent('untested with live funds');
 
     expect(await save()).toEqual(edit(ASTER_CONFIG, (c) => {
+      c.global.exchange = 'lighter';
+      c.global.positionMode = 'ONE_WAY';
+    }));
+  });
+
+  it('adds no Lighter settings to a config without any when only the venue is switched', async () => {
+    const bare = edit(ASTER_CONFIG, (c) => { delete c.venues; });
+    await openForm(bare);
+    await choose(control('Trading venue'), /Lighter/);
+    await screen.findByText('Lighter Configuration');
+    // Lighter's fields are shown, empty, and none of them leaves a trace in what is saved
+    expect(hasLabel('Short account index')).toBe(true);
+
+    expect(await save()).toEqual(edit(bare, (c) => {
       c.global.exchange = 'lighter';
       c.global.positionMode = 'ONE_WAY';
     }));
@@ -832,8 +896,17 @@ describe('config form save payload: global and server settings', () => {
   it('does not save a dashboard password shorter than 4 characters', async () => {
     await openGlobal();
     type('Dashboard Password', 'abc');
-    expect(screen.getByText('Password must be at least 4 characters')).toBeInTheDocument();
+    // Waits: the form validates asynchronously, so the error shows a moment after the edit
+    expect(await screen.findByText('Password must be at least 4 characters')).toBeInTheDocument();
     await expectNoSave();
+    // Intended difference: the refusal used to be a window.alert; it is now the inline error above, a focused
+    // field and a toast, so that a refused save is reported the same way for every field
+    expect(window.alert).not.toHaveBeenCalled();
+    await waitFor(() => expect(control('Dashboard Password')).toHaveFocus());
+    expect(toast.error).toHaveBeenCalledWith(
+      'Cannot save yet: fix the highlighted fields',
+      expect.objectContaining({ description: 'dashboard password: Password must be at least 4 characters' })
+    );
 
     type('Dashboard Password', 'abcd');
     expect((await save()).global.server.dashboardPassword).toBe('abcd');
@@ -870,66 +943,100 @@ describe('config form save payload: API keys', () => {
   });
 });
 
-describe('config form save payload: emptied number fields', () => {
-  // The form used to replace an emptied number field with a fallback value on every keystroke, so the field could
-  // never be left empty. Each case records the fallback, to be compared with the new behaviour.
-  it('replaces an emptied symbol number field with its fallback', async () => {
+describe('config form save payload: emptied and out-of-range number fields', () => {
+  // Intended difference. The form used to replace an emptied number field with a fallback value on every keystroke
+  // (leverage 1, risk 0, margin cap 0, ...), so a field could never be left empty, and it posted values the server
+  // rejects (take profit 0, leverage 200) for the server to answer 400. Now an empty field is what it says: unset
+  // for the optional settings (the bot applies its own default, as it does for a config without them), and an
+  // error for the required ones, shown under the field. Save is refused until the errors are fixed.
+  it('leaves an emptied optional symbol field out of the payload', async () => {
     await openForm(ASTER_CONFIG);
     await openSymbols('BTCUSDT');
-    type('Leverage', '');
     type('Max Position Margin (USDT)', '');
-    type('Long Volume Threshold (USDT)', '');
     type('Lookback Period', '');
     type('Time Window (seconds)', '');
     type('Cooldown Period (seconds)', '');
+    expect((control('Max Position Margin (USDT)') as HTMLInputElement).value).toBe('');
 
     expect(await save()).toEqual(edit(ASTER_CONFIG, (c) => {
-      c.symbols.BTCUSDT.leverage = 1;
-      c.symbols.BTCUSDT.maxPositionMarginUSDT = 0;
-      c.symbols.BTCUSDT.longVolumeThresholdUSDT = 0;
-      c.symbols.BTCUSDT.vwapLookback = 100;
-      c.symbols.BTCUSDT.thresholdTimeWindow = 60000;
-      c.symbols.BTCUSDT.thresholdCooldown = 30000;
+      delete c.symbols.BTCUSDT.maxPositionMarginUSDT;
+      delete c.symbols.BTCUSDT.vwapLookback;
+      delete c.symbols.BTCUSDT.thresholdTimeWindow;
+      delete c.symbols.BTCUSDT.thresholdCooldown;
     }));
   });
 
-  it('replaces an emptied global number field with its fallback', async () => {
+  it('leaves an emptied optional global field out of the payload', async () => {
     await openGlobal();
-    type('Risk Percentage', '');
     type('Max Open Positions', '');
     type('Liquidation History Retention (days)', '');
     type('Dashboard Port', '');
     type('WebSocket Port', '');
 
     expect(await save()).toEqual(edit(ASTER_CONFIG, (c) => {
-      c.global.riskPercent = 0;
-      c.global.maxOpenPositions = 10;
-      c.global.liquidationRetentionDays = 7;
-      c.global.server.dashboardPort = 3000;
-      c.global.server.websocketPort = 8080;
+      delete c.global.maxOpenPositions;
+      delete c.global.liquidationRetentionDays;
+      delete c.global.server.dashboardPort;
+      delete c.global.server.websocketPort;
     }));
   });
 
-  it('sent a body the server rejects when take profit was emptied', async () => {
+  it('refuses to save while a required symbol field is empty, and shows where', async () => {
     await openForm(ASTER_CONFIG);
     await openSymbols('BTCUSDT');
     type('Take Profit (%)', '');
+    type('Leverage', '');
+    // Move away from the symbol tab: the refusal brings the first invalid field back
+    openTab(/Global Settings/);
+    await screen.findByText('Risk management and trading mode configuration');
+    await expectNoSave();
 
-    // tpPercent 0 is below the schema's minimum: the old form posted it anyway and the server answered 400
-    expect(await save({ serverAccepts: false })).toEqual(edit(ASTER_CONFIG, (c) => {
-      c.symbols.BTCUSDT.tpPercent = 0;
+    await screen.findByText('BTCUSDT Settings');
+    await waitFor(() => expect(control('Leverage')).toHaveFocus());
+    expect(control('Leverage')).toHaveAttribute('aria-invalid', 'true');
+    expect(control('Take Profit (%)')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getAllByText('Required')).toHaveLength(2);
+    expect(toast.error).toHaveBeenCalledWith('Cannot save yet: fix the highlighted fields', expect.objectContaining({ description: '2 fields need attention' }));
+
+    type('Take Profit (%)', '4');
+    type('Leverage', '8');
+    expect(await save()).toEqual(edit(ASTER_CONFIG, (c) => {
+      c.symbols.BTCUSDT.tpPercent = 4;
+      c.symbols.BTCUSDT.leverage = 8;
     }));
   });
 
-  it('sent out-of-range values the server rejects', async () => {
+  it('refuses to save a symbol without volume thresholds', async () => {
+    await openForm(ASTER_CONFIG);
+    await openSymbols('BTCUSDT');
+    // The server demands a legacy threshold or both new ones; the form says which one is missing
+    type('Short Volume Threshold (USDT)', '');
+    await expectNoSave();
+    await waitFor(() => expect(control('Short Volume Threshold (USDT)')).toHaveFocus());
+    expect(await screen.findByText('Required')).toBeInTheDocument();
+    expect(control('Long Volume Threshold (USDT)')).not.toHaveAttribute('aria-invalid');
+
+    type('Short Volume Threshold (USDT)', '7500');
+    expect(await save()).toEqual(edit(ASTER_CONFIG, (c) => {
+      c.symbols.BTCUSDT.shortVolumeThresholdUSDT = 7500;
+    }));
+  });
+
+  it('refuses to save an empty risk percentage', async () => {
+    await openGlobal();
+    type('Risk Percentage', '');
+    await expectNoSave();
+    await waitFor(() => expect(control('Risk Percentage')).toHaveFocus());
+    expect(await screen.findByText('Required')).toBeInTheDocument();
+  });
+
+  it('refuses to save values the server would reject, and says why', async () => {
     await openForm(ASTER_CONFIG);
     await openSymbols('BTCUSDT');
     type('Leverage', '200');
     type('Stop Loss (%)', '-1');
-
-    expect(await save({ serverAccepts: false })).toEqual(edit(ASTER_CONFIG, (c) => {
-      c.symbols.BTCUSDT.leverage = 200;
-      c.symbols.BTCUSDT.slPercent = -1;
-    }));
+    expect(await screen.findByText('Must be at most 125')).toBeInTheDocument();
+    expect(screen.getByText('Must be at least 0.1')).toBeInTheDocument();
+    await expectNoSave();
   });
 });
