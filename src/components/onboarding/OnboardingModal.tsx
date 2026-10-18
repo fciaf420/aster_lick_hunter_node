@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   Dialog,
   DialogContent,
@@ -148,11 +149,9 @@ export function OnboardingModal() {
   };
 
   const handleApiKeyNext = async (apiKey: string, secretKey: string, venue: VenueId, venueSettings?: VenueStepSettings) => {
-    setApiKeys({ apiKey, secretKey });
     // Lighter keeps its credentials under venues.lighter; Aster uses the API key pair
     const lighter = venueSettings?.lighter;
     const paperMode = venue === 'lighter' ? !hasLighterCredentials(lighter) : !apiKey && !secretKey;
-    setIsPaperMode(paperMode);
 
     // Update config with API keys
     if (config) {
@@ -200,9 +199,21 @@ export function OnboardingModal() {
         symbols: config.symbols || {}
       };
       
-      await updateConfig(updatedConfig);
+      try {
+        await updateConfig(updatedConfig);
+      } catch (error) {
+        // The server refuses a live config the bot would not start with, and says why (never with a key in it):
+        // stay on this step so that the keys can be corrected
+        console.error('❌ Config save failed:', error);
+        toast.error('Could not save your exchange settings', {
+          description: error instanceof Error ? error.message : 'Please try again',
+        });
+        return;
+      }
     }
 
+    setApiKeys({ apiKey, secretKey });
+    setIsPaperMode(paperMode);
     completeStep('api-setup');
     nextStep();
   };

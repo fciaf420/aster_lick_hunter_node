@@ -247,16 +247,28 @@ interface LighterHedgeSettingsView {
   hedge?: { enabled?: boolean; shortAccount?: LighterHedgeAccountView } | null;
 }
 
+const SHORT_ACCOUNT_FIELD_PROBLEMS = {
+  accountIndex: 'short account index is missing',
+  apiKeyIndex: 'short account API key index is missing',
+  apiKeyPrivateKey: 'short account API private key is missing',
+  apiKeyPublicKey: 'short account API public key is missing',
+} as const;
+
+export type LighterShortAccountField = keyof typeof SHORT_ACCOUNT_FIELD_PROBLEMS;
+
+const isSet = (value: unknown) => value !== undefined && value !== null && value !== '';
+
+// The short account fields that are not set (in the order lighterShortAccountProblems lists them)
+export function lighterShortAccountMissing(settings: LighterHedgeSettingsView | null | undefined): LighterShortAccountField[] {
+  const short = settings?.hedge?.shortAccount;
+  return (Object.keys(SHORT_ACCOUNT_FIELD_PROBLEMS) as LighterShortAccountField[]).filter((field) => !isSet(short?.[field]));
+}
+
 // What keeps the short account from being used: missing fields and the same index as the main (long) account.
 // Formats are checked by the schema. Never echoes secrets.
 export function lighterShortAccountProblems(settings: LighterHedgeSettingsView | null | undefined): string[] {
   const short = settings?.hedge?.shortAccount;
-  const isSet = (value: unknown) => value !== undefined && value !== null && value !== '';
-  const problems: string[] = [];
-  if (!isSet(short?.accountIndex)) problems.push('short account index is missing');
-  if (!isSet(short?.apiKeyIndex)) problems.push('short account API key index is missing');
-  if (!isSet(short?.apiKeyPrivateKey)) problems.push('short account API private key is missing');
-  if (!isSet(short?.apiKeyPublicKey)) problems.push('short account API public key is missing');
+  const problems: string[] = lighterShortAccountMissing(settings).map((field) => SHORT_ACCOUNT_FIELD_PROBLEMS[field]);
   if (isSet(short?.accountIndex) && Number(short?.accountIndex) === Number(settings?.accountIndex)) {
     problems.push(`short account index ${LIGHTER_HEDGE_SAME_ACCOUNT_MESSAGE}`);
   }

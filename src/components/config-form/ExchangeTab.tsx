@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { VenueSelector } from '@/components/VenueSelector';
 import { LighterFields, type LighterPositionMode } from '@/components/LighterSettings';
-import { TextField } from './fields';
+import { TextField, useHasErrors } from './fields';
 import { hedgePositionModeAvailable } from './form-state';
 
 // "Exchange" tab: trading venue, liquidation source and the credentials of the selected venue
@@ -22,6 +22,9 @@ export function ExchangeTab() {
   });
   const [apiKey, secretKey] = useWatch({ control, name: ['api.apiKey', 'api.secretKey'] });
   const venueEntry = getVenueEntry(exchange);
+  // Lighter settings with an error stay on screen when another venue is selected: the error still blocks Save
+  const lighterErrors = useHasErrors('venues.lighter');
+  const lighterHedgeErrors = useHasErrors('venues.lighter.hedge');
 
   const handleVenueChange = (venue: VenueId) => {
     const values = getValues();
@@ -121,6 +124,27 @@ export function ExchangeTab() {
             Credentials for {venueEntry.name} can be entered once it is supported.
           </p>
         </div>
+      )}
+
+      {venueEntry.id !== 'lighter' && lighterErrors && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Lighter settings (not the active venue)</CardTitle>
+            <CardDescription>
+              These Lighter settings are invalid, which stops the configuration from being saved: fix or clear the marked
+              fields. The bot trades on {venueEntry.name}, so it does not use them.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <LighterFields
+              showNetwork={liquidationSource !== 'lighter'}
+              showCredentials
+              showHedge={lighterHedgeErrors}
+              inactiveVenue={venueEntry.name}
+              idPrefix="lighter-inactive"
+            />
+          </CardContent>
+        </Card>
       )}
 
       {venueEntry.id !== 'lighter' && liquidationSource === 'lighter' && (

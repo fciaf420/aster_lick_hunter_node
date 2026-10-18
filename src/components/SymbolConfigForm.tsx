@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ExchangeTab } from '@/components/config-form/ExchangeTab';
 import { GlobalTab } from '@/components/config-form/GlobalTab';
 import { SymbolsTab } from '@/components/config-form/SymbolsTab';
-import { buildInitialConfig, collectErrors, describePath, firstInvalid, type ConfigTab } from '@/components/config-form/form-state';
+import { TAB_LABELS, buildInitialConfig, collectErrors, describePath, firstInvalid, type ConfigTab } from '@/components/config-form/form-state';
 
 // The bot's configuration form: react-hook-form holds the config, Zod (lib/config/form.ts, derived from the schema
 // /api/config validates with) decides whether it may be saved, and the fields are shadcn Fields (config-form/).
@@ -38,28 +38,40 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
 
   const [tab, setTab] = useState<ConfigTab>('api');
   const [selectedSymbol, setSelectedSymbol] = useState('');
-  const [refusedSaves, setRefusedSaves] = useState(0);
+  const [refusal, setRefusal] = useState<{ first: NonNullable<ReturnType<typeof firstInvalid>>; count: number } | null>(null);
   const formRef = useRef<HTMLDivElement>(null);
 
-  // After a refused save, once the tab and symbol holding the invalid fields are shown: focus the first of them
-  // on the page (fields with an error carry aria-invalid). A tab mounts its content a render after it is selected.
+  // After a refused save, once the tab and symbol holding the invalid fields are shown (a tab mounts its content a
+  // render after it is selected): focus the first invalid field on the page (fields with an error carry aria-invalid)
+  // and say so. A setting can be invalid without any field showing it (a rate limit that was edited by hand): then
+  // the toast says where it is, as there is nothing to focus.
   useEffect(() => {
-    if (refusedSaves === 0) return;
-    const timer = setTimeout(() => formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(), 0);
+    if (!refusal) return;
+    const timer = setTimeout(() => {
+      const { first, count } = refusal;
+      const invalid = formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]');
+      invalid?.focus();
+      if (invalid) {
+        toast.error('Cannot save yet: fix the highlighted fields', {
+          description: count === 1 ? `${describePath(first.path)}: ${first.message}` : `${count} fields need attention`,
+        });
+      } else {
+        const where = `${TAB_LABELS[first.tab]} tab${first.symbol ? `, ${first.symbol}` : ''}`;
+        toast.error('Cannot save yet: a setting has no field to fix it in', {
+          description: `${describePath(first.path)}: ${first.message} (${where}). Edit config.user.json to correct it.`,
+        });
+      }
+    }, 0);
     return () => clearTimeout(timer);
-  }, [refusedSaves]);
+  }, [refusal]);
 
-  // Save was refused: show the first invalid field and say so
+  // Save was refused: show the tab and symbol of the first invalid field (the effect above focuses it)
   const handleInvalid = (errors: FieldErrors<Config>) => {
     const first = firstInvalid(errors);
     if (!first) return;
-    const count = collectErrors(errors).length;
     setTab(first.tab);
     if (first.symbol) setSelectedSymbol(first.symbol);
-    setRefusedSaves((refused) => refused + 1);
-    toast.error('Cannot save yet: fix the highlighted fields', {
-      description: count === 1 ? `${describePath(first.path)}: ${first.message}` : `${count} fields need attention`,
-    });
+    setRefusal({ first, count: collectErrors(errors).length });
   };
 
   const handleSave = form.handleSubmit(async (config) => {

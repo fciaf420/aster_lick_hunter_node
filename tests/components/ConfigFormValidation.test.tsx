@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { toast } from 'sonner';
 import SymbolConfigForm from '@/components/SymbolConfigForm';
@@ -93,6 +93,10 @@ async function openSymbol(symbol = 'BTCUSDT') {
 
 // Inline field errors (the page has other alerts: notes and warnings)
 const fieldErrors = (scope: ParentNode = document) => scope.querySelectorAll('[data-slot="field-error"]');
+
+// Validation is asynchronous. The Lighter fields validate their settings when they mount: let that finish before
+// typing, as edits in a browser are never that close behind it (a test fires them in the same tick)
+const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
 const clickSave = () => fireEvent.click(screen.getByRole('button', { name: /Save Configuration/ }));
 const change = (label: string | RegExp, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
@@ -387,6 +391,7 @@ describe('config form validation: Lighter and hedge mode', () => {
 
   it('reads digits as numbers and flags anything else', async () => {
     const onSave = renderForm({ ...LIGHTER_CONFIG, venues: { lighter: { profile: 'testnet' } } });
+    await settle();
     change('Account index', '4242');
     change('API key index', '12.5');
     await waitFor(() => expectErrorOn('API key index', 'Must be 0-254'));
@@ -446,6 +451,269 @@ describe('config form validation: Lighter and hedge mode', () => {
   it('flags the Lighter settings that were saved malformed as soon as they are shown', async () => {
     renderForm({ ...LIGHTER_CONFIG, venues: { lighter: { ...LIGHTER_CONFIG.venues!.lighter, apiKeyPublicKey: 'abc' } } });
     await waitFor(() => expectErrorOn('API public key', 'Expected 40 bytes of hex (80 characters)'));
+  });
+});
+
+describe('config form validation: live Lighter hedge mode', () => {
+  const status = () => screen.getByTestId('lighter-hedge-status');
+
+  // A live (paper mode off) Lighter config with hedge mode on and half a short account: the bot would refuse to load it
+  const liveHedge = (paperMode: boolean, shortAccount: Record<string, unknown> = { accountIndex: 23456, apiKeyIndex: 4 }): Config => ({
+    ...LIGHTER_CONFIG,
+    global: { ...LIGHTER_CONFIG.global, paperMode, positionMode: 'HEDGE' },
+    venues: { lighter: { ...LIGHTER_CONFIG.venues!.lighter, hedge: { enabled: true, shortAccount } } },
+  });
+
+  it('refuses to save it, marks each missing short account field and says that live mode refuses it', async () => {
+    const onSave = renderForm(liveHedge(false));
+    expect(status()).toHaveTextContent('Short account incomplete: API private key is missing, API public key is missing.');
+    expect(status()).toHaveTextContent('Saving is refused in live mode until it is complete: fill it in or turn hedge mode off.');
+    // Nothing is flagged before Save is pressed
+    expect(fieldErrors(screen.getByTestId('lighter-hedge-section'))).toHaveLength(0);
+
+    clickSave();
+    await waitFor(() => expectErrorOn('Short account API private key', 'Required'));
+    expectErrorOn('Short account API public key', 'Required');
+    expectNoError('Short account index');
+    expectNoError('Short account API key index');
+    expect(onSave).not.toHaveBeenCalled();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      'Cannot save yet: fix the highlighted fields',
+      expect.objectContaining({ description: '2 fields need attention' })
+    ));
+    expect(screen.getByLabelText('Short account API private key')).toHaveFocus();
+
+    // Each field clears as it is filled in, and the config saves
+    change('Short account API private key', SHORT_PRIVATE_KEY);
+    await waitFor(() => expectNoError('Short account API private key'));
+    expectErrorOn('Short account API public key', 'Required');
+    change('Short account API public key', SHORT_PUBLIC_KEY);
+    await waitFor(() => expectNoError('Short account API public key'));
+    clickSave();
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].venues.lighter.hedge.shortAccount).toEqual(SHORT_ACCOUNT);
+  });
+
+  it('marks all four fields of a hedge mode without a short account, and accepts it once hedge mode is off', async () => {
+    const onSave = renderForm({ ...liveHedge(false), venues: { lighter: { ...LIGHTER_CONFIG.venues!.lighter, hedge: { enabled: true } } } });
+    clickSave();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      'Cannot save yet: fix the highlighted fields',
+      expect.objectContaining({ description: '4 fields need attention' })
+    ));
+    for (const label of ['Short account index', 'Short account API key index', 'Short account API private key', 'Short account API public key']) {
+      expectErrorOn(label, 'Required');
+    }
+    expect(screen.getByLabelText('Short account index')).toHaveFocus();
+
+    fireEvent.click(screen.getByLabelText('Hedge mode (two sub-accounts)'));
+    clickSave();
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].global.positionMode).toBe('ONE_WAY');
+  });
+
+  it('saves the same incomplete short account in paper mode, where the bot trades one-way on the main account', async () => {
+    const onSave = renderForm(liveHedge(true));
+    expect(status()).toHaveTextContent('Until it is complete the bot trades one-way on the main account.');
+    expect(status()).not.toHaveTextContent('Saving is refused');
+
+    clickSave();
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(JSON.parse(JSON.stringify(onSave.mock.calls[0][0].venues.lighter.hedge.shortAccount))).toEqual({ accountIndex: 23456, apiKeyIndex: 4 });
+  });
+
+  it('refuses it as soon as paper mode is switched off', async () => {
+    const onSave = renderForm(liveHedge(true));
+    openTab(/Global Settings/);
+    fireEvent.click(await screen.findByLabelText('Paper Mode'));
+    clickSave();
+    // The refusal goes back to the Exchange tab, where the fields are
+    await waitFor(() => expectErrorOn('Short account API private key', 'Required'));
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByTestId('lighter-hedge-status')).toHaveTextContent('Saving is refused in live mode');
+  });
+
+  it('does not touch hedge mode that is off, one-way, complete or on another venue', async () => {
+    for (const config of [
+      { ...liveHedge(false), venues: { lighter: { ...LIGHTER_CONFIG.venues!.lighter, hedge: { enabled: false, shortAccount: { accountIndex: 23456 } } } } },
+      { ...liveHedge(false), global: { ...LIGHTER_CONFIG.global, paperMode: false, positionMode: 'ONE_WAY' as const } },
+      liveHedge(false, SHORT_ACCOUNT),
+      { ...liveHedge(false), global: { ...LIGHTER_CONFIG.global, paperMode: false, positionMode: 'HEDGE' as const, exchange: 'aster' as const } },
+    ]) {
+      const onSave = renderForm(config);
+      clickSave();
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      cleanup();
+    }
+  });
+});
+
+describe('config form validation: errors on settings that are not shown', () => {
+  async function choose(trigger: HTMLElement, optionName: RegExp) {
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: optionName }));
+  }
+
+  // The refused save leaves the cursor on an invalid field that is on screen
+  const expectFocusOnInvalidField = async (label: string | RegExp) => {
+    await waitFor(() => expect(screen.getByLabelText(label)).toHaveFocus());
+    expect(document.activeElement).toHaveAttribute('aria-invalid', 'true');
+  };
+
+  it('keeps a Lighter field with an error on screen when the venue is switched back to Aster', async () => {
+    const onSave = renderForm(LIGHTER_CONFIG);
+    await settle();
+    change('Account index', '0');
+    await waitFor(() => expectErrorOn('Account index', `Must be 1-${LIGHTER_MAX_ACCOUNT_INDEX}`));
+
+    await choose(screen.getByLabelText('Trading venue'), /Aster/);
+    await screen.findByText('API Configuration');
+    // The Lighter settings are not the active venue's, but they hold the error that blocks Save: they stay, labelled so
+    expect(screen.getByText('Lighter settings (not the active venue)')).toBeInTheDocument();
+    expectErrorOn('Account index', `Must be 1-${LIGHTER_MAX_ACCOUNT_INDEX}`);
+    expect(screen.queryByText(/Lighter credentials incomplete/)).not.toBeInTheDocument();
+
+    clickSave();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      'Cannot save yet: fix the highlighted fields',
+      expect.objectContaining({ description: expect.stringContaining('Must be 1-') })
+    ));
+    expect(onSave).not.toHaveBeenCalled();
+    await expectFocusOnInvalidField('Account index');
+
+    // Fixed: the card goes, and the config saves with Aster as the venue
+    change('Account index', '12345');
+    await waitFor(() => expect(screen.queryByText('Lighter settings (not the active venue)')).not.toBeInTheDocument());
+    clickSave();
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].global.exchange).toBe('aster');
+    expect(onSave.mock.calls[0][0].venues.lighter.accountIndex).toBe(12345);
+  });
+
+  it('shows no Lighter settings with Aster selected while they are valid', async () => {
+    renderForm(CONFIG);
+    await settle();
+    expect(screen.queryByText('Lighter settings (not the active venue)')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Account index')).not.toBeInTheDocument();
+  });
+
+  it('keeps the VWAP settings with an error on screen after VWAP protection is switched off', async () => {
+    const onSave = renderForm(CONFIG);
+    await openSymbol();
+    change('Lookback Period', '5');
+    await waitFor(() => expectErrorOn('Lookback Period', 'Must be at least 10'));
+
+    fireEvent.click(screen.getByLabelText('VWAP Protection'));
+    expectErrorOn('Lookback Period', 'Must be at least 10');
+    expect(screen.getByText(/VWAP Protection is off, but these values are invalid/)).toBeInTheDocument();
+
+    clickSave();
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(onSave).not.toHaveBeenCalled();
+    await expectFocusOnInvalidField('Lookback Period');
+
+    change('Lookback Period', '50');
+    await waitFor(() => expect(screen.queryByLabelText('Lookback Period')).not.toBeInTheDocument());
+    clickSave();
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].symbols.BTCUSDT).toMatchObject({ vwapProtection: false, vwapLookback: 50 });
+  });
+
+  it.each([
+    ['the threshold system is off', false],
+    ['the threshold system is on and the symbol has it off', true],
+  ])('shows the threshold settings with an error when %s', async (_name, useThresholdSystem) => {
+    const config: Config = {
+      ...CONFIG,
+      global: { ...CONFIG.global, useThresholdSystem },
+      symbols: { BTCUSDT: { ...CONFIG.symbols.BTCUSDT, useThreshold: false, thresholdCooldown: -5000 } },
+    };
+    const onSave = renderForm(config);
+    // Nothing is open: Save goes to the symbol with the error
+    clickSave();
+    await screen.findByText('BTCUSDT Settings');
+    await waitFor(() => expectErrorOn('Cooldown Period (seconds)', 'Must be at least 0'));
+    expectNoError('Time Window (seconds)');
+    expect(onSave).not.toHaveBeenCalled();
+    await expectFocusOnInvalidField('Cooldown Period (seconds)');
+
+    change('Cooldown Period (seconds)', '30');
+    await waitFor(() => expect(screen.queryByLabelText('Cooldown Period (seconds)')).not.toBeInTheDocument());
+    clickSave();
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].symbols.BTCUSDT.thresholdCooldown).toBe(30000);
+  });
+
+  it('keeps the WebSocket host with an error on screen while remote access is off', async () => {
+    const config: Config = {
+      ...CONFIG,
+      global: { ...CONFIG.global, server: { ...CONFIG.global.server, websocketHost: 5 as unknown as string } },
+    };
+    const onSave = renderForm(config);
+    clickSave();
+    await waitFor(() => expectErrorOn('WebSocket Host (Optional)', 'Expected string, received number'));
+    expect(onSave).not.toHaveBeenCalled();
+    await expectFocusOnInvalidField('WebSocket Host (Optional)');
+  });
+
+  it('says where the problem is when no field shows it', async () => {
+    const config: Config = {
+      ...CONFIG,
+      global: { ...CONFIG.global, rateLimit: { maxConcurrentRequests: 11 } },
+    };
+    const onSave = renderForm(config);
+    clickSave();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      'Cannot save yet: a setting has no field to fix it in',
+      expect.objectContaining({
+        description: 'rate limit max concurrent requests: Must be at most 10 (Global Settings tab). Edit config.user.json to correct it.',
+      })
+    ));
+    expect(onSave).not.toHaveBeenCalled();
+    // It is the tab that holds the setting that is shown
+    expect(screen.getByRole('tab', { name: /Global Settings/ })).toHaveAttribute('aria-selected', 'true');
+    expect(document.querySelector('[aria-invalid="true"]')).toBeNull();
+  });
+
+  it('names the symbol when a symbol setting has no field', async () => {
+    const config: Config = {
+      ...CONFIG,
+      symbols: { BTCUSDT: { ...CONFIG.symbols.BTCUSDT, hunterCooldownMs: -1 } },
+    };
+    renderForm(config);
+    clickSave();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      'Cannot save yet: a setting has no field to fix it in',
+      expect.objectContaining({ description: expect.stringContaining('(Symbols tab, BTCUSDT)') })
+    ));
+  });
+
+  it('leaves the secrets out of what it says', async () => {
+    const secret = 'secret-sentinel-0123456789';
+    renderForm({ ...CONFIG, api: { apiKey: secret, secretKey: secret }, global: { ...CONFIG.global, rateLimit: { maxConcurrentRequests: 11 } } });
+    clickSave();
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(JSON.stringify((toast.error as jest.Mock).mock.calls)).not.toContain(secret);
+  });
+});
+
+describe('config form: the credentials notice', () => {
+  it('stays while an index is typed as something that is not a number', async () => {
+    renderForm({
+      ...LIGHTER_CONFIG,
+      venues: { lighter: { ...LIGHTER_CONFIG.venues!.lighter } },
+    });
+    await settle();
+    expect(screen.queryByText(/Lighter credentials incomplete/)).not.toBeInTheDocument();
+
+    change('Account index', '12.5');
+    await waitFor(() => expectErrorOn('Account index', `Must be 1-${LIGHTER_MAX_ACCOUNT_INDEX}`));
+    expect(screen.getByText(/Lighter credentials incomplete/)).toBeInTheDocument();
+
+    change('Account index', '12345');
+    await waitFor(() => expectNoError('Account index'));
+    expect(screen.queryByText(/Lighter credentials incomplete/)).not.toBeInTheDocument();
   });
 });
 

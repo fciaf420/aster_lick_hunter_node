@@ -9,7 +9,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { NativeSelectOption } from '@/components/ui/native-select';
 import { Separator } from '@/components/ui/separator';
-import { NativeSelectField, NumberField, SwitchField, TextField } from './fields';
+import { GLOBAL_SETTING_DEFAULTS } from '@/lib/config/defaults';
+import { NativeSelectField, NumberField, SwitchField, TextField, useHasErrors } from './fields';
 import { hedgePositionModeAvailable, lighterHedgeConfigured } from './form-state';
 
 // "Global Settings" tab: risk and trading mode, and the dashboard server
@@ -27,6 +28,8 @@ export function GlobalTab() {
     ],
   });
   const venueEntry = getVenueEntry(exchange);
+  // The host field is only shown while remote access is on; an error on it stays on screen, as it still blocks Save
+  const hostErrors = useHasErrors('global.server.websocketHost');
   const hedgeCheck = { global: { exchange }, venues: { lighter } };
   const hedgeAvailable = hedgePositionModeAvailable(hedgeCheck);
   const lighterHedge = !venueEntry.supportsHedgeMode && lighterHedgeConfigured(hedgeCheck);
@@ -106,10 +109,10 @@ export function GlobalTab() {
             name="global.maxOpenPositions"
             id="maxOpenPositions"
             label="Max Open Positions"
-            suffix="Maximum concurrent positions (hedged pairs count as one)"
+            suffix={`Maximum concurrent positions (hedged pairs count as one). Empty uses ${GLOBAL_SETTING_DEFAULTS.maxOpenPositions}.`}
             inputClassName="w-24"
             integer
-            placeholder="10"
+            placeholder={String(GLOBAL_SETTING_DEFAULTS.maxOpenPositions)}
             min="1"
             max="50"
             step="1"
@@ -119,11 +122,11 @@ export function GlobalTab() {
             name="global.liquidationRetentionDays"
             id="liquidationRetentionDays"
             label="Liquidation History Retention (days)"
-            suffix="Recorded liquidations and candles older than this are deleted daily (0 keeps everything)"
+            suffix={`Recorded liquidations and candles older than this are deleted daily (0 keeps everything). Empty uses ${GLOBAL_SETTING_DEFAULTS.liquidationRetentionDays}.`}
             inputClassName="w-24"
             integer
             clamp={(days) => Math.max(0, days)}
-            placeholder="7"
+            placeholder={String(GLOBAL_SETTING_DEFAULTS.liquidationRetentionDays)}
             min="0"
             step="1"
           />
@@ -175,10 +178,10 @@ export function GlobalTab() {
             name="global.server.dashboardPort"
             id="dashboardPort"
             label="Dashboard Port"
-            suffix="Port for the web dashboard (default: 3000)"
+            suffix={`Port for the web dashboard. Empty uses ${GLOBAL_SETTING_DEFAULTS.dashboardPort}.`}
             inputClassName="w-24"
             integer
-            placeholder="3000"
+            placeholder={String(GLOBAL_SETTING_DEFAULTS.dashboardPort)}
             min="1024"
             max="65535"
           />
@@ -187,10 +190,10 @@ export function GlobalTab() {
             name="global.server.websocketPort"
             id="websocketPort"
             label="WebSocket Port"
-            suffix="Port for WebSocket server communication (default: 8080)"
+            suffix={`Port for WebSocket server communication. Empty uses ${GLOBAL_SETTING_DEFAULTS.websocketPort}.`}
             inputClassName="w-24"
             integer
-            placeholder="8080"
+            placeholder={String(GLOBAL_SETTING_DEFAULTS.websocketPort)}
             min="1024"
             max="65535"
           />
@@ -207,7 +210,7 @@ export function GlobalTab() {
               description="Allow the dashboard to connect to the bot from remote machines. When enabled, the WebSocket will automatically use the browser's hostname instead of localhost."
             />
 
-            {useRemoteWebSocket && (
+            {(useRemoteWebSocket || hostErrors) && (
               <TextField
                 name="global.server.websocketHost"
                 id="websocketHost"

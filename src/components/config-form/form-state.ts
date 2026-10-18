@@ -8,6 +8,12 @@ import { lighterShortAccountProblems } from '@/lib/config/types';
 
 export type ConfigTab = 'api' | 'global' | 'symbols';
 
+export const TAB_LABELS: Record<ConfigTab, string> = {
+  api: 'Exchange',
+  global: 'Global Settings',
+  symbols: 'Symbols',
+};
+
 // The parts of a config that decide whether hedge position mode can be chosen
 interface HedgeCheckConfig {
   global?: { exchange?: VenueId };
@@ -121,8 +127,12 @@ export function getDefaultSymbolConfig(): SymbolConfig {
 }
 
 // react-hook-form addresses a field by a path ("symbols.BTCUSDT.leverage"), so a symbol name cannot hold the
-// characters a path is split on. Exchange symbols are letters, digits, dashes and the like.
-export const SYMBOL_NAME_PATTERN = /^[^.[\]"']+$/;
+// characters a path is split on. Exchange symbols are letters, digits, dashes and the like. The pattern that names
+// the symbol in a path (below) is built from the same characters: what a name can hold and where a path splits it
+// cannot drift apart.
+const SYMBOL_NAME_CHARS = '[^.[\\]"\']+';
+export const SYMBOL_NAME_PATTERN = new RegExp(`^${SYMBOL_NAME_CHARS}$`);
+const SYMBOL_OF_PATH = new RegExp(`^symbols\\.(${SYMBOL_NAME_CHARS})\\.`);
 
 // ===== Finding the first invalid field =====
 
@@ -158,7 +168,7 @@ export function firstInvalid(errors: unknown): (ErrorLeaf & { tab: ConfigTab; sy
   leaves.sort((a, b) => TAB_ORDER.indexOf(a.tab) - TAB_ORDER.indexOf(b.tab) || a.index - b.index);
   const first = leaves[0];
   if (!first) return undefined;
-  return { path: first.path, message: first.message, tab: first.tab, symbol: /^symbols\.([^.]+)\./.exec(first.path)?.[1] };
+  return { path: first.path, message: first.message, tab: first.tab, symbol: SYMBOL_OF_PATH.exec(first.path)?.[1] };
 }
 
 // "symbols.BTCUSDT.tpPercent" -> "BTCUSDT tp percent"; names the field in the toast without its value

@@ -13,7 +13,8 @@ import { Field, FieldContent, FieldDescription, FieldLabel } from '@/components/
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
-import { NumberField, SelectField, SwitchField } from './fields';
+import { symbolSettingDefault } from '@/lib/config/defaults';
+import { NumberField, SelectField, SwitchField, useHasErrors } from './fields';
 import { SYMBOL_NAME_PATTERN, getDefaultSymbolConfig } from './form-state';
 
 interface SymbolsTabProps {
@@ -298,6 +299,18 @@ function SymbolSettings({ symbol, onRemove }: { symbol: string; onRemove: () => 
   });
   const useThresholdSystem = useWatch<Config, 'global.useThresholdSystem'>({ name: 'global.useThresholdSystem' });
 
+  // Settings that are shown only while their switch is on stay shown while they have an error: it still blocks Save
+  const vwapErrors = useHasErrors(path('vwapTimeframe'), path('vwapLookback'));
+  const thresholdErrors = useHasErrors(path('useThreshold'), path('thresholdTimeWindow'), path('thresholdCooldown'));
+
+  // What an empty setting falls back to for this symbol
+  const marginDefault = symbolSettingDefault(symbol, 'maxPositionMarginUSDT');
+  const lookbackDefault = symbolSettingDefault(symbol, 'vwapLookback');
+  const windowDefaultMs = symbolSettingDefault(symbol, 'thresholdTimeWindow');
+  const cooldownDefaultMs = symbolSettingDefault(symbol, 'thresholdCooldown');
+  const seconds = (ms: number | undefined) => (ms === undefined ? undefined : ms / 1000);
+  const legacyHint = typeof legacyThreshold === 'number' ? ` Empty uses the legacy volume threshold (${legacyThreshold}).` : '';
+
   // Separate long and short sizes are on while either is set (null: cleared)
   const [separateSizes, setSeparateSizes] = useState(
     () => getValues(path('longTradeSize')) != null || getValues(path('shortTradeSize')) != null
@@ -370,16 +383,16 @@ function SymbolSettings({ symbol, onRemove }: { symbol: string; onRemove: () => 
         <NumberField
           name={path('longVolumeThresholdUSDT')}
           label="Long Volume Threshold (USDT)"
-          description="Min liquidation volume for longs (buy on sell liquidations)"
-          placeholder={String(legacyThreshold ?? 0)}
+          description={`Min liquidation volume for longs (buy on sell liquidations).${legacyHint}`}
+          placeholder={typeof legacyThreshold === 'number' ? String(legacyThreshold) : undefined}
           min="0"
         />
 
         <NumberField
           name={path('shortVolumeThresholdUSDT')}
           label="Short Volume Threshold (USDT)"
-          description="Min liquidation volume for shorts (sell on buy liquidations)"
-          placeholder={String(legacyThreshold ?? 0)}
+          description={`Min liquidation volume for shorts (sell on buy liquidations).${legacyHint}`}
+          placeholder={typeof legacyThreshold === 'number' ? String(legacyThreshold) : undefined}
           min="0"
         />
 
@@ -438,7 +451,8 @@ function SymbolSettings({ symbol, onRemove }: { symbol: string; onRemove: () => 
         <NumberField
           name={path('maxPositionMarginUSDT')}
           label="Max Position Margin (USDT)"
-          description="Max total margin exposure for this symbol"
+          description={`Max total margin exposure for this symbol. ${marginDefault === undefined ? 'Empty means no limit.' : `Empty uses ${marginDefault}.`}`}
+          placeholder={marginDefault === undefined ? 'No limit' : String(marginDefault)}
           min="0"
         />
 
@@ -502,7 +516,7 @@ function SymbolSettings({ symbol, onRemove }: { symbol: string; onRemove: () => 
               description="Block entries against VWAP trend"
             />
 
-            {vwapProtection && (
+            {(vwapProtection || vwapErrors) && (
               <div className="grid grid-cols-2 gap-4 pt-2">
                 <SelectField
                   name={path('vwapTimeframe')}
@@ -521,13 +535,17 @@ function SymbolSettings({ symbol, onRemove }: { symbol: string; onRemove: () => 
                 <NumberField
                   name={path('vwapLookback')}
                   label="Lookback Period"
-                  description="Number of candles for VWAP (10-500)"
+                  description={`Number of candles for VWAP (10-500). Empty uses ${lookbackDefault}.`}
                   integer
-                  placeholder="100"
+                  placeholder={String(lookbackDefault)}
                   min="10"
                   max="500"
                 />
               </div>
+            )}
+
+            {!vwapProtection && vwapErrors && (
+              <p className="text-xs text-muted-foreground">VWAP Protection is off, but these values are invalid: fix or clear them to save.</p>
             )}
 
             {vwapProtection && (
@@ -542,8 +560,8 @@ function SymbolSettings({ symbol, onRemove }: { symbol: string; onRemove: () => 
           </div>
         </div>
 
-        {/* Threshold System Settings - Only show if global threshold is enabled */}
-        {useThresholdSystem && (
+        {/* Threshold System Settings - Only show if global threshold is enabled (or a setting of it is invalid) */}
+        {(useThresholdSystem || thresholdErrors) && (
           <div className="col-span-2">
             <Separator className="my-4" />
             <div className="space-y-4">
@@ -554,15 +572,15 @@ function SymbolSettings({ symbol, onRemove }: { symbol: string; onRemove: () => 
                 description="Use 60-second cumulative volume thresholds"
               />
 
-              {useThreshold && (
+              {(useThreshold || thresholdErrors) && (
                 <div className="space-y-4 pt-2">
                   <div className="grid grid-cols-2 gap-4">
                     <NumberField
                       name={path('thresholdTimeWindow')}
                       label="Time Window (seconds)"
-                      description="Window for accumulating volume (default: 60s)"
+                      description={`Window for accumulating volume. Empty uses ${seconds(windowDefaultMs)}s.`}
                       scale={1000}
-                      placeholder="60"
+                      placeholder={String(seconds(windowDefaultMs))}
                       min="10"
                       max="300"
                       step="10"
@@ -571,9 +589,9 @@ function SymbolSettings({ symbol, onRemove }: { symbol: string; onRemove: () => 
                     <NumberField
                       name={path('thresholdCooldown')}
                       label="Cooldown Period (seconds)"
-                      description="Cooldown between triggers (default: 30s)"
+                      description={`Cooldown between triggers. Empty uses ${seconds(cooldownDefaultMs)}s.`}
                       scale={1000}
-                      placeholder="30"
+                      placeholder={String(seconds(cooldownDefaultMs))}
                       min="10"
                       max="300"
                       step="10"

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Controller, useFormContext, type FieldError as FormFieldError, type FieldPath } from 'react-hook-form';
+import { Controller, get, useFormContext, useFormState, type FieldError as FormFieldError, type FieldPath } from 'react-hook-form';
 import { Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Config } from '@/lib/types';
@@ -11,6 +11,7 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '
 import { NativeSelect } from '@/components/ui/native-select';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { collectErrors } from './form-state';
 
 // Field components of the config form: shadcn Field around react-hook-form's Controller, bound to the form in
 // context (FormProvider). Each one renders its label, control, hint and inline error, and ties them together
@@ -20,6 +21,14 @@ import { Switch } from '@/components/ui/switch';
 // undefined. Payload and validation drop nulls (withoutClearedFields in lib/config/form.ts).
 
 export type ConfigFieldName = FieldPath<Config>;
+
+// Whether any of these fields, or any field under a path that holds several, has an error. A section that is only
+// shown while its switch is on uses it to stay shown while it has an error: that error still blocks Save, and must
+// be on screen to be fixed.
+export function useHasErrors(...names: ConfigFieldName[]): boolean {
+  const { errors } = useFormState<Config>({ name: names });
+  return names.some((name) => collectErrors(get(errors, name)).length > 0);
+}
 
 function fieldId(name: string): string {
   return name.replace(/[^A-Za-z0-9_-]/g, '-');

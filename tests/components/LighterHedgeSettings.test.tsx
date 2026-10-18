@@ -270,7 +270,9 @@ describe('LighterSettings hedge mode (two sub-accounts)', () => {
       expect(status()).toHaveTextContent(
         'Short account incomplete: API private key is missing, API public key is missing.'
       );
-      expect(status()).toHaveTextContent('does not start live');
+      // Without a trading mode (the standalone fields) it reads as paper mode: one-way on the main account
+      expect(status()).toHaveTextContent('Until it is complete the bot trades one-way on the main account');
+      expect(status()).not.toHaveTextContent('does not start live');
       expect(within(section()).queryByText(/credentials incomplete/)).not.toBeInTheDocument();
       expect(within(section()).getByText(/does not manage short account 23456/)).toBeInTheDocument();
     });

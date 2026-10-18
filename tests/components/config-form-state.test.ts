@@ -1,4 +1,5 @@
 import {
+  SYMBOL_NAME_PATTERN,
   buildInitialConfig,
   collectErrors,
   describePath,
@@ -67,6 +68,16 @@ describe('finding the first invalid field', () => {
     expect(firstInvalid({ symbols: errors.symbols, global: errors.global })).toMatchObject({ path: 'global.riskPercent', tab: 'global' });
     expect(firstInvalid({ symbols: errors.symbols })).toEqual({ path: 'symbols.ETHUSDT.leverage', message: 'Required', tab: 'symbols', symbol: 'ETHUSDT' });
     expect(firstInvalid({})).toBeUndefined();
+  });
+
+  it('reads the symbol out of a path for every name the form accepts', () => {
+    // The pattern of a symbol name and the one that finds it in a path are built from the same characters
+    for (const name of ['BTCUSDT', '1000PEPEUSDT', '1INCH-USDT', 'BTC_USDT', 'BTCUSDT-250927', 'USDC/USDT']) {
+      expect(SYMBOL_NAME_PATTERN.test(name)).toBe(true);
+      expect(firstInvalid({ symbols: { [name]: { leverage: leaf('Required') } } })).toMatchObject({ tab: 'symbols', symbol: name });
+    }
+    // A name with what a path is split on is refused when it is added, so there is no path to read it from
+    for (const name of ['A.B', 'A[0]', 'A"B', "A'B", '']) expect(SYMBOL_NAME_PATTERN.test(name)).toBe(false);
   });
 
   it('finds the tab of a field', () => {

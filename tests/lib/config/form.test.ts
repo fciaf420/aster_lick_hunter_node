@@ -4,10 +4,13 @@ import {
   createConfigResolver,
   inlineMessage,
   lighterSettingsFormSchema,
+  lighterSettingsValid,
   withoutClearedFields,
 } from '@/lib/config/form';
+import { liveModeProblem } from '@/lib/config/liveMode';
 import { DEFAULT_CONFIG } from '@/lib/config/defaults';
 import {
+  LIGHTER_HEDGE_SAME_ACCOUNT_MESSAGE,
   LIGHTER_MAX_ACCOUNT_INDEX,
   LIGHTER_MAX_API_KEY_INDEX,
   configSchema,
@@ -127,6 +130,88 @@ describe('configFormSchema', () => {
     expect(!result.success && result.error.issues[0].message).toBe(
       'Either volumeThresholdUSDT or both longVolumeThresholdUSDT and shortVolumeThresholdUSDT must be provided'
     );
+  });
+});
+
+describe('configFormSchema: live Lighter hedge mode', () => {
+  const shortPath = (field: string) => `venues.lighter.hedge.shortAccount.${field}`;
+
+  // Lighter, live, hedge position mode and hedge mode on, with the short account as given
+  const hedge = (shortAccount: unknown, change: (c: any) => void = () => {}) => config((c) => {
+    c.global = { ...c.global, paperMode: false, exchange: 'lighter', positionMode: 'HEDGE' };
+    c.venues.lighter = { ...c.venues.lighter, accountIndex: 12345, apiKeyIndex: 3, apiKeyPrivateKey: PRIVATE_KEY, apiKeyPublicKey: PUBLIC_KEY, hedge: { enabled: true, shortAccount } };
+    change(c);
+  });
+
+  it('marks every missing short account field with Required, in the order of the fields', () => {
+    const result = configFormSchema.safeParse(hedge({ accountIndex: 23456 }));
+    expect(paths(result)).toEqual([shortPath('apiKeyIndex'), shortPath('apiKeyPrivateKey'), shortPath('apiKeyPublicKey')]);
+    expect(!result.success && result.error.issues.map((issue) => issue.message)).toEqual(['Required', 'Required', 'Required']);
+
+    expect(paths(configFormSchema.safeParse(hedge(undefined)))).toEqual([
+      shortPath('accountIndex'), shortPath('apiKeyIndex'), shortPath('apiKeyPrivateKey'), shortPath('apiKeyPublicKey'),
+    ]);
+    // Empty text is a missing value, as it is for the server
+    expect(paths(configFormSchema.safeParse(hedge({ accountIndex: 23456, apiKeyIndex: 4, apiKeyPrivateKey: '', apiKeyPublicKey: '  ' }))))
+      .toEqual([shortPath('apiKeyPrivateKey'), shortPath('apiKeyPublicKey')]);
+  });
+
+  it('is what the server refuses on load and on save, field by field', () => {
+    const complete = { accountIndex: 23456, apiKeyIndex: 4, apiKeyPrivateKey: 'c3'.repeat(40), apiKeyPublicKey: 'd4'.repeat(40) };
+    const cases: [string, any][] = [
+      ['a complete short account', hedge(complete)],
+      ['half a short account', hedge({ accountIndex: 23456 })],
+      ['no short account', hedge(undefined)],
+      ['half a short account in paper mode', hedge({ accountIndex: 23456 }, (c) => { c.global.paperMode = true; })],
+      ['half a short account in one-way mode', hedge({ accountIndex: 23456 }, (c) => { c.global.positionMode = 'ONE_WAY'; })],
+      ['half a short account with hedge mode off', hedge({ accountIndex: 23456 }, (c) => { c.venues.lighter.hedge.enabled = false; })],
+      ['half a short account on Aster', hedge({ accountIndex: 23456 }, (c) => { c.global.exchange = 'aster'; c.api = { apiKey: 'k'.repeat(64), secretKey: 's'.repeat(64) }; })],
+    ];
+    for (const [name, input] of cases) {
+      // The schema of the server takes all of them (what it refuses is liveModeProblem's); the form must refuse
+      // exactly the ones that liveModeProblem does
+      expect([name, configSchema.safeParse(input).success]).toEqual([name, true]);
+      const problem = liveModeProblem(configSchema.parse(input));
+      expect([name, configFormSchema.safeParse(input).success]).toEqual([name, problem === undefined]);
+    }
+  });
+
+  it('leaves missing main credentials to the server', () => {
+    // liveModeProblem refuses a live config without them; the form shows its notice and the server answers on Save
+    const noMain = hedge({ accountIndex: 23456, apiKeyIndex: 4, apiKeyPrivateKey: 'c3'.repeat(40), apiKeyPublicKey: 'd4'.repeat(40) }, (c) => {
+      delete c.venues.lighter.apiKeyPublicKey;
+    });
+    expect(liveModeProblem(configSchema.parse(noMain))).toContain('API public key is missing');
+    expect(configFormSchema.safeParse(noMain).success).toBe(true);
+  });
+
+  it('reports the same index once, and keeps the schema message for it', () => {
+    const result = configFormSchema.safeParse(hedge({ accountIndex: 12345 }));
+    expect(paths(result)).toEqual([shortPath('accountIndex'), shortPath('apiKeyIndex'), shortPath('apiKeyPrivateKey'), shortPath('apiKeyPublicKey')]);
+    expect(!result.success && result.error.issues[0].message).toBe(LIGHTER_HEDGE_SAME_ACCOUNT_MESSAGE);
+  });
+
+  it('is checked after the fields that failed to parse', () => {
+    // zod does not refine a value that failed to parse: the marks follow once the leverage is back
+    const input = hedge({ accountIndex: 23456 }, (c) => { delete c.symbols.BTCUSDT.leverage; });
+    expect(paths(configFormSchema.safeParse(input))).toEqual(['symbols.BTCUSDT.leverage']);
+    expect(paths(configFormSchema.safeParse({ ...input, symbols: config().symbols }))).toContain(shortPath('apiKeyIndex'));
+  });
+
+  it('never repeats a key in an issue', () => {
+    const result = configFormSchema.safeParse(hedge({ accountIndex: 23456, apiKeyPrivateKey: 'c3'.repeat(40) }));
+    expect(JSON.stringify(!result.success && result.error.issues)).not.toContain('c3c3');
+  });
+});
+
+describe('lighterSettingsValid', () => {
+  it('says whether Lighter settings held outside a form can be saved', () => {
+    expect(lighterSettingsValid({})).toBe(true);
+    expect(lighterSettingsValid({ accountIndex: 12345, apiKeyIndex: 3, apiKeyPrivateKey: PRIVATE_KEY, apiKeyPublicKey: PUBLIC_KEY })).toBe(true);
+    expect(lighterSettingsValid({ accountIndex: '12.5' as unknown as number })).toBe(false);
+    expect(lighterSettingsValid({ sltpSlippagePct: 0 })).toBe(false);
+    expect(lighterSettingsValid({ sendTxPerMin: 4001 })).toBe(false);
+    expect(lighterSettingsValid({ apiKeyPrivateKey: 'nothex' })).toBe(false);
   });
 });
 

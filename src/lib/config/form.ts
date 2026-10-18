@@ -12,8 +12,11 @@ import {
   configSchema,
   globalConfigSchema,
   hasVolumeThresholds,
+  lighterHedgeState,
+  lighterShortAccountMissing,
   serverConfigSchema,
   symbolConfigObjectSchema,
+  type LighterVenueConfig,
 } from './types';
 
 // Validation of the config form. The rules are the ones /api/config applies (configSchema); this module only
@@ -38,13 +41,29 @@ const serverFormSchema = serverConfigSchema.unwrap().extend({
     .optional(),
 }).optional();
 
-export const configFormSchema = configSchema.extend({
+const configFormObjectSchema = configSchema.extend({
   symbols: z.record(symbolFormSchema),
   global: globalConfigSchema.extend({ server: serverFormSchema }),
 });
 
+// The rule of liveModeProblem (what the server refuses to save and the bot refuses to load) that belongs on fields:
+// live Lighter hedge mode needs a complete short account. Each field that is missing is marked, where the server
+// only says that the account is incomplete. zod skips a refinement while a value failed to parse (a required number
+// that was cleared, say), so these marks follow once that is fixed.
+export const configFormSchema = configFormObjectSchema.superRefine((config, ctx) => {
+  if (config.global.paperMode || lighterHedgeState(config).mode !== 'incomplete') return;
+  for (const field of lighterShortAccountMissing(config.venues?.lighter)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['venues', 'lighter', 'hedge', 'shortAccount', field], message: 'Required' });
+  }
+});
+
 // The Lighter settings on their own (onboarding, tests): the same venues.lighter rules
-export const lighterSettingsFormSchema = configFormSchema.pick({ venues: true });
+export const lighterSettingsFormSchema = configFormObjectSchema.pick({ venues: true });
+
+// Whether Lighter settings that are held outside a form (onboarding) can be saved
+export function lighterSettingsValid(settings: LighterVenueConfig): boolean {
+  return lighterSettingsFormSchema.safeParse({ venues: { lighter: settings } }).success;
+}
 
 // ===== Wording of the inline errors =====
 
