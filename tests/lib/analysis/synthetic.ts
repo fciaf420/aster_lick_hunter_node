@@ -76,19 +76,20 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-// 1m log returns of a made-up market, roughly +-0.1% a minute
+// 1m returns of a made-up market, roughly +-0.1% a minute
 export function marketReturns(count: number, seed = 7): number[] {
   const random = mulberry32(seed);
   return Array.from({ length: count }, () => (random() - 0.5) * 0.002);
 }
 
-// Candles from index 0: the close of candle i + 1 is the close of candle i times exp(multiplier x returns[i]), so an
-// asset built with multiplier 2 from the same returns as the hedge has a beta of exactly 2. Returns [open, close][].
+// Candles from index 0: the close of candle i + 1 is the close of candle i times (1 + multiplier x returns[i]), so an
+// asset built with multiplier 2 from the same returns as the hedge has a beta of exactly 2 (the analysis regresses
+// simple returns, the ones a leg earns). Returns [open, close][].
 export function pathFromReturns(returns: readonly number[], base: number, multiplier = 1): Array<[number, number]> {
   const points: Array<[number, number]> = [[at(0), base]];
   let price = base;
   returns.forEach((value, i) => {
-    price *= Math.exp(multiplier * value);
+    price *= 1 + multiplier * value;
     points.push([at(i + 1), price]);
   });
   return points;

@@ -15,7 +15,9 @@ describe('parsePairAnalysisArgs', () => {
       venue: 'lighter',
       candleVenue: 'lighter',
       includeSkipped: false,
+      untilExits: false,
       minUsd: 0,
+      burstSum: false,
       dedupeSec: 60,
       horizons: [5, 15, 60],
       hedgeSymbol: 'BTCUSDT',
@@ -24,6 +26,8 @@ describe('parsePairAnalysisArgs', () => {
       betaLookbackMin: 240,
       betaMinObservations: 30,
       pairWindowSec: 120,
+      exitFill: 'exact',
+      exitCarryMaxMin: 5,
       feeBps: 5,
       slippageBps: 0,
       jsonTrades: false,
@@ -38,6 +42,7 @@ describe('parsePairAnalysisArgs', () => {
       '--since', '2026-10-12', '--until=2026-10-14T06:30:00+02:00', '--min-usd', '2500.5', '--dedupe-sec=30', '--horizons', '60,5,15,5', '--hedge-symbol', 'ethusdt', '--extra-hedges=BTCUSDT,SOLUSDT',
       '--hedge-sizing', 'dollar', '--beta-lookback', '120', '--beta-min-obs=20', '--pair-window-sec', '90',
       '--fee-bps', '0', '--slippage-bps=1.5', '--json', 'out/pairs.json', '--json-trades',
+      '--until-exits', '--burst-sum', '--exit-fill', 'carry', '--exit-carry-max-min=3',
     ]);
     expect(args).toEqual({
       venue: 'aster',
@@ -46,7 +51,9 @@ describe('parsePairAnalysisArgs', () => {
       symbols: ['SOLUSDT', 'DOGEUSDT'],
       since: Date.UTC(2026, 9, 12),
       until: Date.UTC(2026, 9, 14, 4, 30),
+      untilExits: true,
       minUsd: 2500.5,
+      burstSum: true,
       dedupeSec: 30,
       horizons: [5, 15, 60],
       hedgeSymbol: 'ETHUSDT',
@@ -55,6 +62,8 @@ describe('parsePairAnalysisArgs', () => {
       betaLookbackMin: 120,
       betaMinObservations: 20,
       pairWindowSec: 90,
+      exitFill: 'carry',
+      exitCarryMaxMin: 3,
       feeBps: 0,
       slippageBps: 1.5,
       json: 'out/pairs.json',
@@ -80,9 +89,40 @@ describe('parsePairAnalysisArgs', () => {
     expect(() => parsePairAnalysisArgs(['--since', '2026-10-12 06:00'])).toThrow(/--since must be a UTC date or time/);
     expect(() => parsePairAnalysisArgs(['--until', '2026-10-12T06:00:00'])).toThrow(/--until must be a UTC date or time/);
     expect(() => parsePairAnalysisArgs(['--since', 'yesterday'])).toThrow(/--since must be a UTC date or time/);
-    expect(() => parsePairAnalysisArgs(['--since', '2026-13-45'])).toThrow(/--since must be a UTC date or time/);
+    expect(() => parsePairAnalysisArgs(['--since', '2026-13-45'])).toThrow(/--since is not a real date or time/);
     expect(() => parsePairAnalysisArgs(['--since', '2026-10-12', '--until', '2026-10-12'])).toThrow(/--since must be before --until/);
     expect(() => parsePairAnalysisArgs(['--since', '2026-10-13', '--until', '2026-10-12'])).toThrow(/--since must be before --until/);
+  });
+
+  it('rejects a date that does not exist instead of rolling it over', () => {
+    // Date.parse turns 2026-02-30 into March 2 and T24:00 into the next day; the window would silently move
+    for (const impossible of ['2026-02-30', '2026-02-29', '2026-04-31', '2026-00-10', '2026-10-00', '2026-10-32', '2026-02-30T10:00:00Z', '2026-10-12T24:00:00Z',
+      '2026-10-12T23:60:00Z', '2026-10-12T23:59:60Z', '2026-10-12T10:00:00+24:00', '2026-10-12T10:00:00+05:60']) {
+      expect(() => parsePairAnalysisArgs(['--since', impossible])).toThrow(/--since is not a real date or time/);
+      expect(() => parsePairAnalysisArgs(['--until', impossible])).toThrow(/--until is not a real date or time/);
+    }
+    // ... while the real ones around them pass, including the leap day
+    expect(parsePairAnalysisArgs(['--since', '2028-02-29']).since).toBe(Date.UTC(2028, 1, 29));
+    expect(parsePairAnalysisArgs(['--since', '2026-02-28']).since).toBe(Date.UTC(2026, 1, 28));
+    expect(parsePairAnalysisArgs(['--since', '2026-10-31']).since).toBe(Date.UTC(2026, 9, 31));
+    expect(parsePairAnalysisArgs(['--since', '2026-10-12T23:59:59Z']).since).toBe(Date.UTC(2026, 9, 12, 23, 59, 59));
+    expect(parsePairAnalysisArgs(['--since', '2026-10-12T00:00:00.500+05:30']).since).toBe(Date.UTC(2026, 9, 11, 18, 30, 0, 500));
+  });
+
+  it('needs --until for --until-exits', () => {
+    expect(parsePairAnalysisArgs(['--until', '2026-10-14', '--until-exits'])).toMatchObject({ until: Date.UTC(2026, 9, 14), untilExits: true });
+    expect(() => parsePairAnalysisArgs(['--until-exits'])).toThrow(/--until-exits needs --until TIME/);
+    expect(() => parsePairAnalysisArgs(['--since', '2026-10-12', '--until-exits'])).toThrow(/--until-exits needs --until TIME/);
+  });
+
+  it('reads --burst-sum and the exit fill, with their checks', () => {
+    expect(parsePairAnalysisArgs(['--min-usd', '5000', '--burst-sum'])).toMatchObject({ minUsd: 5000, burstSum: true });
+    expect(parsePairAnalysisArgs(['--exit-fill', 'exact']).exitFill).toBe('exact');
+    expect(parsePairAnalysisArgs(['--exit-fill=carry'])).toMatchObject({ exitFill: 'carry', exitCarryMaxMin: 5 });
+    expect(() => parsePairAnalysisArgs(['--exit-fill', 'fill'])).toThrow(/--exit-fill must be exact or carry, not "fill"/);
+    expect(() => parsePairAnalysisArgs(['--exit-fill'])).toThrow(/--exit-fill needs a value/);
+    expect(() => parsePairAnalysisArgs(['--exit-carry-max-min', '0'])).toThrow(/--exit-carry-max-min must be a whole number of 1 or more/);
+    expect(() => parsePairAnalysisArgs(['--exit-carry-max-min', '2.5'])).toThrow(/--exit-carry-max-min must be a whole number/);
   });
 
   it('recognises help without validating the rest', () => {
@@ -119,9 +159,9 @@ describe('parsePairAnalysisArgs', () => {
 
   it('documents every option in the usage text', () => {
     for (const flag of [
-      '--venue', '--include-skipped', '--symbols', '--since', '--until', '--min-usd', '--dedupe-sec', '--candle-venue', '--horizons', '--hedge-symbol',
-      '--extra-hedges', '--hedge-sizing', '--beta-lookback', '--beta-min-obs', '--pair-window-sec', '--fee-bps', '--slippage-bps',
-      '--json', '--json-trades', '--help',
+      '--venue', '--include-skipped', '--symbols', '--since', '--until', '--until-exits', '--min-usd', '--burst-sum', '--dedupe-sec', '--candle-venue',
+      '--horizons', '--hedge-symbol', '--extra-hedges', '--hedge-sizing', '--beta-lookback', '--beta-min-obs', '--pair-window-sec',
+      '--exit-fill', '--exit-carry-max-min', '--fee-bps', '--slippage-bps', '--json', '--json-trades', '--help',
     ]) {
       expect(PAIR_ANALYSIS_USAGE).toContain(flag);
     }
@@ -156,6 +196,9 @@ describe('scripts/pair-analysis.ts', () => {
     const bad = cli(['--horizons', 'soon']);
     expect(bad.status).toBe(2);
     expect(bad.stderr).toContain('analyze:pairs: --horizons must be whole minutes');
+    const impossible = cli(['--since', '2026-02-30']);
+    expect(impossible.status).toBe(2);
+    expect(impossible.stderr).toContain('analyze:pairs: --since is not a real date or time: "2026-02-30"');
   });
 
   it('says where to get a database when there is none', () => {
@@ -189,3 +232,97 @@ describe('scripts/pair-analysis.ts', () => {
     expect(written.horizons[0].strategies[0].trades).toBeUndefined();
   });
 });
+
+describe('scripts/pair-analysis.ts scope options, end to end', () => {
+  jest.setTimeout(HISTORY_TEST_TIMEOUT_MS * 4);
+  const repo = path.join(__dirname, '..', '..', '..');
+  const tsxCli = require.resolve('tsx/cli');
+  let tmpDir: string;
+  let file: string;
+
+  // Four long liquidations of AAAUSDT, 30 minutes apart, in the last four hours (the CLI uses the real clock):
+  //   A at +30 min and D at +120 min: tradable.  B at +60 min: held back by shadow mode, also tradable.
+  //   C at +90 min: dropped by a gate (a skip_reason), so only --include-skipped reads it.
+  const MIN = 60_000;
+  const base = Math.floor(Date.now() / MIN) * MIN - 240 * MIN;
+  const time = (minutes: number) => base + minutes * MIN + 10_000;
+  const index = (ms: number) => Math.round((ms - T0) / MIN);
+
+  beforeAll(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pair-analysis-scope-'));
+    file = path.join(tmpDir, 'liquidations.db');
+    await writeSyntheticDb(file, {
+      liquidations: [
+        { symbol: 'AAAUSDT', side: 'SELL', eventTime: time(30) },
+        { symbol: 'AAAUSDT', side: 'SELL', eventTime: time(60), skipReason: 'shadow mode' },
+        { symbol: 'AAAUSDT', side: 'SELL', eventTime: time(90), skipReason: 'stale: 12000 ms old (limit 10000 ms)' },
+        { symbol: 'AAAUSDT', side: 'SELL', eventTime: time(120) },
+      ],
+      candles: { AAAUSDT: flatPath(index(base), 240, 100), BTCUSDT: flatPath(index(base), 240, 20_000) },
+    });
+  });
+
+  afterAll(() => {
+    removeTmpDir(tmpDir);
+  });
+
+  const run = (args: string[]) => {
+    const result = spawnSync(process.execPath, [tsxCli, 'scripts/pair-analysis.ts', '--horizons', '15', ...args], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, LIQUIDATIONS_DB_PATH: file },
+    });
+    const events = /Events: (\d+) rows -> (\d+) events/.exec(result.stdout);
+    return { ...result, rows: events ? Number(events[1]) : null, events: events ? Number(events[2]) : null };
+  };
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const isoNoMs = (ms: number) => iso(ms).replace(/\.\d+Z$/, 'Z');
+
+  it('reads the tradable rows by default, and with --include-skipped the dropped detection too', () => {
+    const tradable = run([]);
+    expect(tradable.status).toBe(0);
+    expect([tradable.rows, tradable.events]).toEqual([3, 3]);
+    expect(tradable.stdout).toContain("tradable rows (skip_reason empty or 'shadow mode')");
+    expect(tradable.stdout).not.toMatch(/Lighter optimizer/);                // The scope text is venue-neutral
+    const all = run(['--include-skipped']);
+    expect([all.rows, all.events]).toEqual([4, 4]);
+    expect(all.stdout).toContain('all detections, including the ones the feed did not trade');
+  });
+
+  it('takes events from --since (inclusive)', () => {
+    const since = run(['--since', iso(time(60))]);
+    expect([since.rows, since.events]).toEqual([2, 2]);                      // B (exactly at --since) and D
+    expect(since.stdout).toContain(`events from ${isoNoMs(time(60))}`);
+    expect(run(['--since', iso(time(60) + 1)]).events).toBe(1);              // One millisecond later B is out
+  });
+
+  it('takes events before --until (exclusive)', () => {
+    const until = run(['--until', iso(time(120))]);
+    expect([until.rows, until.events]).toEqual([2, 2]);                      // A and B; D is exactly at --until
+    expect(until.stdout).toContain(`before ${isoNoMs(time(120))}`);
+    expect(run(['--until', iso(time(120) + 1)]).events).toBe(3);
+  });
+
+  it('combines --since, --until and --include-skipped', () => {
+    expect(run(['--since', iso(time(60)), '--until', iso(time(120))]).events).toBe(1);                      // B
+    const wide = run(['--since', iso(time(60)), '--until', iso(time(120)), '--include-skipped']);
+    expect([wide.rows, wide.events]).toEqual([2, 2]);                                                       // B and C
+    const none = run(['--since', iso(time(61)), '--until', iso(time(89))]);
+    expect(none.status).toBe(1);
+    expect(none.stderr).toContain('no liquidations in scope');
+  });
+
+  it('leaves out the trades that exit after --until with --until-exits', () => {
+    // --until is 5 minutes after B: A exits (15 min) well before it, B's exit is 10 minutes past it
+    const until = iso(time(60) + 5 * MIN);
+    const plain = run(['--since', iso(time(0)), '--until', until]);
+    expect(plain.stdout).toMatch(/single\s+2\s/);
+    const exits = run(['--since', iso(time(0)), '--until', until, '--until-exits']);
+    expect(exits.status).toBe(0);
+    expect(exits.stdout).toMatch(/single\s+1\s/);
+    expect(exits.stdout).toContain('excluded from single: exit past --until 1');
+    expect(exits.stdout).toContain(`trades exiting after ${isoNoMs(time(60) + 5 * MIN)} left out`);
+    expect(run(['--until-exits']).status).toBe(2);                           // Needs --until
+  });
+});
+

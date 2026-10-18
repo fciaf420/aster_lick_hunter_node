@@ -11,14 +11,21 @@
 // Pure: no database, no clock (the caller passes `now`), no console. scripts/pair-analysis.ts loads the rows and
 // candles (pairAnalysisDb.ts), runs this and prints the report (pairAnalysisReport.ts).
 //
-// Timing. A 1m candle is keyed by its open time and closes one minute later. The entry is the close of the first
-// candle that closes at or after the event, so nothing is filled before the event is known. The exit is the close of
-// the candle `horizon` minutes after the entry candle. A missing candle excludes the event from that strategy and
-// horizon with a counted reason; nothing is interpolated.
+// Timing. A 1m candle is keyed by its open time and closes one minute later. The entry is the close of the candle
+// that contains the event (open = floor(eventTime / 1 minute) x 1 minute), so it is always after the liquidation's
+// trade, by up to a minute; an event exactly on a minute boundary belongs to the candle that starts there. The exit is
+// the close of the candle `horizon` minutes after the entry candle. A missing candle excludes the event from that
+// strategy and horizon with a counted reason; nothing is interpolated unless the caller asks for `exitFill: 'carry'`,
+// which lets a missing exit candle take the last close up to exitCarryMaxMin minutes before it (counted).
 //
 // Units. Returns are in bps of the notional of the liquidated symbol's leg ("the primary leg"), net of costs. A
 // hedge leg of beta 1.5 adds 1.5x that notional of exposure, a cross pair adds 1x: `exposure` says how much gross
 // notional a strategy deploys per unit of primary notional, so the mean can be compared per unit of exposure.
+//
+// Baselines. A hedged trade is compared with the single leg of the same event. A cross pair is compared twice: with
+// the triggering event's single leg (the pair as a hedge of the trigger by its partner) and with both events' single
+// legs, each entered at its own signal (what a bot that trades every symbol single-leg already holds). Only the
+// second says whether executing the two legs as a pair adds anything.
 
 export const MINUTE_MS = 60_000;
 export const BPS = 10_000;
@@ -59,53 +66,98 @@ export function tradeDirection(side: 'BUY' | 'SELL'): TradeDirection {
 // ===== Events =====
 
 export interface EventSelectionOptions {
-  minUsd: number;                                   // Rows below this size are ignored (before the burst collapse)
+  minUsd: number;                                   // Row size (default) or burst total (burstSum) below which nothing is traded
   dedupeSec: number;                                // One event per symbol and side within this window
+  burstSum?: boolean;                               // Apply minUsd to the burst's total instead of to each row
 }
 
 export interface EventSelection {
   events: PairEvent[];                              // Oldest first
   rows: number;
   invalid: number;                                  // Unknown side or non-finite time / size
-  belowMinUsd: number;
+  belowMinUsd: number;                              // Rows below minUsd (burstSum: rows of the bursts whose total is)
   collapsed: number;                                // Rows folded into an earlier event of the same burst
 }
 
-// Rows -> events. The size filter runs first (the bot acts on a row that crosses its threshold), then bursts collapse:
-// the first row of a symbol and side opens a window of dedupeSec, and later rows of that symbol and side inside it
-// are dropped. The window is anchored on the kept row, not extended by the dropped ones, so a long cascade yields an
-// event per window. A row exactly dedupeSec after the anchor opens a new event.
+interface Burst {
+  anchor: number;                                   // Time of the burst's first row
+  rows: number;
+  total: number;
+  fired: boolean;
+}
+
+// Rows -> events. Two ways to apply the size threshold, then bursts collapse: the first row of a symbol and side opens
+// a window of dedupeSec, and later rows of that symbol and side inside it are dropped. The window is anchored on that
+// row, not extended by the dropped ones, so a long cascade yields an event per window. A row exactly dedupeSec after
+// the anchor opens a new burst.
+//
+// Per row (default): rows below minUsd are ignored first (the bot acts on a row that crosses its threshold), so the
+// window is anchored on the first row that is big enough and the event is that row.
+//
+// Burst total (burstSum): every row belongs to the burst of its window, and the burst trades once its total reaches
+// minUsd. That models the bot's rolling threshold (useThreshold), which adds up the liquidations of the last 60 s and
+// acts when the sum crosses. The event is the row that makes the total cross, not the burst's first row: the bot cannot
+// act before the sum is known, and entering at the first row would use the rest of the burst in advance. Its size is the
+// running total at that row. A burst that never reaches minUsd is dropped, all its rows counted as belowMinUsd; one
+// that does counts all its other rows as collapsed. With minUsd 0 both ways give the same events.
 export function selectEvents(rows: readonly LiquidationRow[], options: EventSelectionOptions): EventSelection {
   const dedupeMs = options.dedupeSec * 1000;
   const usable = rows.filter(row => (row.side === 'BUY' || row.side === 'SELL') && Number.isFinite(row.eventTime) && Number.isFinite(row.volumeUsdt));
   const ordered = [...usable].sort((a, b) => a.eventTime - b.eventTime || a.id - b.id);
   const anchors = new Map<string, number>();
+  const bursts = new Map<string, Burst>();
   const events: PairEvent[] = [];
   const invalid = rows.length - usable.length;
   let belowMinUsd = 0;
   let collapsed = 0;
-  for (const row of ordered) {
-    if (row.volumeUsdt < options.minUsd) {
-      belowMinUsd++;
-      continue;
-    }
-    const key = `${row.symbol}|${row.side}`;
-    const anchor = anchors.get(key);
-    if (anchor !== undefined && row.eventTime - anchor < dedupeMs) {
-      collapsed++;
-      continue;
-    }
-    anchors.set(key, row.eventTime);
+  const emit = (row: LiquidationRow, volumeUsdt: number): void => {
     events.push({
       id: row.id,
       symbol: row.symbol,
       side: row.side as 'BUY' | 'SELL',
       direction: tradeDirection(row.side as 'BUY' | 'SELL'),
       eventTime: row.eventTime,
-      volumeUsdt: row.volumeUsdt,
+      volumeUsdt,
       backfilled: row.backfilled === true,
     });
+  };
+  const close = (burst: Burst): void => {
+    if (burst.fired) collapsed += burst.rows - 1;
+    else belowMinUsd += burst.rows;
+  };
+  for (const row of ordered) {
+    const key = `${row.symbol}|${row.side}`;
+    if (options.burstSum) {
+      let burst = bursts.get(key);
+      if (burst && row.eventTime - burst.anchor >= dedupeMs) {
+        close(burst);
+        burst = undefined;
+      }
+      if (!burst) {
+        burst = { anchor: row.eventTime, rows: 0, total: 0, fired: false };
+        bursts.set(key, burst);
+      }
+      burst.rows++;
+      burst.total += row.volumeUsdt;
+      if (!burst.fired && burst.total >= options.minUsd) {
+        burst.fired = true;
+        emit(row, burst.total);
+      }
+      continue;
+    }
+    if (row.volumeUsdt < options.minUsd) {
+      belowMinUsd++;
+      continue;
+    }
+    const anchor = anchors.get(key);
+    if (anchor !== undefined && row.eventTime - anchor < dedupeMs) {
+      collapsed++;
+      continue;
+    }
+    anchors.set(key, row.eventTime);
+    emit(row, row.volumeUsdt);
   }
+  for (const burst of bursts.values()) close(burst);
   return { events, rows: rows.length, invalid, belowMinUsd, collapsed };
 }
 
@@ -120,38 +172,57 @@ export function candleSeries(candles: Iterable<{ openTime: number; close: number
   return series;
 }
 
-// Open time of the entry candle of an event: the first 1m candle whose close (open + 1 minute) is at or after the
-// event. An event inside a candle enters at that candle's close; an event exactly on a minute boundary enters at the
-// close of the candle that ends there.
+// Open time of the entry candle of an event: the 1m candle that contains it. The entry is that candle's close, a
+// moment after the liquidation's trade (up to a minute; a full minute for an event exactly on the boundary, which
+// belongs to the candle starting there). The candle that ended at the boundary is never used: it predates the trade.
 export function entryOpenTime(eventTime: number): number {
-  return Math.ceil(eventTime / MINUTE_MS) * MINUTE_MS - MINUTE_MS;
+  return Math.floor(eventTime / MINUTE_MS) * MINUTE_MS;
 }
 
-type LegResult = { ok: true; ret: number } | { ok: false; missing: 'entry' | 'exit' };
+type LegResult = { ok: true; ret: number; carried: boolean } | { ok: false; missing: 'entry' | 'exit' };
 
-// Simple return of a symbol from the close of the entry candle to the close of the exit candle
-function legReturn(series: CandleSeries | undefined, entryOpen: number, exitOpen: number): LegResult {
+// Simple return of a symbol from the close of the entry candle to the close of the exit candle. With carryMaxMin > 0 a
+// missing exit candle takes the last stored close up to carryMaxMin minutes before it (a minute without trades has no
+// candle: the price stood where it last closed). The entry is never carried, and it is the oldest candle the search can
+// reach: it exists, so the search stops there at the latest, and a candle before the entry is never taken.
+function legReturn(series: CandleSeries | undefined, entryOpen: number, exitOpen: number, carryMaxMin = 0): LegResult {
   const entry = series?.get(entryOpen);
   if (entry === undefined) return { ok: false, missing: 'entry' };
-  const exit = series?.get(exitOpen);
+  let exit = series?.get(exitOpen);
+  let carried = false;
+  for (let k = 1; exit === undefined && k <= carryMaxMin; k++) {
+    exit = series?.get(exitOpen - k * MINUTE_MS);
+    carried = exit !== undefined;
+  }
   if (exit === undefined) return { ok: false, missing: 'exit' };
-  return { ok: true, ret: exit / entry - 1 };
+  return { ok: true, ret: exit / entry - 1, carried };
 }
 
 // ===== Beta =====
 
+// Why a beta fell back to BETA_FALLBACK. An event can have two reasons (both series short of history).
+export type BetaFallbackReason =
+  | 'asset-short'                                   // The liquidated symbol had fewer than the minimum of 1m returns in the lookback
+  | 'hedge-short'                                   // ... the hedge symbol did
+  | 'hedge-flat';                                   // Enough returns, but the hedge never moved (no variance)
+
 export interface BetaEstimate {
   beta: number;                                     // The value used: clamped to [BETA_MIN, BETA_MAX], or the fallback
   raw: number | null;                               // The regression slope, null when it could not be estimated
-  observations: number;                             // Minutes where both symbols had a 1m log return
+  observations: number;                             // Minutes where both symbols had a 1m return
+  assetReturns: number;                             // Minutes where the asset alone had one
+  hedgeReturns: number;                             // ... and the hedge alone
   fallback: boolean;                                // Too little data (or a flat hedge): BETA_FALLBACK was used
+  fallbackReasons: BetaFallbackReason[];            // Why, empty when there was no fallback
   clamped: boolean;                                 // The raw slope was outside the range
 }
 
-// Beta of the asset to the hedge: slope of the asset's 1m log returns on the hedge's, over the lookbackMin minutes
-// that closed before the entry candle opened. Only minutes where both symbols have the candle and the one before it
-// count (no interpolation). With fewer than minObservations of them, or a hedge that did not move, the beta is
-// BETA_FALLBACK and `fallback` says so.
+// Beta of the asset to the hedge: slope of the asset's 1m simple returns on the hedge's (the returns the legs earn),
+// over the lookbackMin minutes that closed at or before the entry candle opened. The newest candle used opens one
+// minute before the entry candle; the entry candle itself, where the liquidation's trade is, never counts. Only
+// minutes where both symbols have the candle and the one before it count (no interpolation). With fewer than
+// minObservations of them, or a hedge that did not move, the beta is BETA_FALLBACK and `fallback` says so, with the
+// reasons: a series short of history is told from a flat hedge, so the advice to fetch candles names the right symbol.
 export function estimateBeta(
   asset: CandleSeries | undefined,
   hedge: CandleSeries | undefined,
@@ -161,21 +232,26 @@ export function estimateBeta(
 ): BetaEstimate {
   const assetReturns: number[] = [];
   const hedgeReturns: number[] = [];
-  if (asset && hedge) {
-    for (let k = 1; k <= lookbackMin; k++) {
-      const open = entryOpen - k * MINUTE_MS;                  // This candle closes at entryOpen - (k - 1) minutes
-      const a1 = asset.get(open);
-      const a0 = asset.get(open - MINUTE_MS);
-      const h1 = hedge.get(open);
-      const h0 = hedge.get(open - MINUTE_MS);
-      if (a1 === undefined || a0 === undefined || h1 === undefined || h0 === undefined) continue;
-      assetReturns.push(Math.log(a1 / a0));
-      hedgeReturns.push(Math.log(h1 / h0));
-    }
+  let assetOnly = 0;
+  let hedgeOnly = 0;
+  for (let k = 1; k <= lookbackMin; k++) {
+    const open = entryOpen - k * MINUTE_MS;                    // This candle closes at entryOpen - (k - 1) minutes
+    const a1 = asset?.get(open);
+    const a0 = asset?.get(open - MINUTE_MS);
+    const h1 = hedge?.get(open);
+    const h0 = hedge?.get(open - MINUTE_MS);
+    const assetHas = a1 !== undefined && a0 !== undefined;
+    const hedgeHas = h1 !== undefined && h0 !== undefined;
+    if (assetHas) assetOnly++;
+    if (hedgeHas) hedgeOnly++;
+    if (!assetHas || !hedgeHas) continue;
+    assetReturns.push(a1 / a0 - 1);
+    hedgeReturns.push(h1 / h0 - 1);
   }
   const n = assetReturns.length;
+  const needed = Math.max(2, minObservations);
   let raw: number | null = null;
-  if (n >= Math.max(2, minObservations)) {
+  if (n >= needed) {
     const assetMean = mean(assetReturns);
     const hedgeMean = mean(hedgeReturns);
     let covariance = 0;
@@ -187,10 +263,19 @@ export function estimateBeta(
     if (variance > 1e-18) raw = covariance / variance;
   }
   if (raw === null || !Number.isFinite(raw)) {
-    return { beta: BETA_FALLBACK, raw: null, observations: n, fallback: true, clamped: false };
+    const reasons: BetaFallbackReason[] = [];
+    if (n < needed) {
+      if (assetOnly < needed) reasons.push('asset-short');
+      if (hedgeOnly < needed) reasons.push('hedge-short');
+      // Each has enough returns but not in the same minutes: blame the thinner one, which is the one with the holes
+      if (reasons.length === 0) reasons.push(assetOnly <= hedgeOnly ? 'asset-short' : 'hedge-short');
+    } else {
+      reasons.push('hedge-flat');
+    }
+    return { beta: BETA_FALLBACK, raw: null, observations: n, assetReturns: assetOnly, hedgeReturns: hedgeOnly, fallback: true, fallbackReasons: reasons, clamped: false };
   }
   const beta = Math.min(BETA_MAX, Math.max(BETA_MIN, raw));
-  return { beta, raw, observations: n, fallback: false, clamped: beta !== raw };
+  return { beta, raw, observations: n, assetReturns: assetOnly, hedgeReturns: hedgeOnly, fallback: false, fallbackReasons: [], clamped: beta !== raw };
 }
 
 // ===== Cross pairs =====
@@ -360,6 +445,7 @@ export function summarizeDeltas(deltas: readonly number[]): DeltaStats {
 // ===== Analysis =====
 
 export type HedgeSizing = 'beta' | 'dollar';
+export type ExitFill = 'exact' | 'carry';
 
 export interface PairAnalysisOptions {
   horizonsMin: readonly number[];
@@ -371,12 +457,16 @@ export interface PairAnalysisOptions {
   pairWindowSec: number;
   feeBps: number;                                   // Per leg and side
   slippageBps: number;                              // Per leg and side
-  now: number;                                      // Exits that close after this are not yet known
+  exitFill: ExitFill;                               // exact: a missing exit candle excludes the event. carry: see exitCarryMaxMin.
+  exitCarryMaxMin: number;                          // carry: how far back from the exit minute the last close may be
+  exitDeadline?: number;                            // Trades whose exit candle closes after this (ms) are excluded
+  now: number;                                      // Exits that close at or after this are not yet known
   keepTrades?: boolean;                             // Put every trade in the result
 }
 
 export type ExclusionReason =
-  | 'horizon-not-elapsed'                           // The exit candle closes after `now`
+  | 'horizon-not-elapsed'                           // The exit candle closes at or after `now`
+  | 'exit-after-until'                              // ... after exitDeadline (--until-exits)
   | 'entry-candle-missing'                          // The liquidated symbol has no candle at the entry
   | 'exit-candle-missing'                           // ... or at the exit
   | 'hedge-is-event-symbol'                         // A hedge on itself
@@ -387,16 +477,18 @@ export interface TradeRecord {
   eventId: number;
   symbol: string;
   partner?: string;                                 // Cross pair: the other symbol
+  partnerEventId?: number;                          // ... and its event
   hedge?: string;
   direction: TradeDirection;
   eventTime: number;
-  entryCloseTime: number;                           // At or after eventTime
+  entryCloseTime: number;                           // After eventTime, by at most a minute
   exitCloseTime: number;
   beta?: number;
   grossBps: number;
   costBps: number;
   netBps: number;
   exposure: number;
+  carriedLegs?: number;                             // Legs whose exit candle was missing and took the last close (exitFill carry)
 }
 
 export interface StrategyInfo {
@@ -411,22 +503,44 @@ export interface StrategyHorizonResult {
   metrics: Metrics;
   excluded: Partial<Record<ExclusionReason, number>>;
   excludedTotal: number;
+  carried: number;                                  // Trades with a carried-forward exit (always 0 with exitFill exact)
   bySymbol: Record<string, Metrics>;                // By the liquidated (cross pair: the triggering) symbol
   trades?: TradeRecord[];
 }
 
+// What a strategy is compared with, event by event
+//   single        the single leg of the same (for a cross pair: the triggering) event
+//   both-singles  cross pair only: the single legs of the trigger and of its partner, each entered at its own signal
+export type DeltaBaseline = 'single' | 'both-singles';
+
 export interface DeltaResult {
-  strategy: string;                                 // The strategy compared with the single leg
+  strategy: string;                                 // The strategy compared
+  baseline: DeltaBaseline;
   horizonMin: number;
   stats: DeltaStats;                                // Over the events both have a result for
   bySymbol: Record<string, DeltaStats>;
+}
+
+// The events the single leg lost at a horizon to a missing exit candle (they have an entry candle), and what the
+// single leg did for them at the horizons where they do have candles. Their absence biases the table above it when
+// the missing minute says something about the move (a quiet minute, a halted market).
+export interface ExitGapBias {
+  events: number;
+  elsewhere: Array<{
+    horizonMin: number;
+    n: number;                                      // Of those events, the ones with a single-leg result at this horizon
+    meanBps: number | null;                         // Their mean net return
+    allMeanBps: number | null;                      // The mean net return of every event with a result at this horizon
+  }>;
 }
 
 export interface HedgeDiagnostics {
   symbol: string;
   sizing: HedgeSizing;
   events: number;                                   // Events with a beta estimate (the event symbol is not the hedge)
-  betaFallbacks: number;                            // Too little data: beta 1 was used
+  betaFallbacks: number;                            // Too little data or a flat hedge: beta 1 was used
+  betaFallbackReasons: Record<BetaFallbackReason, number>;   // Events per reason (an event can have two)
+  shortAssets: Record<string, number>;              // Liquidated symbol -> its events whose beta fell back for want of its own history
   betaClamped: number;
   meanBeta: number | null;
   medianBeta: number | null;
@@ -436,6 +550,7 @@ export interface HorizonResult {
   horizonMin: number;
   strategies: StrategyHorizonResult[];
   deltas: DeltaResult[];
+  exitGapBias: ExitGapBias;
 }
 
 export interface PairAnalysisResult {
@@ -474,6 +589,15 @@ interface Accumulator {
   excluded: Map<ExclusionReason, number>;
 }
 
+interface BetaAccumulator {
+  events: number;
+  fallbacks: number;
+  clamped: number;
+  betas: number[];
+  reasons: Record<BetaFallbackReason, number>;
+  shortAssets: Map<string, number>;
+}
+
 export function analyzePairs(
   events: readonly PairEvent[],
   series: ReadonlyMap<string, CandleSeries>,
@@ -483,6 +607,7 @@ export function analyzePairs(
   const hedgeSymbols = [...new Set([options.hedgeSymbol, ...options.extraHedges])];
   const costPerLeg = 2 * (options.feeBps + options.slippageBps);     // Round trip, bps of that leg's notional
   const horizons = [...new Set(options.horizonsMin)].sort((a, b) => a - b);
+  const carryMaxMin = options.exitFill === 'carry' ? options.exitCarryMaxMin : 0;
 
   const strategies: StrategyInfo[] = [
     { id: SINGLE_STRATEGY_ID, label: 'single', description: 'Contrarian trade on the liquidated symbol' },
@@ -491,7 +616,7 @@ export function analyzePairs(
       label: hedgeLabel(symbol, options.hedgeSizing),
       description: options.hedgeSizing === 'dollar'
         ? `Single leg plus an opposite ${symbol} leg of equal notional`
-        : `Single leg plus an opposite ${symbol} leg sized by beta (${options.betaLookbackMin} min of 1m log returns, clamped to [${BETA_MIN}, ${BETA_MAX}])`,
+        : `Single leg plus an opposite ${symbol} leg sized by beta (${options.betaLookbackMin} min of 1m returns, clamped to [${BETA_MIN}, ${BETA_MAX}])`,
     })),
     { id: CROSS_PAIR_STRATEGY_ID, label: 'cross-pair', description: 'Long the symbol with the long-liquidation signal, short the one with the short-liquidation signal, equal notional' },
   ];
@@ -520,11 +645,14 @@ export function analyzePairs(
     }
     ids.add(eventId);
   };
+  const exitGapEvents = new Map<number, Set<number>>();            // Horizon -> events whose own exit candle is missing
 
   const pairs = matchCrossPairs(sortedEvents, options.pairWindowSec);
   const partnerOf = new Map(pairs.map(pair => [pair.trigger.id, pair.partner]));
 
-  const betaDiagnostics = new Map(hedgeSymbols.map(symbol => [symbol, { events: 0, fallbacks: 0, clamped: 0, betas: [] as number[] }]));
+  const betaDiagnostics = new Map<string, BetaAccumulator>(hedgeSymbols.map(symbol => [symbol, {
+    events: 0, fallbacks: 0, clamped: 0, betas: [], reasons: { 'asset-short': 0, 'hedge-short': 0, 'hedge-flat': 0 }, shortAssets: new Map(),
+  }]));
 
   for (const event of sortedEvents) {
     const entryOpen = entryOpenTime(event.eventTime);
@@ -536,12 +664,14 @@ export function analyzePairs(
     for (const hedge of hedgeSymbols) {
       if (hedge === event.symbol) continue;
       const estimate: BetaEstimate = options.hedgeSizing === 'dollar'
-        ? { beta: 1, raw: 1, observations: 0, fallback: false, clamped: false }
+        ? { beta: 1, raw: 1, observations: 0, assetReturns: 0, hedgeReturns: 0, fallback: false, fallbackReasons: [], clamped: false }
         : estimateBeta(asset, series.get(hedge), entryOpen, options.betaLookbackMin, options.betaMinObservations);
       betas.set(hedge, estimate);
       const diagnostics = betaDiagnostics.get(hedge)!;
       diagnostics.events++;
       if (estimate.fallback) diagnostics.fallbacks++;
+      for (const reason of estimate.fallbackReasons) diagnostics.reasons[reason]++;
+      if (estimate.fallbackReasons.includes('asset-short')) diagnostics.shortAssets.set(event.symbol, (diagnostics.shortAssets.get(event.symbol) ?? 0) + 1);
       if (estimate.clamped) diagnostics.clamped++;
       diagnostics.betas.push(estimate.beta);
     }
@@ -552,16 +682,28 @@ export function analyzePairs(
       const exitCloseTime = exitOpen + MINUTE_MS;
       let primaryReason: ExclusionReason | null = null;      // Why the liquidated symbol's own leg has no return
       let primaryReturn = 0;
-      if (exitCloseTime > options.now) {
-        primaryReason = 'horizon-not-elapsed';
+      let primaryCarried = 0;
+      if (exitCloseTime >= options.now) {
+        primaryReason = 'horizon-not-elapsed';               // The candle cannot exist yet, or not be stored
+      } else if (options.exitDeadline !== undefined && exitCloseTime > options.exitDeadline) {
+        primaryReason = 'exit-after-until';
       } else {
-        const leg = legReturn(asset, entryOpen, exitOpen);
-        if (leg.ok) primaryReturn = leg.ret;
-        else primaryReason = leg.missing === 'entry' ? 'entry-candle-missing' : 'exit-candle-missing';
+        const leg = legReturn(asset, entryOpen, exitOpen, carryMaxMin);
+        if (leg.ok) {
+          primaryReturn = leg.ret;
+          primaryCarried = leg.carried ? 1 : 0;
+        } else {
+          primaryReason = leg.missing === 'entry' ? 'entry-candle-missing' : 'exit-candle-missing';
+        }
       }
       if (primaryReason === 'entry-candle-missing' || primaryReason === 'exit-candle-missing') noteGap(event.symbol, event.id);
+      if (primaryReason === 'exit-candle-missing') {
+        const ids = exitGapEvents.get(horizon) ?? new Set<number>();
+        ids.add(event.id);
+        exitGapEvents.set(horizon, ids);
+      }
 
-      const record = (strategy: string, legs: number, extra: Partial<TradeRecord>, gross: number, exposure: number): void => {
+      const record = (strategy: string, legs: number, extra: Partial<TradeRecord>, gross: number, exposure: number, carriedLegs: number): void => {
         const costBps = costPerLeg * legs;
         const grossBps = gross * BPS;
         accumulator(strategy, horizon).trades.push({
@@ -575,6 +717,7 @@ export function analyzePairs(
           costBps,
           netBps: grossBps - costBps,
           exposure,
+          ...(carriedLegs > 0 ? { carriedLegs } : {}),
           ...extra,
         });
       };
@@ -583,7 +726,7 @@ export function analyzePairs(
       if (primaryReason !== null) {
         exclude(SINGLE_STRATEGY_ID, horizon, primaryReason);
       } else {
-        record(SINGLE_STRATEGY_ID, 1, {}, event.direction * primaryReturn, 1);
+        record(SINGLE_STRATEGY_ID, 1, {}, event.direction * primaryReturn, 1, primaryCarried);
       }
 
       // hedged: the same leg plus an opposite hedge leg of beta times its notional
@@ -594,30 +737,32 @@ export function analyzePairs(
         } else if (primaryReason !== null) {
           exclude(id, horizon, primaryReason);
         } else {
-          const hedgeLeg = legReturn(series.get(hedge), entryOpen, exitOpen);
+          const hedgeLeg = legReturn(series.get(hedge), entryOpen, exitOpen, carryMaxMin);
           if (!hedgeLeg.ok) {
             exclude(id, horizon, 'hedge-candle-missing');
             noteGap(hedge, event.id);
           } else {
             const beta = betas.get(hedge)!.beta;
-            record(id, 1 + beta, { hedge, beta }, event.direction * (primaryReturn - beta * hedgeLeg.ret), 1 + beta);
+            record(id, 1 + beta, { hedge, beta }, event.direction * (primaryReturn - beta * hedgeLeg.ret), 1 + beta, primaryCarried + (hedgeLeg.carried ? 1 : 0));
           }
         }
       }
 
-      // cross-pair: this event's contrarian leg and the partner's, which points the other way
+      // cross-pair: this event's contrarian leg and the partner's, which points the other way. Both legs are entered at
+      // this event's entry candle (the later signal): the partner's leg is entered late, and that is what it is
+      // compared with, in the deltas below, against the partner's own single leg.
       if (partner) {
         if (primaryReason !== null) {
           exclude(CROSS_PAIR_STRATEGY_ID, horizon, primaryReason);
         } else {
-          const partnerLeg = legReturn(series.get(partner.symbol), entryOpen, exitOpen);
+          const partnerLeg = legReturn(series.get(partner.symbol), entryOpen, exitOpen, carryMaxMin);
           if (!partnerLeg.ok) {
             exclude(CROSS_PAIR_STRATEGY_ID, horizon, 'partner-candle-missing');
             noteGap(partner.symbol, event.id);
           } else {
             record(
-              CROSS_PAIR_STRATEGY_ID, 2, { partner: partner.symbol },
-              event.direction * primaryReturn + partner.direction * partnerLeg.ret, 2
+              CROSS_PAIR_STRATEGY_ID, 2, { partner: partner.symbol, partnerEventId: partner.id },
+              event.direction * primaryReturn + partner.direction * partnerLeg.ret, 2, primaryCarried + (partnerLeg.carried ? 1 : 0)
             );
           }
         }
@@ -639,31 +784,58 @@ export function analyzePairs(
         metrics: summarizeTrades(found.trades),
         excluded,
         excludedTotal: [...found.excluded.values()].reduce((sum, count) => sum + count, 0),
+        carried: found.trades.filter(trade => (trade.carriedLegs ?? 0) > 0).length,
         bySymbol,
       };
       if (options.keepTrades) result.trades = found.trades;
       return result;
     });
 
-    // Pair minus single on the events both have a result for
+    // Each strategy minus a baseline, on the events both have a result for. The baseline of a hedged trade is the single
+    // leg of its event. A cross pair has two: the trigger's single leg, and the single legs of the trigger and of its
+    // partner together (each at its own entry candle and horizon, as a bot that trades every symbol single-leg holds
+    // them). Both have the pair's exposure, and the costs of two legs, so the costs cancel in the second.
     const singleByEvent = new Map((accumulators.get(`${SINGLE_STRATEGY_ID}|${horizon}`)?.trades ?? []).map(trade => [trade.eventId, trade.netBps]));
-    const deltas: DeltaResult[] = strategies.filter(strategy => strategy.id !== SINGLE_STRATEGY_ID).map(strategy => {
+    const delta = (strategyId: string, baseline: DeltaBaseline, baselineOf: (trade: TradeRecord) => number | undefined): DeltaResult => {
       const all: number[] = [];
       const bySymbolDeltas = new Map<string, number[]>();
-      for (const trade of accumulators.get(`${strategy.id}|${horizon}`)?.trades ?? []) {
-        const single = singleByEvent.get(trade.eventId);
-        if (single === undefined) continue;
-        const delta = trade.netBps - single;
-        all.push(delta);
+      for (const trade of accumulators.get(`${strategyId}|${horizon}`)?.trades ?? []) {
+        const base = baselineOf(trade);
+        if (base === undefined) continue;
+        const difference = trade.netBps - base;
+        all.push(difference);
         const list = bySymbolDeltas.get(trade.symbol) ?? [];
-        list.push(delta);
+        list.push(difference);
         bySymbolDeltas.set(trade.symbol, list);
       }
       const bySymbol: Record<string, DeltaStats> = {};
       for (const symbol of [...bySymbolDeltas.keys()].sort()) bySymbol[symbol] = summarizeDeltas(bySymbolDeltas.get(symbol)!);
-      return { strategy: strategy.id, horizonMin: horizon, stats: summarizeDeltas(all), bySymbol };
-    });
-    return { horizonMin: horizon, strategies: results, deltas };
+      return { strategy: strategyId, baseline, horizonMin: horizon, stats: summarizeDeltas(all), bySymbol };
+    };
+    const deltas: DeltaResult[] = [];
+    for (const strategy of strategies) {
+      if (strategy.id === SINGLE_STRATEGY_ID) continue;
+      deltas.push(delta(strategy.id, 'single', trade => singleByEvent.get(trade.eventId)));
+      if (strategy.id === CROSS_PAIR_STRATEGY_ID) {
+        deltas.push(delta(strategy.id, 'both-singles', trade => {
+          const trigger = singleByEvent.get(trade.eventId);
+          const partner = trade.partnerEventId === undefined ? undefined : singleByEvent.get(trade.partnerEventId);
+          return trigger === undefined || partner === undefined ? undefined : trigger + partner;
+        }));
+      }
+    }
+
+    // What the single leg did, at the other horizons, for the events that have no exit candle at this one
+    const gapIds = exitGapEvents.get(horizon) ?? new Set<number>();
+    const elsewhere: ExitGapBias['elsewhere'] = [];
+    for (const other of horizons) {
+      if (other === horizon) continue;
+      const singles = accumulators.get(`${SINGLE_STRATEGY_ID}|${other}`)?.trades ?? [];
+      const lost = singles.filter(trade => gapIds.has(trade.eventId)).map(trade => trade.netBps);
+      if (lost.length === 0) continue;
+      elsewhere.push({ horizonMin: other, n: lost.length, meanBps: mean(lost), allMeanBps: singles.length > 0 ? mean(singles.map(trade => trade.netBps)) : null });
+    }
+    return { horizonMin: horizon, strategies: results, deltas, exitGapBias: { events: gapIds.size, elsewhere } };
   });
 
   const bySymbol: Record<string, number> = {};
@@ -692,6 +864,8 @@ export function analyzePairs(
         sizing: options.hedgeSizing,
         events: diagnostics.events,
         betaFallbacks: diagnostics.fallbacks,
+        betaFallbackReasons: diagnostics.reasons,
+        shortAssets: Object.fromEntries([...diagnostics.shortAssets.entries()].sort(([a], [b]) => a.localeCompare(b))),
         betaClamped: diagnostics.clamped,
         meanBeta: diagnostics.betas.length > 0 ? mean(diagnostics.betas) : null,
         medianBeta: median(diagnostics.betas),

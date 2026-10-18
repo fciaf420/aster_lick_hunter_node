@@ -49,7 +49,7 @@ function tableColumns(db: ReadonlyConnection, table: string): Set<string> {
 
 // The tradable scope of the Lighter optimizer (scripts/optimizer-venue.js): skip_reason empty, or held back by shadow
 // mode alone; includeSkipped adds the detections a gate dropped. A database from before the venue column holds Aster
-// rows only.
+// rows only. The scope is the same for both venues; see the skip_reason condition below for why it is harmless for Aster.
 export function loadPairAnalysisInput(dbPath: string, query: PairAnalysisQuery): PairAnalysisInput {
   if (!fs.existsSync(dbPath)) {
     throw new Error(`No database at ${dbPath}. Record or load liquidations first (npm run lighter:backfill), or set LIQUIDATIONS_DB_PATH.`);
@@ -73,6 +73,9 @@ export function loadPairAnalysisInput(dbPath: string, query: PairAnalysisQuery):
         notes.push(`The database predates the venue column: all its liquidations are Aster's, so there are none for ${query.venue}.`);
         readable = false;
       }
+      // Only the Lighter detection recorder and lighter:backfill write a skip_reason. Aster rows come from
+      // LiquidationStorage.saveLiquidation, which always stores NULL, and rows from before the column have none, so for
+      // --venue aster this condition keeps every row and --include-skipped changes nothing.
       if (!query.includeSkipped && columns.has('skip_reason')) {
         conditions.push('(skip_reason IS NULL OR skip_reason = ?)');
         params.push(SHADOW_MODE_SKIP_REASON);

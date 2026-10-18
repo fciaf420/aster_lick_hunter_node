@@ -92,20 +92,78 @@ describe('selectEvents', () => {
     const selection = selectEvents([row('AAAUSDT', 'SELL', 0), row('AAAUSDT', 'SELL', 0), row('AAAUSDT', 'SELL', 1)], { minUsd: 0, dedupeSec: 0 });
     expect(selection.events).toHaveLength(3);
   });
+
+  describe('--burst-sum', () => {
+    // AAA longs: 3000 at 0, 20 and 40 s (one burst, total 9000), 2000 at 60 and 110 s (a new burst from exactly the
+    // window after the anchor: total 4000), 5000 at 120 s (60 s after that burst's anchor: a third burst).
+    // BBB shorts: 4000 at 0 and 30 s (total 8000).
+    const burstRows = (): LiquidationRow[] => [
+      row('AAAUSDT', 'SELL', 0, 3000), row('AAAUSDT', 'SELL', 20, 3000), row('AAAUSDT', 'SELL', 40, 3000),
+      row('AAAUSDT', 'SELL', 60, 2000), row('AAAUSDT', 'SELL', 110, 2000), row('AAAUSDT', 'SELL', 120, 5000),
+      row('BBBUSDT', 'BUY', 0, 4000), row('BBBUSDT', 'BUY', 30, 4000),
+    ];
+    const summary = (selection: ReturnType<typeof selectEvents>) => selection.events.map(item => [item.symbol, (item.eventTime - T0) / 1000, item.volumeUsdt]);
+
+    it('by default applies --min-usd to each row, so liquidations that only add up do not trade', () => {
+      const selection = selectEvents(burstRows(), { minUsd: 5000, dedupeSec: 60 });
+      expect(summary(selection)).toEqual([['AAAUSDT', 120, 5000]]);
+      expect(selection.belowMinUsd).toBe(7);
+      expect(selection.collapsed).toBe(0);
+    });
+
+    it('adds up the rows of a burst and trades at the row where the total reaches the minimum', () => {
+      const selection = selectEvents(burstRows(), { minUsd: 5000, dedupeSec: 60, burstSum: true });
+      // AAA: 3000, 6000 at 20 s (the event, with the running total), the row at 40 s is folded in. The 2000 + 2000 burst
+      // stays below 5000. The 5000 row reaches the minimum by itself (inclusive). BBB: 4000, 8000 at 30 s.
+      expect(summary(selection)).toEqual([['AAAUSDT', 20, 6000], ['BBBUSDT', 30, 8000], ['AAAUSDT', 120, 5000]]);
+      expect(selection.collapsed).toBe(3);                 // AAA 0 s and 40 s, BBB 0 s
+      expect(selection.belowMinUsd).toBe(2);               // The two rows of the 4000 burst
+      expect(selection.events.length + selection.collapsed + selection.belowMinUsd + selection.invalid).toBe(selection.rows);
+    });
+
+    it('never trades before the total is known: the event is not the first row of its burst', () => {
+      const selection = selectEvents(burstRows(), { minUsd: 5000, dedupeSec: 60, burstSum: true });
+      expect(selection.events[0].eventTime).toBe(T0 + 20_000);
+      expect(selection.events[0].eventTime).toBeGreaterThan(T0);
+    });
+
+    it('opens a new burst exactly the window after its anchor, and keeps a symbol and a side apart', () => {
+      const rows = [row('AAAUSDT', 'SELL', 0, 3000), row('AAAUSDT', 'SELL', 60, 3000), row('AAAUSDT', 'BUY', 10, 3000), row('BBBUSDT', 'SELL', 10, 3000)];
+      expect(selectEvents(rows, { minUsd: 5000, dedupeSec: 60, burstSum: true }).events).toHaveLength(0);
+      expect(selectEvents(rows, { minUsd: 5000, dedupeSec: 61, burstSum: true }).events.map(item => item.symbol)).toEqual(['AAAUSDT']);
+    });
+
+    it('gives the same events as the per-row filter when the minimum is 0', () => {
+      const rows = burstRows();
+      const perRow = selectEvents(rows, { minUsd: 0, dedupeSec: 60 });
+      const burst = selectEvents(rows, { minUsd: 0, dedupeSec: 60, burstSum: true });
+      expect(summary(burst)).toEqual(summary(perRow));
+      expect([burst.collapsed, burst.belowMinUsd]).toEqual([perRow.collapsed, perRow.belowMinUsd]);
+    });
+
+    it('keeps the flags and ids of the row that triggers', () => {
+      const rows: LiquidationRow[] = [row('AAAUSDT', 'SELL', 0, 3000), { ...row('AAAUSDT', 'SELL', 10, 3000), backfilled: true }];
+      const selection = selectEvents(rows, { minUsd: 5000, dedupeSec: 60, burstSum: true });
+      expect(selection.events).toHaveLength(1);
+      expect(selection.events[0].id).toBe(rows[1].id);
+      expect(selection.events[0].backfilled).toBe(true);
+    });
+  });
 });
 
 describe('entry candle', () => {
-  it('is the first candle that closes at or after the event, never one that closed before it', () => {
+  it('is the candle that contains the event, so its close is after the liquidation, never before', () => {
     expect(entryOpenTime(at(10) + 30_000)).toBe(at(10));      // Inside minute 10: enters at its close
     expect(entryOpenTime(at(10) + 1)).toBe(at(10));
     expect(entryOpenTime(at(10) + MINUTE - 1)).toBe(at(10));
-    expect(entryOpenTime(at(10))).toBe(at(9));                // Exactly on the boundary: the candle that ends there
-    for (let offset = 0; offset < 5 * MINUTE; offset += 7_321) {
-      const eventTime = at(100) + offset;
+    expect(entryOpenTime(at(10))).toBe(at(10));               // Exactly on the boundary: the candle that starts there ...
+    expect(entryOpenTime(at(10) - 1)).toBe(at(9));            // ... not the one that ended there (it predates the trade)
+    for (const eventTime of [at(100), at(101), at(102) - 1, ...Array.from({ length: 40 }, (_, i) => at(100) + i * 7_321)]) {
       const open = entryOpenTime(eventTime);
       expect(open % MINUTE).toBe(0);
-      expect(open + MINUTE).toBeGreaterThanOrEqual(eventTime);          // The close is not before the event
-      expect(open + MINUTE - eventTime).toBeLessThan(MINUTE);           // ... and it is the first such close
+      expect(open).toBeLessThanOrEqual(eventTime);                      // The event is inside the candle
+      expect(open + MINUTE).toBeGreaterThan(eventTime);                 // ... so its close is strictly after the event
+      expect(open + MINUTE - eventTime).toBeLessThanOrEqual(MINUTE);
     }
   });
 });
@@ -166,6 +224,43 @@ describe('estimateBeta', () => {
     expect(estimateBeta(old, hedge, entryOpen, 240, 30).beta).toBeCloseTo(2, 8);
   });
 
+  it('ends flush with the entry candle: an event on a minute boundary uses the minute that ended there, not the one that starts', () => {
+    expect(entryOpenTime(at(260))).toBe(entryOpen);                     // The event on the boundary at(260) enters in candle 260
+    const asset = pathFromReturns(returns, 50, 2);
+    const clean = estimateBeta(toSeries(asset), hedge, entryOpen, 240, 30);
+    // The newest candle used is 259 (it closes where the entry candle opens): changing it changes the estimate
+    const lastMinute = new Map(asset);
+    lastMinute.set(at(259), lastMinute.get(at(259))! * 1.05);
+    expect(estimateBeta(lastMinute, hedge, entryOpen, 240, 30).beta).not.toBeCloseTo(clean.beta, 3);
+    // ... the entry candle itself (where the liquidation's trade is) never counts, even when both series jump there
+    const entryJump = new Map(asset);
+    const hedgeJump = new Map(hedge);
+    entryJump.set(at(260), 5000);
+    hedgeJump.set(at(260), 1);
+    expect(estimateBeta(entryJump, hedgeJump, entryOpen, 240, 30)).toEqual(clean);
+  });
+
+  it('regresses simple returns, the ones a leg earns, not log returns', () => {
+    // Asset simple returns are exactly 2x the hedge's. Large moves, so that log returns would give another slope.
+    const big = Array.from({ length: 60 }, (_, i) => (i % 2 === 0 ? 0.04 : -0.03) * (1 + (i % 7) / 10));
+    const bigHedge = toSeries(pathFromReturns(big, 100, 1));
+    const bigAsset = toSeries(pathFromReturns(big, 50, 2));
+    const estimate = estimateBeta(bigAsset, bigHedge, at(60), 59, 30);
+    expect(estimate.beta).toBeCloseTo(2, 10);
+    const logSlope = (() => {
+      const x: number[] = [];
+      const y: number[] = [];
+      for (let k = 1; k <= 59; k++) {
+        x.push(Math.log(bigHedge.get(at(60 - k))! / bigHedge.get(at(59 - k))!));
+        y.push(Math.log(bigAsset.get(at(60 - k))! / bigAsset.get(at(59 - k))!));
+      }
+      const mx = x.reduce((a, b) => a + b, 0) / x.length;
+      const my = y.reduce((a, b) => a + b, 0) / y.length;
+      return x.reduce((sum, v, i) => sum + (v - mx) * (y[i] - my), 0) / x.reduce((sum, v) => sum + (v - mx) ** 2, 0);
+    })();
+    expect(Math.abs(logSlope - 2)).toBeGreaterThan(1e-3);               // Log returns would have given another beta (it differs from 2 by about 0.009)
+  });
+
   it('falls back to beta 1 with too little data, and says so', () => {
     const asset = pathFromReturns(returns, 50, 2);
     // Candles for the last 29 minutes before the entry only: 29 returns, below the minimum of 30
@@ -185,6 +280,45 @@ describe('estimateBeta', () => {
     expect(estimateBeta(asset, flat, entryOpen, 240, 30)).toMatchObject({ beta: 1, raw: null, fallback: true, observations: 240 });
   });
 
+  describe('says why it fell back', () => {
+    const assetPath = pathFromReturns(returns, 50, 2);
+    const hedgePath = pathFromReturns(returns, 100, 1);
+    const asset = toSeries(assetPath);
+    const between = (points: ReadonlyArray<[number, number]>, from: number, to: number) => toSeries(points.filter(([open]) => open >= at(from) && open <= at(to)));
+    const reasons = (a: Map<number, number> | undefined, h: Map<number, number> | undefined) => estimateBeta(a, h, entryOpen, 240, 30).fallbackReasons;
+
+    it('has no reason when the beta was estimated', () => {
+      expect(estimateBeta(asset, hedge, entryOpen, 240, 30)).toMatchObject({ fallback: false, fallbackReasons: [], assetReturns: 240, hedgeReturns: 240 });
+    });
+
+    it('blames the asset when only the asset is short of history', () => {
+      const short = estimateBeta(between(assetPath, 230, 259), hedge, entryOpen, 240, 30);    // 29 returns
+      expect(short).toMatchObject({ fallback: true, fallbackReasons: ['asset-short'], assetReturns: 29, hedgeReturns: 240, observations: 29 });
+      expect(reasons(undefined, hedge)).toEqual(['asset-short']);
+    });
+
+    it('blames the hedge when only the hedge is short of history', () => {
+      const short = estimateBeta(asset, between(hedgePath, 230, 259), entryOpen, 240, 30);
+      expect(short).toMatchObject({ fallback: true, fallbackReasons: ['hedge-short'], assetReturns: 240, hedgeReturns: 29, observations: 29 });
+      expect(reasons(asset, undefined)).toEqual(['hedge-short']);
+    });
+
+    it('blames both when both are short, and a flat hedge on its own when the hedge did not move', () => {
+      expect(reasons(between(assetPath, 230, 259), between(hedgePath, 230, 259))).toEqual(['asset-short', 'hedge-short']);
+      expect(reasons(undefined, undefined)).toEqual(['asset-short', 'hedge-short']);
+      const flat = new Map(pathFromReturns(returns.map(() => 0), 100, 1));
+      expect(estimateBeta(asset, flat, entryOpen, 240, 30)).toMatchObject({ fallbackReasons: ['hedge-flat'], observations: 240 });
+    });
+
+    it('blames the thinner series when each has enough returns but not in the same minutes', () => {
+      // Asset returns in minutes 200-229 (30), hedge returns in minutes 229-259 (31): one minute in common
+      const apart = estimateBeta(between(assetPath, 199, 229), between(hedgePath, 228, 259), entryOpen, 240, 30);
+      expect(apart).toMatchObject({ fallback: true, assetReturns: 30, hedgeReturns: 31, observations: 1, fallbackReasons: ['asset-short'] });
+      const flipped = estimateBeta(between(assetPath, 228, 259), between(hedgePath, 199, 229), entryOpen, 240, 30);
+      expect(flipped).toMatchObject({ assetReturns: 31, hedgeReturns: 30, observations: 1, fallbackReasons: ['hedge-short'] });
+    });
+  });
+
   it('never interpolates: minutes without a candle (or the one before it) are skipped', () => {
     const asset = toSeries(pathFromReturns(returns, 50, 2));
     // Every other hedge candle missing: no minute has both its candle and the one before it
@@ -196,6 +330,22 @@ describe('estimateBeta', () => {
     const estimate = estimateBeta(asset, holed, entryOpen, 240, 30);
     expect(estimate.observations).toBe(238);
     expect(estimate.beta).toBeCloseTo(2, 8);
+  });
+
+  it('never interpolates the asset either: its missing candles cost the same two returns, and a sparse asset falls back as short', () => {
+    const assetPath = pathFromReturns(returns, 50, 2);
+    const holed = toSeries(assetPath);
+    holed.delete(at(200));
+    const estimate = estimateBeta(holed, hedge, entryOpen, 240, 30);
+    expect(estimate).toMatchObject({ observations: 238, assetReturns: 238, hedgeReturns: 240, fallback: false });
+    expect(estimate.beta).toBeCloseTo(2, 8);
+    // Neighbours of the hole are untouched: the same estimate comes from deleting the same minute in both series
+    const both = new Map(hedge);
+    both.delete(at(200));
+    expect(estimateBeta(holed, both, entryOpen, 240, 30).beta).toBeCloseTo(2, 8);
+    // Every other asset candle missing: no return at all, and the asset is the one to blame
+    const sparse = new Map(assetPath.filter(([open]) => ((open - T0) / MINUTE) % 2 === 0));
+    expect(estimateBeta(sparse, hedge, entryOpen, 240, 30)).toMatchObject({ fallback: true, observations: 0, assetReturns: 0, hedgeReturns: 240, fallbackReasons: ['asset-short'] });
   });
 });
 

@@ -2,13 +2,14 @@
 // Pair-trade analysis of the liquidation signal: would a hedged (BTC) or paired (two symbols liquidated in opposite
 // directions) version of the bot's contrarian trade have done better than the single leg? Replays the liquidations and
 // 1m candles in data/liquidations.db (LIQUIDATIONS_DB_PATH overrides the file, as for the bot, lighter:backfill and the
-// optimizer) and prints, per strategy and horizon, net return statistics, pair-minus-single differences and a
-// per-symbol breakdown. Read-only: it never writes the database, calls an exchange or touches the trading path. See
-// docs/PAIR-ANALYSIS.md.
+// optimizer) and prints, per strategy and horizon, net return statistics, paired differences (pair minus single;
+// cross-pair also minus both singles) and a per-symbol breakdown. Read-only: it never writes the database, calls an
+// exchange or touches the trading path. See docs/PAIR-ANALYSIS.md.
 //
-//   npm run analyze:pairs -- [--venue aster|lighter] [--include-skipped] [--symbols A,B] [--since T] [--until T]
-//                            [--min-usd N] [--dedupe-sec 60] [--horizons 5,15,60] [--hedge-symbol BTCUSDT] [--extra-hedges ETHUSDT]
-//                            [--beta-lookback 240] [--pair-window-sec 120] [--fee-bps 5] [--slippage-bps 0]
+//   npm run analyze:pairs -- [--venue aster|lighter] [--include-skipped] [--symbols A,B] [--since T] [--until T [--until-exits]]
+//                            [--min-usd N [--burst-sum]] [--dedupe-sec 60] [--horizons 5,15,60] [--hedge-symbol BTCUSDT]
+//                            [--extra-hedges ETHUSDT] [--beta-lookback 240] [--pair-window-sec 120]
+//                            [--exit-fill exact|carry [--exit-carry-max-min 5]] [--fee-bps 5] [--slippage-bps 0]
 //                            [--json PATH [--json-trades]]
 //
 // Candles for the hedge symbol come from `npm run lighter:backfill -- --candles-only --symbols BTCUSDT --days N`; the
@@ -56,7 +57,7 @@ function main(): number {
     return 1;
   }
 
-  const selection = selectEvents(input.rows, { minUsd: args.minUsd, dedupeSec: args.dedupeSec });
+  const selection = selectEvents(input.rows, { minUsd: args.minUsd, dedupeSec: args.dedupeSec, burstSum: args.burstSum });
   const now = Date.now();
   const result = analyzePairs(selection.events, input.series, {
     horizonsMin: args.horizons,
@@ -68,6 +69,9 @@ function main(): number {
     pairWindowSec: args.pairWindowSec,
     feeBps: args.feeBps,
     slippageBps: args.slippageBps,
+    exitFill: args.exitFill,
+    exitCarryMaxMin: args.exitCarryMaxMin,
+    exitDeadline: args.untilExits ? args.until : undefined,
     now,
     keepTrades: args.jsonTrades,
   });
@@ -80,6 +84,7 @@ function main(): number {
     sinceMs: args.since,
     untilMs: args.until,
     minUsd: args.minUsd,
+    burstSum: args.burstSum,
     dedupeSec: args.dedupeSec,
     selection,
     candlesLoaded: input.candlesLoaded,
