@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { z } from 'zod';
-import { Config, configSchema, lighterCredentialProblems } from './types';
+import { Config, configSchema, lighterCredentialProblems, lighterHedgeState } from './types';
 import { DEFAULT_CONFIG, DEFAULT_CONFIG_VERSION } from './defaults';
 import { migrateConfig, needsMigration, addMissingFields } from './migrator';
 
@@ -80,6 +80,11 @@ export class ConfigLoader {
         const problems = lighterCredentialProblems(validated.venues?.lighter);
         if (problems.length > 0) {
           throw new Error(`Lighter credentials are required when not in paper mode: ${problems.join('; ')}`);
+        }
+        // Hedge mode switched on with half a short account would trade the shorts nowhere: refuse instead
+        const hedge = lighterHedgeState(validated);
+        if (hedge.mode === 'incomplete') {
+          throw new Error(`Lighter hedge mode needs a complete short account when not in paper mode: ${hedge.problems.join('; ')}. Fill it in or turn hedge mode off.`);
         }
       } else if (!validated.global.paperMode) {
         if (!validated.api.apiKey || !validated.api.secretKey) {

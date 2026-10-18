@@ -144,12 +144,25 @@ const bad = (code: number, message: string, status = 400): LighterHttpResponse =
 const TYPE_NAMES: Record<number, string> = { 0: 'limit', 1: 'market', 2: 'stop-loss', 3: 'stop-loss-limit', 4: 'take-profit', 5: 'take-profit-limit', 6: 'twap' };
 const TIF_NAMES: Record<number, string> = { 0: 'immediate-or-cancel', 1: 'good-till-time', 2: 'post-only' };
 
+export interface FakeLighterExchangeOptions {
+  accountIndex?: number;                  // Default TEST_ACCOUNT
+  apiKeyIndex?: number;                   // Default TEST_KEY_INDEX
+  publicKey?: string;                     // Registered public key; default TEST_PUBLIC_KEY
+  l1Address?: string;                     // DetailedAccount.l1_address; default: left out
+  firstOrderIndex?: bigint;               // First exchange order_index; default 2^48 + 1000
+  // Market data shared with another fake (hedge mode: two sub-accounts on one exchange)
+  details?: Array<Record<string, unknown>>;
+  books?: Map<number, { asks: LighterSimpleOrder[]; bids: LighterSimpleOrder[] }>;
+}
+
 function formatUnits(units: number, decimals: number): string {
   const digits = String(units).padStart(decimals + 1, '0');
   return decimals === 0 ? digits : `${digits.slice(0, -decimals)}.${digits.slice(-decimals)}`;
 }
 
 export class FakeLighterExchange {
+  readonly accountIndex: number;
+  readonly apiKeyIndex: number;
   readonly requests: LighterHttpRequest[] = [];
   readonly received: ReceivedTx[] = [];
   nextNonce = 100;
@@ -170,10 +183,20 @@ export class FakeLighterExchange {
   readonly orders: LighterOrder[] = [];
   readonly txs = new Map<string, LighterTx>();
   readonly hashes = new Map<string, string>();   // txInfo -> hash from the signer
-  readonly books = new Map<number, { asks: LighterSimpleOrder[]; bids: LighterSimpleOrder[] }>();
+  readonly books: Map<number, { asks: LighterSimpleOrder[]; bids: LighterSimpleOrder[] }>;
   candles: Array<Record<string, unknown>> = [];
-  details = FIXTURE_DETAILS.order_book_details.map(item => ({ ...item }));
-  account = {
+  details: Array<Record<string, unknown>>;
+  account: {
+    index: number;
+    l1_address?: string;
+    collateral: string;
+    available_balance: string;
+    total_asset_value: string;
+    cross_asset_value: string;
+    cross_initial_margin_requirement: string;
+    cross_maintenance_margin_requirement: string;
+    positions: LighterAccountPosition[];
+  } = {
     index: TEST_ACCOUNT,
     collateral: '1000.000000',
     available_balance: '800.000000',
@@ -183,10 +206,19 @@ export class FakeLighterExchange {
     cross_maintenance_margin_requirement: '120.000000',
     positions: [] as LighterAccountPosition[],
   };
-  private nextOrderIndex = BigInt(2) ** BigInt(48) + BigInt(1000);
+  private nextOrderIndex: bigint;
   private pendingPolls = new Map<string, number>();
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(private readonly now: () => number = Date.now, options: FakeLighterExchangeOptions = {}) {
+    this.accountIndex = options.accountIndex ?? TEST_ACCOUNT;
+    this.apiKeyIndex = options.apiKeyIndex ?? TEST_KEY_INDEX;
+    this.publicKey = options.publicKey ?? TEST_PUBLIC_KEY;
+    this.nextOrderIndex = options.firstOrderIndex ?? BigInt(2) ** BigInt(48) + BigInt(1000);
+    this.details = options.details ?? FIXTURE_DETAILS.order_book_details.map(item => ({ ...item }));
+    this.books = options.books ?? new Map();
+    this.account.index = this.accountIndex;
+    if (options.l1Address !== undefined) this.account.l1_address = options.l1Address;
+  }
 
   registerTx(tx: LighterSignedTx): void {
     this.hashes.set(tx.txInfo, tx.txHash);
@@ -247,7 +279,7 @@ export class FakeLighterExchange {
     const isPrivate = ['/api/v1/accountActiveOrders', '/api/v1/accountOrders', '/api/v1/getMakerOnlyApiKeys', '/api/v1/accountLimits', '/api/v1/accountInactiveOrders'].includes(url.pathname);
     if (isPrivate) {
       const token = request.headers?.authorization ?? '';
-      if (!new RegExp(`^\\d+:${TEST_ACCOUNT}:${TEST_KEY_INDEX}:[0-9a-f]{160}$`).test(token)) return bad(20001, 'missing or malformed auth');
+      if (!new RegExp(`^\\d+:${this.accountIndex}:${this.apiKeyIndex}:[0-9a-f]{160}$`).test(token)) return bad(20001, 'missing or malformed auth');
       if (this.authFailures > 0) {
         this.authFailures--;
         return bad(29500, 'internal error: invalid signature');
@@ -263,8 +295,8 @@ export class FakeLighterExchange {
       case '/api/v1/nextNonce':
         return ok({ nonce: this.nextNonce });
       case '/api/v1/apikeys':
-        return ok({ api_keys: Number(query.api_key_index) === TEST_KEY_INDEX && Number(query.account_index) === TEST_ACCOUNT
-          ? [{ account_index: TEST_ACCOUNT, api_key_index: TEST_KEY_INDEX, nonce: this.nextNonce, public_key: this.publicKey }]
+        return ok({ api_keys: Number(query.api_key_index) === this.apiKeyIndex && Number(query.account_index) === this.accountIndex
+          ? [{ account_index: this.accountIndex, api_key_index: this.apiKeyIndex, nonce: this.nextNonce, public_key: this.publicKey }]
           : [] });
       case '/api/v1/getMakerOnlyApiKeys':
         return ok({ api_key_indexes: this.makerOnlyKeys });
@@ -398,7 +430,7 @@ export class FakeLighterExchange {
       }
     }
     if (record.hash) {
-      this.txs.set(record.hash, { hash: record.hash, type: record.txType, status, event_info: eventInfo, nonce: info.Nonce, account_index: TEST_ACCOUNT });
+      this.txs.set(record.hash, { hash: record.hash, type: record.txType, status, event_info: eventInfo, nonce: info.Nonce, account_index: this.accountIndex });
       if (this.txPendingPolls > 0) this.pendingPolls.set(record.hash, this.txPendingPolls);
     }
   }
@@ -417,7 +449,7 @@ export class FakeLighterExchange {
       client_order_index: params.ClientOrderIndex,
       client_order_id: String(params.ClientOrderIndex),
       market_index: params.MarketIndex,
-      owner_account_index: TEST_ACCOUNT,
+      owner_account_index: this.accountIndex,
       initial_base_amount: base,
       remaining_base_amount: base,
       filled_base_amount: formatUnits(0, sd),

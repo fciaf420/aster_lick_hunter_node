@@ -15,8 +15,11 @@ import {
   type LighterMarketStatsSnapshot,
 } from './LighterAdapter';
 import type { LighterAccountStreamAlert } from './accountStream';
+import { LighterHedgeAdapter, isLighterHedgeAdapter, type LighterHedgeAlert } from './LighterHedgeAdapter';
 import { LighterHttpClient, type LighterHttpTransport } from './http';
 import { LighterMarketCache, isOpenInterestCapped } from './markets';
+import { LIGHTER_HEDGE_COI_RANGES, type LighterHedgeSide } from './nonce';
+import { lighterHedgeState } from '../../config/types';
 import {
   DEFAULT_LIGHTER_PROFILE,
   getProfile,
@@ -101,6 +104,20 @@ export function lighterCredentialsFrom(config?: Partial<Pick<Config, 'venues'>> 
   };
 }
 
+// Hedge mode: credentials of the short account (venues.lighter.hedge.shortAccount), bound to the same profile as
+// the main account (one network per process)
+export function lighterShortCredentialsFrom(config?: Partial<Pick<Config, 'venues'>> | null): LighterCredentialsInput {
+  const shortAccount = config?.venues?.lighter?.hedge?.shortAccount;
+  if (!shortAccount) return null;
+  return {
+    profile: readLighterSettings(config).profile,
+    accountIndex: shortAccount.accountIndex,
+    apiKeyIndex: shortAccount.apiKeyIndex,
+    apiKeyPrivateKey: shortAccount.apiKeyPrivateKey,
+    apiKeyPublicKey: shortAccount.apiKeyPublicKey,
+  };
+}
+
 // Bot symbols that may map to Lighter markets: the configured symbols plus explicit overrides
 export function lighterSymbolOptions(config?: ConfigView | null): LighterSymbolMapOptions {
   return {
@@ -150,7 +167,9 @@ export type LighterRuntimeAlert =
   | { source: 'account'; alert: LighterAccountStreamAlert }
   | { source: 'mark-guard'; symbol: string; message: string }
   // A tx the nonce manager stopped waiting for executed after all (or is still unresolved at its expiry)
-  | { source: 'late-tx'; message: string };
+  | { source: 'late-tx'; message: string }
+  // Hedge mode (two sub-accounts): wrong-direction position, stream seed failure, accounts of different masters
+  | { source: 'hedge'; alert: LighterHedgeAlert };
 
 const defaultAlertSink = (event: LighterRuntimeAlert): void => {
   const message = event.source === 'mark-guard' || event.source === 'late-tx' ? event.message : event.alert.message;
@@ -334,7 +353,12 @@ export interface CreateLighterAdapterOptions {
   allowSigning?: boolean;
   // Every Lighter market instead of the configured ones (symbol picker); implies read-only
   catalog?: boolean;
+  // Hedge mode: the inner adapter of one side. LONG trades the main account, SHORT the short account; each uses
+  // its own client order index range and labels its alerts. Unset: the plain one-way adapter.
+  hedgeSide?: LighterHedgeSide;
 }
+
+const HEDGE_SIDE_LABELS: Readonly<Record<LighterHedgeSide, string>> = { LONG: '[long account]', SHORT: '[short account]' };
 
 export function createLighterAdapter(config: ConfigView, options: CreateLighterAdapterOptions = {}): LighterAdapter {
   const getConfig: ConfigGetter = options.getConfig ?? (() => config);
@@ -345,24 +369,28 @@ export function createLighterAdapter(config: ConfigView, options: CreateLighterA
     ? getLighterCatalogMarketCache(profile, getConfig)
     : getLighterMarketCache(profile, getConfig, options.getConfig !== undefined);
   const signing = options.allowSigning === true && !options.catalog;
+  const hedgeSide = options.catalog ? undefined : options.hedgeSide;
+  const label = (message: string) => (hedgeSide ? `${HEDGE_SIDE_LABELS[hedgeSide]} ${message}` : message);
+  const readCredentials = hedgeSide === 'SHORT' ? lighterShortCredentialsFrom : lighterCredentialsFrom;
   const adapter = new LighterAdapter({
     profile,
-    credentials: options.catalog ? null : () => lighterCredentialsFrom(getConfig()),
+    credentials: options.catalog ? null : () => readCredentials(getConfig()),
     markets,
     transport: runtimeOptions.transport,
     ...(signing ? {} : { loadSigner: refuseSigner, journal: 'memory' as const }),
+    ...(hedgeSide ? { clientOrderIndexRange: LIGHTER_HEDGE_COI_RANGES[hedgeSide] } : {}),
     symbolSettings: botSymbol => getConfig().symbols?.[botSymbol],
     sltpSlippageBps: Math.round(settings.sltpSlippagePct * 100),
     sendTxPerMinute: settings.sendTxPerMin,
     marketStats: marketId => marketStatsFor(runtime, marketId),
-    onUserStreamAlert: alert => raiseAlert({ source: 'account', alert }),
+    onUserStreamAlert: alert => raiseAlert({ source: 'account', alert: hedgeSide ? { ...alert, message: label(alert.message) } : alert }),
     onLateTxOutcome: outcome => {
       if (outcome.outcome === 'not-executed') return;
       raiseAlert({
         source: 'late-tx',
-        message: outcome.outcome === 'executed'
+        message: label(outcome.outcome === 'executed'
           ? `A Lighter tx (nonce ${outcome.nonce}) the bot had stopped waiting for executed after all (${outcome.detail}); check the account. Positions it opened are protected on the next sync.`
-          : `A Lighter tx (nonce ${outcome.nonce}) is still unresolved at its expiry (${outcome.detail}); check the account.`,
+          : `A Lighter tx (nonce ${outcome.nonce}) is still unresolved at its expiry (${outcome.detail}); check the account.`),
       });
     },
     now: runtimeOptions.now,
@@ -370,6 +398,48 @@ export function createLighterAdapter(config: ConfigView, options: CreateLighterA
   // Only the bot process signs; its adapters are closed on shutdown
   if (signing) signingAdapters.add(adapter);
   return adapter;
+}
+
+// The trading adapter for the configured Lighter setup: the plain one-way adapter, or, when hedge mode is on
+// (lighterHedgeState: venue Lighter, position mode HEDGE, hedge.enabled, complete short account), the composite
+// that keeps longs on the main account and shorts on the short account. Read once: switching needs a restart.
+export function createLighterVenueAdapter(config: ConfigView, options: CreateLighterAdapterOptions = {}): LighterAdapter | LighterHedgeAdapter {
+  if (options.catalog || options.hedgeSide) return createLighterAdapter(config, options);
+  const getConfig: ConfigGetter = options.getConfig ?? (() => config);
+  if (lighterHedgeState(getConfig()).mode !== 'on') return createLighterAdapter(config, options);
+  return new LighterHedgeAdapter({
+    long: createLighterAdapter(config, { ...options, hedgeSide: 'LONG' }),
+    short: createLighterAdapter(config, { ...options, hedgeSide: 'SHORT' }),
+    onAlert: alert => raiseAlert({ source: 'hedge', alert }),
+  });
+}
+
+// One-way Lighter with a short account still configured (hedge mode off, or on but incomplete): the bot neither
+// trades nor maintains that account. Its SL/TP orders stay on the exchange only until they expire (28 days, never
+// renewed) and are not resized when a position changes. The startup warning names the positions left there (a
+// read-only public read; skipped when the account cannot be read, e.g. incomplete keys). Null: no short account.
+export async function lighterUnmanagedShortAccountWarning(config: ConfigView): Promise<string | null> {
+  const shortIndex = config?.venues?.lighter?.hedge?.shortAccount?.accountIndex;
+  if (shortIndex === undefined) return null;
+  let left: string;
+  const adapter = createLighterAdapter(config, { hedgeSide: 'SHORT' });   // Read-only: never signs
+  try {
+    const open = (await adapter.getPositions()).filter(position => Number(position.positionAmt) !== 0);
+    left = open.length === 0
+      ? 'It holds no open positions.'
+      : `Positions left there: ${open.map(position => `${position.symbol} ${position.positionAmt}`).join(', ')}.`;
+  } catch (error) {
+    left = `Its positions could not be read (${errorText(error)}).`;
+  } finally {
+    adapter.close();
+  }
+  return `Lighter: short account ${shortIndex} is not managed in one-way mode. Positions there keep their exchange ` +
+    `SL/TP only until those expire (28 days after they were placed; the bot neither renews nor resizes them). ${left}`;
+}
+
+// A Lighter trading adapter of either kind (startup checks, market refresh)
+export function isLighterVenueAdapter(value: unknown): value is LighterAdapter | LighterHedgeAdapter {
+  return value instanceof LighterAdapter || isLighterHedgeAdapter(value);
 }
 
 // ===== Mark-ratio guard (spec §3.4) =====

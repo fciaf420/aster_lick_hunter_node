@@ -62,6 +62,7 @@ async function main() {
     { file: 'tests/core/exchange-golden.test.ts', name: 'Exchange Golden Requests' },
     { file: 'tests/core/exchange-registry.test.ts', name: 'Exchange Registry' },
     { file: 'tests/core/lighter-bot-flow.test.ts', name: 'Lighter Bot Flow' },
+    { file: 'tests/core/lighter-hedge-flow.test.ts', name: 'Lighter Hedge Flow' },
     { file: 'tests/integration/trading-flow.test.ts', name: 'Integration' }
   ];
 

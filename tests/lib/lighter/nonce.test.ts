@@ -23,6 +23,11 @@ import {
 import { isDefinitelyNotPlaced, orderMayExist } from '../../../src/lib/exchange/orderErrors';
 import type { LighterSignedTx } from '../../../src/lib/exchange/lighter/signer';
 import type { LighterTx } from '../../../src/lib/exchange/lighter/http';
+import {
+  LIGHTER_HEDGE_COI_RANGES,
+  LIGHTER_HEDGE_COI_SPAN,
+  lighterHedgeSideOfClientOrderIndex,
+} from '../../../src/lib/exchange/lighter/nonce';
 
 const TEN_MIN = 10 * 60 * 1000;
 const accepted = (): LighterSendOutcome => ({ kind: 'accepted', txHashes: [] });
@@ -656,5 +661,71 @@ describe('LighterClientOrderIndexGenerator (spec §5.6)', () => {
     expect(clientOrderIndexRole(entry)).toBe(1);
     expect(ids).not.toContain(entry);
     expect(() => generator.next(5 as any)).toThrow(RangeError);
+  });
+});
+
+describe('LighterClientOrderIndexGenerator ranges (hedge mode, two sub-accounts)', () => {
+  const now = 1_792_289_401_234;
+
+  it('without a range (or with the LONG range) the indexes are exactly the one-way ones', () => {
+    const plain = new LighterClientOrderIndexGenerator(() => now);
+    const unranged = new LighterClientOrderIndexGenerator(() => now, undefined);
+    const long = new LighterClientOrderIndexGenerator(() => now, LIGHTER_HEDGE_COI_RANGES.LONG);
+    for (const role of [1, 2, 3, 4, 2, 2, 1] as const) {
+      const expected = plain.next(role);
+      expect(unranged.next(role)).toBe(expected);
+      expect(long.next(role)).toBe(expected);
+      expect(lighterHedgeSideOfClientOrderIndex(expected)).toBe('LONG');
+    }
+  });
+
+  it('the SHORT range adds 1e14 and keeps the role digit, below 2^48', () => {
+    const short = new LighterClientOrderIndexGenerator(() => now, LIGHTER_HEDGE_COI_RANGES.SHORT);
+    const ids = Array.from({ length: 12 }, () => short.next(3));
+    expect(ids[0]).toBe(LIGHTER_HEDGE_COI_SPAN + (Math.floor(now / 10) * 10 + 3) * 10);
+    expect(new Set(ids).size).toBe(12);
+    for (const id of ids) {
+      expect(Number.isSafeInteger(id)).toBe(true);
+      expect(id).toBeLessThanOrEqual(LIGHTER_MAX_CLIENT_ORDER_INDEX);
+      expect(clientOrderIndexRole(id)).toBe(3);
+      expect(lighterHedgeSideOfClientOrderIndex(id)).toBe('SHORT');
+    }
+    expect(clientOrderIndexRole(short.next(1))).toBe(1);
+  });
+
+  it('refuses a base index that does not fit the span, and invalid ranges', () => {
+    // 1e13 ms: the base index is 1e14 + 10, past the span; without a range the same clock still works
+    expect(() => new LighterClientOrderIndexGenerator(() => 1e13, LIGHTER_HEDGE_COI_RANGES.SHORT).next(1)).toThrow(RangeError);
+    expect(() => new LighterClientOrderIndexGenerator(() => 1e13, LIGHTER_HEDGE_COI_RANGES.LONG).next(1)).toThrow(RangeError);
+    expect(new LighterClientOrderIndexGenerator(() => 1e13).next(1)).toBe(100_000_000_000_010);
+    for (const range of [
+      { offset: 50, span: 1000 },                        // Not a multiple of 100: the role digit would shift
+      { offset: -100, span: 1000 },
+      { offset: 0, span: 0 },
+      { offset: 2 ** 48 - 100, span: 1000 },             // Past 2^48 - 1
+      { offset: Number.NaN, span: 1000 },
+    ]) {
+      expect(() => new LighterClientOrderIndexGenerator(() => now, range)).toThrow(RangeError);
+    }
+  });
+
+  it('maps an index to its account side: [1, 1e14) LONG, [1e14, 2e14) SHORT, else null', () => {
+    expect(LIGHTER_HEDGE_COI_SPAN).toBe(1e14);
+    expect(lighterHedgeSideOfClientOrderIndex(1)).toBe('LONG');
+    expect(lighterHedgeSideOfClientOrderIndex(1e14 - 1)).toBe('LONG');
+    expect(lighterHedgeSideOfClientOrderIndex(1e14)).toBe('SHORT');
+    expect(lighterHedgeSideOfClientOrderIndex(2e14 - 1)).toBe('SHORT');
+    for (const value of [0, -1, 2e14, LIGHTER_MAX_CLIENT_ORDER_INDEX, 1.5, Number.NaN, 2 ** 60]) {
+      expect(lighterHedgeSideOfClientOrderIndex(value)).toBeNull();
+    }
+  });
+
+  it('the ranges are frozen and disjoint', () => {
+    expect(LIGHTER_HEDGE_COI_RANGES).toEqual({ LONG: { offset: 0, span: 1e14 }, SHORT: { offset: 1e14, span: 1e14 } });
+    expect(Object.isFrozen(LIGHTER_HEDGE_COI_RANGES)).toBe(true);
+    expect(Object.isFrozen(LIGHTER_HEDGE_COI_RANGES.LONG)).toBe(true);
+    expect(Object.isFrozen(LIGHTER_HEDGE_COI_RANGES.SHORT)).toBe(true);
+    expect(LIGHTER_HEDGE_COI_RANGES.LONG.offset + LIGHTER_HEDGE_COI_RANGES.LONG.span).toBe(LIGHTER_HEDGE_COI_RANGES.SHORT.offset);
+    expect(LIGHTER_HEDGE_COI_RANGES.SHORT.offset + LIGHTER_HEDGE_COI_RANGES.SHORT.span - 1).toBeLessThan(LIGHTER_MAX_CLIENT_ORDER_INDEX);
   });
 });

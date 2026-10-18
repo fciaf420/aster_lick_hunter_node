@@ -14,6 +14,26 @@ interface CacheEntry {
 const cache: Map<string, CacheEntry> = new Map();
 const CACHE_TTL = 5000; // 5 seconds
 
+interface LighterHedgeAccountSummary {
+  accountIndex?: number;
+  totalWalletBalance?: string;
+  availableBalance?: string;
+  totalUnrealizedProfit?: string;
+  totalMarginBalance?: string;
+}
+
+// Per-account balances of Lighter hedge mode (getAccountInfo().lighterHedge): longs on one sub-account, shorts on
+// the other
+function lighterHedgeAccounts(hedge: { LONG?: LighterHedgeAccountSummary; SHORT?: LighterHedgeAccountSummary }) {
+  const summary = (account: LighterHedgeAccountSummary | undefined) => ({
+    accountIndex: account?.accountIndex,
+    totalBalance: parseFloat(account?.totalMarginBalance ?? account?.totalWalletBalance ?? '0'),
+    availableBalance: parseFloat(account?.availableBalance ?? '0'),
+    totalPnL: parseFloat(account?.totalUnrealizedProfit ?? '0'),
+  });
+  return { long: summary(hedge.LONG), short: summary(hedge.SHORT) };
+}
+
 export const GET = withAuth(async (request: NextRequest, _user) => {
   const startTime = Date.now();
   const cacheKey = 'balance';
@@ -127,6 +147,8 @@ export const GET = withAuth(async (request: NextRequest, _user) => {
           totalPnL,
           source: 'rest-account',
           timestamp: Date.now(),
+          // Lighter hedge mode: the totals above are both sub-accounts together; each one has its own margin
+          ...(accountData.lighterHedge ? { accounts: lighterHedgeAccounts(accountData.lighterHedge) } : {}),
         };
 
         // Cache the successful response

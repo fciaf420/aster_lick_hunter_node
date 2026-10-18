@@ -17,10 +17,11 @@ It therefore defaults to **testnet**, and the Lighter liquidation feed starts in
 2. [Setup, step by step](#setup-step-by-step)
 3. [Shadow mode for the liquidation feed](#shadow-mode-for-the-liquidation-feed)
 4. [How the bot trades on Lighter](#how-the-bot-trades-on-lighter)
-5. [Dashboard limitations](#dashboard-limitations)
-6. [What is verified and what is not](#what-is-verified-and-what-is-not)
-7. [Live checks (`npm run lighter:check`)](#live-checks-npm-run-lightercheck)
-8. [Troubleshooting](#troubleshooting)
+5. [Hedge mode (two sub-accounts)](#hedge-mode-two-sub-accounts)
+6. [Dashboard limitations](#dashboard-limitations)
+7. [What is verified and what is not](#what-is-verified-and-what-is-not)
+8. [Live checks (`npm run lighter:check`)](#live-checks-npm-run-lightercheck)
+9. [Troubleshooting](#troubleshooting)
 
 ## Before you start
 
@@ -30,7 +31,7 @@ It therefore defaults to **testnet**, and the Lighter liquidation feed starts in
 | One network per process | The native signer keeps one chain id per process. Changing the network takes effect only after a bot restart. |
 | Credentials are per network | API keys, account indexes and nonces differ between testnet and mainnet, so keys created on testnet do not work on mainnet. |
 | Margin asset | USDC. Balances and PnL are reported in USDC. Symbol volume thresholds (`longVolumeThresholdUSDT`, ...) are compared with USDC notionals as if 1 USDC = 1 USDT. |
-| Position mode | One-way only. Lighter nets one position per market, so the bot ignores `HEDGE` and uses one-way mode. |
+| Position mode | One-way per account. Lighter nets one position per market per account, so with one account the bot ignores `HEDGE` and uses one-way mode. Optional **hedge mode** puts the shorts on a second sub-account: see [Hedge mode (two sub-accounts)](#hedge-mode-two-sub-accounts). |
 | Platforms | linux-x64 / arm64 (glibc; Alpine/musl is **not** supported), macOS arm64 / x64, Windows x64. The signer is a 64-bit native library. |
 
 ## Setup, step by step
@@ -292,6 +293,199 @@ does not yet show the position the user stream reported. If the account still sh
 placed at that size and the shortfall is reported as an error; the position manager logs it and its 30 s check replaces
 SL/TP that are smaller than the position.
 
+## Hedge mode (two sub-accounts)
+
+Lighter nets one position per market per account. On a single account the bot therefore runs one-way: an opposite
+signal reduces or flips the open position. **Hedge mode** spreads the two sides over two sub-accounts of the same
+master account. A long and a short on the same symbol can then be open together, each with its own stop loss and take
+profit, as on Aster in hedge mode.
+
+Hedge mode is **off by default**. It needs a second sub-account with its own API key and its own USDC.
+
+### How it works
+
+- **Long account:** the main account (`venues.lighter.accountIndex` and its API key) holds every long.
+- **Short account:** a second sub-account (`venues.lighter.hedge.shortAccount`) holds every short.
+- **Routing by position side:** in hedge mode every bot order carries `positionSide` `LONG` or `SHORT` and goes to
+  that side's account. An order without `LONG` or `SHORT` is refused before anything is sent.
+- **Opening orders:** only a BUY on the long account or a SELL on the short account can open or grow a position.
+- **Everything else is reduce-only:** stop losses, take profits and closes are sent reduce-only, on the same account as
+  their position. So is any SELL on the long account and any BUY on the short account. The exchange therefore never
+  lets them grow or flip a position.
+- **Wrong-direction check:** before every entry the bot reads the target account. If the long account holds a short,
+  or the short account a long (for example after a manual trade), new entries on that account are refused until the
+  position is closed. See [Operations](#operations).
+- **Separate order ids:** each account's bot orders use their own client order index range: below 10^14 on the long
+  account, 10^14 to 2·10^14 on the short account. An order id therefore tells which account it is on, and a cancel goes
+  to that account first.
+- **One merged view:** positions, open orders and balances of both accounts are read together. The bot sees one account
+  with `LONG` and `SHORT` positions. If either account cannot be read, the whole read fails: half a picture would make
+  the bot drop the other side's positions. The user streams of both accounts are merged the same way, and position
+  updates start only once both accounts are known. Every merged REST read of the positions (the bot's 30 s sync, and
+  its re-sync on reconnect) also updates the merged stream. So when one account's stream lags behind (reconnecting, or
+  a late or lost update), an update of the other account never carries an older view of it than the bot already has,
+  and never makes the bot cancel the SL/TP of a live position there.
+- **Margin per side:** the pre-trade margin check reads only the account the entry goes to. A short entry checks the
+  short account's available USDC. `maxPositionMarginUSDT` already applies per side.
+- **Leverage** is set before each entry, on the account that entry goes to. A leverage failure on one account
+  therefore never blocks entries on the other.
+
+### When it is on
+
+Hedge mode is active only when **all four** conditions hold:
+
+1. The trading venue is **Lighter**.
+2. The position mode (`global.positionMode`) is **`HEDGE`**.
+3. Hedge mode is switched on in the Lighter settings (`venues.lighter.hedge.enabled: true`).
+4. The **short account is complete**:
+   - its account index, API key index, private key and public key are all set;
+   - its account index differs from the main account's.
+
+The switch is required because `positionMode` defaults to `HEDGE`. Without it, filling in a short account would
+silently switch a running one-way setup to two accounts.
+
+If the switch is on but the short account is incomplete:
+
+- **Paper mode:** the bot logs a warning and runs one-way on the main account.
+- **Live:** the bot refuses the config with *"Lighter hedge mode needs a complete short account when not in paper mode:
+  ..."*. Fill in the short account or turn hedge mode off.
+
+**A single account stays plain one-way.** Without hedge mode nothing changes. With `positionMode: "HEDGE"`, the bot
+logs at startup that Lighter has no hedge mode and falls back to `ONE_WAY`. An opposite signal then reduces or flips
+the open position, exactly as on Aster in one-way mode.
+
+### Setting up hedge mode
+
+Do this on the network you trade on, testnet first. Sub-accounts, account indexes and API keys are per network.
+
+1. **Create a sub-account.**
+   - In the app: open the sub-accounts page on app.lighter.xyz (or testnet.app.lighter.xyz) and create one.
+   - With the SDK: run lighter-python's `examples/accounts/sub_account_create.py` (`client.create_sub_account()`). It
+     signs with the master account's API key.
+2. **Find its account index.** `GET /api/v1/accountsByL1Address?l1_address=...` lists the master account and every
+   sub-account under `sub_accounts[].index`. The master account has the lowest index.
+
+   ```bash
+   curl "https://testnet.zklighter.elliot.ai/api/v1/accountsByL1Address?l1_address=0xYourWalletAddress"
+   ```
+
+   On mainnet the host is `https://mainnet.zklighter.elliot.ai`.
+3. **Create an API key on the sub-account**, with a key index other than 0.
+   - In the app: create the key with the sub-account selected.
+   - With the SDK: in lighter-python's `examples/system_setup.py`, set the network, your master wallet key,
+     `API_KEY_INDEX` and `ACCOUNT_INDEX` (the sub-account's index), then run it. It registers the key
+     (`change_api_key`) with your master wallet's signature, and the wallet key stays on your machine.
+   - Note the key index, the private key and the public key.
+4. **Transfer USDC to the sub-account.**
+   - In the app: transfer between your sub-accounts.
+   - With the SDK: `client.transfer_same_master_account(...)` (see `examples/accounts/sub_account_transfer_usdc.py`),
+     with `asset_id=client.ASSET_ID_USDC`, and set **both routes to perp**: `route_from=client.ROUTE_PERP`,
+     `route_to=client.ROUTE_PERP`. The example sends to the spot route, and USDC on spot is not perp collateral.
+   - Transfers between sub-accounts are free.
+5. **Enter it in the bot and restart.**
+   - Open `/config`, then the *Exchange* tab, then the **Hedge mode (two sub-accounts)** section of the Lighter
+     settings.
+   - Enter the short account index, API key index, API private key and API public key.
+   - Switch hedge mode on. This also sets the position mode to Hedge; the *Use hedge position mode* button does the
+     same.
+   - The status line reads *Hedge mode active after the bot restarts* when everything is set.
+   - Save, then **restart the bot**.
+6. **Read the startup checks.**
+   - The bot logs `Lighter hedge mode: long account A (key a), short account B (key b)`.
+   - **Per-key checks:** each account runs the checks from
+     [step 5 of the setup](#5-start-the-bot-and-read-the-startup-checks): registered key, matching public key, auth
+     token, not maker-only, tier, journal.
+   - **A failure names its account**, for example `short account 23456 key 4: API key 4 is not registered ...`. In
+     live mode the bot stops; in paper mode it logs the failure and keeps running.
+   - **Same master:** the bot compares the two accounts' L1 addresses. If they differ it warns, but it still starts:
+     the accounts are not sub-accounts of one master.
+   - **Wrong direction:** both accounts are scanned for a position of the wrong direction, and each one raises an
+     alert.
+
+### Example config
+
+```json
+{
+  "global": { "exchange": "lighter", "paperMode": true, "positionMode": "HEDGE" },
+  "venues": {
+    "lighter": {
+      "profile": "testnet",
+      "accountIndex": 12345,
+      "apiKeyIndex": 3,
+      "apiKeyPrivateKey": "0x…80 hex characters…",
+      "apiKeyPublicKey": "0x…80 hex characters…",
+      "hedge": {
+        "enabled": true,
+        "shortAccount": {
+          "accountIndex": 23456,
+          "apiKeyIndex": 4,
+          "apiKeyPrivateKey": "0x…80 hex characters…",
+          "apiKeyPublicKey": "0x…80 hex characters…"
+        }
+      }
+    }
+  }
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `hedge.enabled` | off | Turns hedge mode on, together with `positionMode: "HEDGE"`. |
+| `hedge.shortAccount.accountIndex` | none | The sub-account that holds the shorts. It must differ from `accountIndex`. |
+| `hedge.shortAccount.apiKeyIndex`, `apiKeyPrivateKey`, `apiKeyPublicKey` | none | The short account's own API key, in the same formats as the main key. |
+
+Some rules apply to both accounts:
+
+- **One network:** both accounts use the same `profile`, since there is one network per process.
+- **Where the short key is kept:** the same places as the main key. It is stored in `config.user.json`, left out of
+  the dashboard broadcasts, and never logged. Logs show account and key indexes only.
+
+### Operations
+
+- **Fund both accounts.** Each account has its own margin, available balance and liquidation price, and the bot never
+  moves funds between them. Watch both:
+  - when the short account runs low, short entries are skipped by its margin check while longs continue;
+  - each account can be liquidated on its own.
+
+  The dashboard balance is the sum of both accounts. When `/api/balance` reads the balance over REST
+  (`source: "rest-account"`), it also lists each account under `accounts.long` and `accounts.short`.
+- **Close the main account's shorts before enabling.** The main account becomes the long account. A short already
+  open there counts as a wrong-direction position, and long entries are refused until it is closed.
+- **Wrong-direction alert:** for example, *"Lighter hedge: the long account (12345) holds a short ETHUSDT position
+  (-0.5), the wrong direction for this account (manual trade?)"*. It usually comes from a manual trade, or from a
+  position opened before hedge mode was on.
+  - The position stays protected: the bot keeps reduce-only SL/TP on its account.
+  - New entries on that account (any symbol) are refused until the position is closed, each with a single error and
+    no MARKET fallback (the fallback would be refused the same way). The bot does not close it itself, because a
+    market close of that position would count as an entry. A wrong-direction position already past its take-profit
+    level gets only its stop loss: its take profit would trigger at once, and the market close is refused.
+  - Close it on app.lighter.xyz, or let its stop loss or take profit close it. The alert re-arms once the account is
+    clear.
+- **Switching back to one-way** (hedge mode off, or position mode `ONE_WAY`, then a restart): the bot only trades and
+  manages the main account.
+  - Positions left on the short account keep their exchange SL/TP only until those expire: Lighter trigger orders
+    expire 28 days after they are placed, and the bot no longer renews them, nor resizes them when you change a
+    position by hand. After that, a position left there has no stop loss.
+  - The bot warns at startup: *"short account N is not managed in one-way mode ..."*, and lists the positions left
+    there when it can read the account.
+  - Close the short account's positions first.
+- **Changes need a restart:** turning hedge mode on or off, changing the short account, and changing the network. When
+  such a change is saved, the bot logs *"restart the bot to apply them"*.
+- **Dashboard:** positions of both accounts are listed, `LONG` from the long account and `SHORT` from the short
+  account. Closing from the dashboard is still refused (HTTP 409).
+
+### Limitations
+
+- **The two accounts can trade with each other.** Lighter's self-trade check works per account. A long entry can
+  therefore fill against a resting order of the short account, and the other way round. Both sides pay fees on a trade
+  that nets to nothing.
+- **Four private WebSocket connections** instead of two: the bot keeps two per account.
+- **Rate limits:** each account has its own transaction rate limiter (`sendTxPerMin`) and its own nonce sequence.
+- **`maxOpenPositions` counts a hedged pair once:** a long and a short on the same symbol count as one position.
+- **Leverage is set per account,** before each entry on that account. If it fails, that entry is not placed; entries
+  on the other account are not affected.
+- **Emulated, not native:** the venue catalog still lists Lighter as one-way, since Lighter itself has no hedge mode.
+
 ## Dashboard limitations
 
 Only the bot process can sign, so the web UI talks to Lighter **read-only**:
@@ -400,3 +594,8 @@ exact requests in the spec's §9 table, using a testnet sub-account, and record 
 | `X has no Lighter market: not on the Lighter symbol allowlist` | Add the symbol to your config, or map it with `symbolOverrides`. |
 | `mark-ratio guard: ... is more than 2.00% away from 1` | The two venues quote different instruments or scales for that symbol. Fix the mapping, or remove the symbol. |
 | `Closing Lighter positions from the dashboard is not supported` | Close it on app.lighter.xyz, or let the bot's stop loss or take profit close it. |
+| `Lighter hedge mode needs a complete short account when not in paper mode: ...` | Fill in all four short-account fields in the hedge mode section, or turn hedge mode off. |
+| `short account index must differ from the main (long) account index` | Use a different sub-account for the shorts: the main account holds the longs. |
+| `Lighter hedge mode startup checks failed: short account N key K: ...` | The named account's key failed a startup check. Fix it as for the main key (rows above): wrong network, account index or key index. |
+| `... holds a short ETHUSDT position (...), the wrong direction for this account` | Close that position on app.lighter.xyz. New entries on that account resume once it is closed. See [Operations](#operations). |
+| `Lighter: short account N is not managed in one-way mode` | Hedge mode is off but a short account is configured. Its SL/TP expire after 28 days and are not renewed: close the positions the warning lists, or turn hedge mode on and restart. |

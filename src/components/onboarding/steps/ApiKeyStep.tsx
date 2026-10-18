@@ -216,6 +216,9 @@ export function ApiKeyStep({ onNext, onBack, initialVenue, initialLighter }: Api
           {isLighter ? (
             <div className="space-y-4">
               <LighterSettings value={lighter} onChange={setLighter} showCredentials idPrefix="onboarding-lighter" />
+              <p className="text-xs text-muted-foreground">
+                Want separate long and short positions? Set up hedge mode with a second sub-account later on the config page.
+              </p>
 
               <div className="flex gap-3">
                 <Button variant="outline" onClick={onBack}>
