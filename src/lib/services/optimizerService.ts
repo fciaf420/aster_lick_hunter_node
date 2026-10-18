@@ -34,7 +34,13 @@ interface OptimizationConfig {
   };
   capitalAllocation?: number;
   symbols?: string[];
+  // Whose liquidations and prices to analyse (default: global.exchange)
+  venue?: OptimizerVenue;
+  // Lighter: also count detections the feed did not trade (gates, staleness); default only tradable ones
+  includeSkipped?: boolean;
 }
+export const OPTIMIZER_VENUES = ['aster', 'lighter'] as const;
+export type OptimizerVenue = typeof OPTIMIZER_VENUES[number];
 interface OptimizationResults {
   timestamp: string;
   summary: {
@@ -263,7 +269,9 @@ async function runOptimization(jobId: string): Promise<void> {
       FORCE_OPTIMIZER_CONFIRM: '0',
       OPTIMIZER_WEIGHT_PNL: String(weightPnl),
       OPTIMIZER_WEIGHT_SHARPE: String(weightSharpe),
-      OPTIMIZER_WEIGHT_DRAWDOWN: String(weightDrawdown)
+      OPTIMIZER_WEIGHT_DRAWDOWN: String(weightDrawdown),
+      OPTIMIZER_VENUE: job.config.venue ?? '',
+      OPTIMIZER_INCLUDE_SKIPPED: job.config.includeSkipped ? '1' : '0'
     };
     const optimizerScriptPath = path.join(process.cwd(), 'optimize-config.js');
     if (!fs.existsSync(optimizerScriptPath)) {

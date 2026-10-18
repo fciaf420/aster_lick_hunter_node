@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { DashboardLayout } from '@/components/dashboard-layout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Target, TrendingUp, Zap } from 'lucide-react';
-import { OptimizerConfigPanel } from '@/components/optimizer/OptimizerConfigPanel';
+import { OptimizerConfigPanel, type OptimizerDataOptions } from '@/components/optimizer/OptimizerConfigPanel';
 import { OptimizerProgressBar } from '@/components/optimizer/OptimizerProgressBar';
 import { BeforeAfterComparison } from '@/components/optimizer/BeforeAfterComparison';
 import { SymbolRecommendationsTable } from '@/components/optimizer/SymbolRecommendationsTable';
@@ -39,7 +39,7 @@ export default function OptimizerPage() {
     setDrawdownWeight(drawdown);
   };
 
-  const handleStartOptimization = async (selectedSymbols: string[]) => {
+  const handleStartOptimization = async (selectedSymbols: string[], dataOptions: OptimizerDataOptions) => {
     setIsStarting(true);
 
     try {
@@ -53,6 +53,8 @@ export default function OptimizerPage() {
             drawdown: drawdownWeight,
           },
           symbols: selectedSymbols,
+          venue: dataOptions.venue,
+          includeSkipped: dataOptions.includeSkipped,
         }),
       });
 

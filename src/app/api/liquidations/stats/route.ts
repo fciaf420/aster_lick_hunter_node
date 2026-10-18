@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { liquidationStorage } from '@/lib/services/liquidationStorage';
+import { liquidationStorage, parseLiquidationScope } from '@/lib/services/liquidationStorage';
 import { ensureDbInitialized } from '@/lib/db/initDb';
 
 export async function GET(request: NextRequest) {
@@ -8,6 +8,11 @@ export async function GET(request: NextRequest) {
     await ensureDbInitialized();
 
     const searchParams = request.nextUrl.searchParams;
+
+    const scope = parseLiquidationScope(searchParams);
+    if ('error' in scope) {
+      return NextResponse.json({ success: false, error: scope.error }, { status: 400 });
+    }
 
     const timeWindow = searchParams.get('timeWindow');
     let timeWindowSeconds = 86400; // Default to 24 hours
@@ -31,7 +36,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const stats = await liquidationStorage.getStatistics(timeWindowSeconds);
+    const stats = await liquidationStorage.getStatistics(timeWindowSeconds, scope);
 
     return NextResponse.json({
       success: true,

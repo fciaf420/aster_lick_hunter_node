@@ -9,6 +9,7 @@ import { initializePriceService, stopPriceService, getPriceService } from '../li
 import { vwapStreamer } from '../lib/services/vwapStreamer';
 import { execSync } from 'child_process';
 import { cleanupScheduler } from '../lib/services/cleanupScheduler';
+import { liquidationStorage } from '../lib/services/liquidationStorage';
 import { db } from '../lib/db/database';
 import { configManager } from '../lib/services/configManager';
 import pnlService from '../lib/services/pnlService';
@@ -440,7 +441,15 @@ logErrorWithTimestamp('⚠️  Position Manager failed to start:', error.message
 
       // Initialize Hunter with the configured liquidation feed (Lighter: shadow mode unless switched live;
       // across venues the feed runs behind the mark-ratio guard)
-      const liquidationFeed = createLiquidationSource(this.config, { getConfig: () => this.config! });
+      // Every Lighter detection is recorded, traded or not (shadow mode, dropped by a gate), for the optimizer
+      const liquidationFeed = createLiquidationSource(this.config, {
+        getConfig: () => this.config!,
+        lighterSourceOptions: {
+          onDetection: detection => {
+            void liquidationStorage.recordLighterDetection(detection);
+          },
+        },
+      });
       this.hunter = new Hunter(this.config, this.isHedgeMode, exchange, liquidationFeed);
 
       // Inject status broadcaster for order events
@@ -522,8 +531,9 @@ logErrorWithTimestamp('❌ Hunter error:', error);
 logWithTimestamp('✅ Liquidation Hunter started');
 
       // Start the cleanup scheduler for liquidation database
-      cleanupScheduler.start();
-logWithTimestamp('✅ Database cleanup scheduler started (7-day retention)');
+      cleanupScheduler.start(() => this.config?.global.liquidationRetentionDays);
+      const retentionDays = cleanupScheduler.retentionDays();
+logWithTimestamp(`✅ Database cleanup scheduler started (${retentionDays > 0 ? `${retentionDays}-day retention` : 'retention off: history kept forever'})`);
 
       this.isRunning = true;
       this.statusBroadcaster.setRunning(true);
