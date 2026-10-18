@@ -137,7 +137,9 @@ export default function ConfigProvider({ children }: { children: React.ReactNode
         setConfig(newConfig);
       } else {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(`Failed to save config: ${response.status} ${response.statusText}${errorData.error ? ` - ${errorData.error}` : ''}`);
+        // The server says what is wrong in details (never with a credential in it): pass it on
+        const reason = [errorData.error, errorData.details].filter(Boolean).join(': ');
+        throw new Error(`Failed to save config: ${response.status} ${response.statusText}${reason ? ` - ${reason}` : ''}`);
       }
     } catch (error) {
       console.error('Failed to save config:', error);

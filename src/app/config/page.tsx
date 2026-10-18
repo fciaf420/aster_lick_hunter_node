@@ -38,7 +38,9 @@ export default function ConfigPage() {
     } catch (error) {
       console.error('Failed to save config:', error);
       setSaveStatus('error');
-      toast.error('Failed to save configuration');
+      toast.error('Failed to save configuration', {
+        description: error instanceof Error ? error.message : undefined,
+      });
       setTimeout(() => setSaveStatus('idle'), 3000);
     }
   };
