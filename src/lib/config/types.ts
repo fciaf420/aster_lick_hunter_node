@@ -77,6 +77,7 @@ export const globalConfigSchema = z.object({
   maxOpenPositions: z.number().min(1).optional(),
   useThresholdSystem: z.boolean().optional(),
   hunterCooldownMs: z.number().min(0).optional(),
+  liquidationRetentionDays: z.number().min(0).optional(),
   exchange: z.enum(VENUE_IDS).optional(),
   liquidationSource: z.enum(LIQUIDATION_SOURCE_IDS).optional(),
   server: serverConfigSchema,

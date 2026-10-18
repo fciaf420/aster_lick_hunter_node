@@ -6,6 +6,7 @@ const path = require('path');
 const axios = require('axios');
 const crypto = require('crypto');
 const readline = require('readline');
+const venueScope = require('./scripts/optimizer-venue');
 
 // API request configuration
 const API_TIMEOUT_MS = 10000; // 10 second timeout
@@ -103,8 +104,8 @@ const formatWeightPercent = (value) => {
   return `${rounded.toFixed(1)}%`;
 };
 
-// Connect to the database
-const dbPath = path.join(__dirname, 'data', 'liquidations.db');
+// Connect to the database (LIQUIDATIONS_DB_PATH: the same override the bot and lighter:backfill read)
+const dbPath = process.env.LIQUIDATIONS_DB_PATH || path.join(__dirname, 'data', 'liquidations.db');
 const db = new Database(dbPath, { readonly: true });
 
 // Load current configuration with fallback to default
@@ -127,6 +128,21 @@ function loadConfig() {
 }
 
 const config = loadConfig();
+
+// Venue whose liquidations and prices are analysed: --venue aster|lighter (OPTIMIZER_VENUE), default
+// global.exchange. Every liquidations query below reads only that venue's rows (scripts/optimizer-venue.js).
+let venueOptions;
+try {
+  venueOptions = venueScope.parseOptimizerVenueOptions(process.argv.slice(2), process.env, config);
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
+}
+const OPTIMIZER_VENUE = venueOptions.venue;
+venueScope.scopeLiquidationsToVenue(db, venueOptions);
+const getLighterPrices = OPTIMIZER_VENUE === 'lighter'
+  ? venueScope.createLighterPriceSource({ db, cwd: __dirname })
+  : null;
 
 // API helper functions for balance fetching
 function buildSignedQuery(params, credentials) {
@@ -276,6 +292,11 @@ const MAX_KLINE_LIMIT = 1500;
 const priceDataCache = new Map();
 
 async function getCachedHistoricalPrices(symbol, interval = '1m', totalCandles = interval === '1m' ? 10080 : 1000) {
+  // Lighter: candles table (lighter:backfill), gaps fetched from Lighter's public API
+  if (getLighterPrices) {
+    return getLighterPrices(symbol, interval, totalCandles);
+  }
+
   const cacheKey = `${symbol}:${interval}:${totalCandles}`;
   if (priceDataCache.has(cacheKey)) {
     return priceDataCache.get(cacheKey);
@@ -352,9 +373,14 @@ async function getCachedHistoricalPrices(symbol, interval = '1m', totalCandles =
 
 console.log('???? LIQUIDATION BOT OPTIMIZATION TOOL');
 console.log('====================================\n');
+if (OPTIMIZER_VENUE === 'lighter') {
+  console.log(`Venue: Lighter (liquidations recorded live or by lighter:backfill${venueOptions.includeSkipped ? ', including detections the feed did not trade' : ''})`);
+  console.log(`ℹ️  ${venueScope.LIGHTER_DATA_NOTE}`);
+  console.log(`ℹ️  ${venueScope.bookCheckNote(db)}\n`);
+}
 
 // Check liquidation price data coverage
-function analyzePriceDataCoverage() {
+function analyzePriceDataCoverage(symbol = 'ASTERUSDT') {
   console.log('???? PRICE DATA COVERAGE ANALYSIS');
   console.log('===============================\n');
 
@@ -365,12 +391,12 @@ function analyzePriceDataCoverage() {
       volume_usdt,
       side
     FROM liquidations
-    WHERE symbol = 'ASTERUSDT'
+    WHERE symbol = ?
     ORDER BY event_time
     LIMIT 10
-  `).all();
+  `).all(symbol);
 
-  console.log('Sample ASTERUSDT liquidation prices:');
+  console.log(`Sample ${symbol} liquidation prices:`);
   console.log('Time (ms)        | Price   | Volume  | Side | Gap (min)');
   console.log('-----------------|---------|---------|------|----------');
 
@@ -391,17 +417,20 @@ function analyzePriceDataCoverage() {
       MIN(price) as min_price,
       MAX(price) as max_price
     FROM liquidations
-    WHERE symbol = 'ASTERUSDT'
-  `).get();
+    WHERE symbol = ?
+  `).get(symbol);
 
   console.log();
-  console.log(`???? ASTERUSDT Price Coverage:`);
+  console.log(`???? ${symbol} Price Coverage:`);
   console.log(`   Total Events: ${coverage.total_events}`);
 
   if (coverage.total_events === 0) {
     console.log(`   ⚠️  No liquidation data available for analysis`);
     console.log(`   ℹ️  The optimizer requires historical liquidation data to function`);
     console.log(`   ℹ️  Please run the bot to collect data, or import existing data`);
+    if (OPTIMIZER_VENUE === 'lighter') {
+      console.log(`   ℹ️  For Lighter history: npm run lighter:backfill (see docs/LIGHTER-HISTORY.md)`);
+    }
     console.log();
     throw new Error('Insufficient liquidation data: 0 events found. The optimizer requires historical data to analyze.');
   }
@@ -2436,18 +2465,32 @@ async function main() {
     console.log(`???? Using scoring weights (PnL / Sharpe / Drawdown): ${weightSummary}${weightLabel}\n`);
 
     console.log('???? Fetching complete account snapshot...\n');
-    const [balance, accountInfo, positions] = await Promise.all([
-      getAccountBalance(config.api),
-      getAccountInfo(config.api),
-      getCurrentPositions(config.api)
-    ]);
+    let balance, accountInfo, positions;
+    if (OPTIMIZER_VENUE === 'lighter') {
+      const snapshot = await venueScope.getLighterAccountSnapshot(config, async (url) => (await axios.get(url, { timeout: API_TIMEOUT_MS })).data);
+      ({ balance, accountInfo, positions } = snapshot);
+    } else {
+      [balance, accountInfo, positions] = await Promise.all([
+        getAccountBalance(config.api),
+        getAccountInfo(config.api),
+        getCurrentPositions(config.api)
+      ]);
+    }
 
     // Core analyses
-    const _avgGap = analyzePriceDataCoverage();
+    const configuredSymbols = Object.keys(config.symbols || {});
+    const coverageSymbol = OPTIMIZER_VENUE === 'lighter'
+      ? (venueScope.busiestSymbol(db, configuredSymbols) || configuredSymbols[0] || 'ASTERUSDT')
+      : 'ASTERUSDT';
+    const _avgGap = analyzePriceDataCoverage(coverageSymbol);
     const capitalInfo = analyzeCapitalAllocation(balance, accountInfo, positions);
     analyzeLiquidationCascades();
     analyzeCurrentConfig();
-    await analyzeRealTradingHistory(config.api);
+    if (OPTIMIZER_VENUE === 'lighter') {
+      console.log('Real trading history: read from Aster only, skipped for Lighter\n');
+    } else {
+      await analyzeRealTradingHistory(config.api);
+    }
     optimizeThresholds();
     rankSymbolProfitability();
 

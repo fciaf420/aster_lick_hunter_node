@@ -11,6 +11,31 @@ import {
 } from '../exchange/lighter/ws';
 import type { LiquidationSource, LiquidationSourceHooks } from './types';
 import { lighterTimestampToMs } from '../exchange/lighter/time';
+import {
+  LIGHTER_LLP_ONLY_REASON,
+  LIGHTER_TX_BOTH_SIDES_FAILURE,
+  formatNumber,
+  isRecord,
+  lighterCrossCheckNotes,
+  lighterExcludedAccounts,
+  lighterGroupKey,
+  lighterLiquidationEvent,
+  lighterPositionGateFailures,
+  lighterSawSignedSize,
+  lighterTradeId,
+  marketIdValue,
+  nonNegativeNumber,
+  parseLighterLiquidationFill,
+  positiveNumber,
+  resolveLighterMarket,
+  summarizeLighterFills,
+  tidy,
+  type LighterForcedSide,
+  type LighterLiquidationFill,
+  type LighterLiquidationMarket,
+  type LighterMarketResolver,
+} from './lighterLiquidationCore';
+import { setLiquidationOrigin } from './origin';
 
 // Lighter liquidation feed (spec §2): public trade/{marketId} channels -> LiquidationEvent.
 //
@@ -42,27 +67,15 @@ export const LIGHTER_LIQUIDATION_GROUP_MAX_WAIT_MS = 1_000;
 export const LIGHTER_TRADE_CHANNEL_FALLBACK_MS = 10_000;  // No ack on trade/{id} -> also try trade_fe/{id}
 export const LIGHTER_MARKET_RESYNC_INTERVAL_MS = 60_000;
 export const LIGHTER_MARKET_STATS_CHANNEL = 'market_stats/all';
-// lighter-go types/txtypes/constants.go InsuranceFundOperatorAccountIndex
-export const LIGHTER_INSURANCE_FUND_OPERATOR_ACCOUNT_INDEX = 1;
-// 2^48 - 1: the "no account" value of market_config.insurance_fund_account_index
-const NIL_ACCOUNT_INDEX = 281474976710655;
+export { LIGHTER_INSURANCE_FUND_OPERATOR_ACCOUNT_INDEX } from './lighterLiquidationCore';
 const TIMESTAMP_SANITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const UNMAPPED_LOG_INTERVAL_MS = 60_000;
 
 type TradeChannelKind = 'trade' | 'trade_fe';
-type ForcedSide = 'BUY' | 'SELL';
+type ForcedSide = LighterForcedSide;
 
-// What the liquidation source needs to know about a market. The markets module builds it from the symbol map
-// (botSymbol, multiplier) and the market metadata (insurance fund account).
-export interface LighterLiquidationMarket {
-  botSymbol: string;
-  multiplier?: number;                      // Bot units per Lighter unit (NOTUSDT -> 1000NOT = 1000). Default 1.
-  insuranceFundAccountIndex?: number | null; // market_config.insurance_fund_account_index
-  disabledReason?: string;                  // Set to keep the market out of trading (inactive, mark-ratio guard)
-}
-
-// marketId -> bot symbol (or the richer form); undefined = unmapped, never traded
-export type LighterMarketResolver = (marketId: number) => string | LighterLiquidationMarket | undefined;
+// What the liquidation source needs to know about a market (lighterLiquidationCore.ts)
+export type { LighterLiquidationMarket, LighterMarketResolver };
 
 type ValueOrGetter<T> = T | (() => T);
 
@@ -132,9 +145,7 @@ export type LighterLiquidationAlert =
 export { lighterTimestampToMs };
 
 // Forced order side from the taker rule (§2.4, INFERRED): taker sold into bids -> forced SELL
-export function lighterForcedSide(isMakerAsk: boolean): ForcedSide {
-  return isMakerAsk ? 'BUY' : 'SELL';
-}
+export { lighterForcedSide } from './lighterLiquidationCore';
 
 // Insertion-ordered LRU of trade ids
 export class TradeIdLru {
@@ -162,24 +173,7 @@ export class TradeIdLru {
   }
 }
 
-interface Fill {
-  tradeId: string;
-  marketId: number;
-  txHash: string | null;
-  takerOrderId: string;
-  side: ForcedSide;
-  size: number;
-  price: number;
-  usdAmount: number | null;
-  time: number;
-  timeFallback: boolean;
-  aheadMs: number;          // How far the trade timestamp was ahead of the local clock (clamped to now)
-  askAccount: number | null;
-  bidAccount: number | null;
-  takerSignChanged: boolean | null;
-  takerSizeBefore: number | null;
-  mismatchedChannelMarketId: number | null; // Set when the row's market_id differs from the channel's
-}
+type Fill = LighterLiquidationFill;
 
 interface Group {
   key: string;
@@ -230,49 +224,6 @@ const STAT_FIELDS: ReadonlyArray<{ key: StatKey; field: string; parse: (value: u
 ];
 const PRICE_STAT_KEYS: ReadonlyArray<StatKey> = ['bestBid', 'bestAsk', 'markPrice'];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function positiveNumber(value: unknown): number | null {
-  if (typeof value !== 'number' && typeof value !== 'string') return null;
-  const n = typeof value === 'string' ? (value.trim() === '' ? NaN : Number(value)) : value;
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function nonNegativeNumber(value: unknown): number | null {
-  const n = finiteNumber(value);
-  return n !== null && n >= 0 ? n : null;
-}
-
-function finiteNumber(value: unknown): number | null {
-  if (typeof value !== 'number' && typeof value !== 'string') return null;
-  const n = typeof value === 'string' ? (value.trim() === '' ? NaN : Number(value)) : value;
-  return Number.isFinite(n) ? n : null;
-}
-
-function accountIndex(value: unknown): number | null {
-  const n = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
-  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : null;
-}
-
-function marketIdValue(value: unknown): number | null {
-  const n = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
-  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : null;
-}
-
-function idString(strValue: unknown, numValue: unknown): string | null {
-  if (typeof strValue === 'string' && strValue !== '') return strValue;
-  if (typeof numValue === 'number' && Number.isFinite(numValue)) return String(numValue);
-  if (typeof numValue === 'string' && numValue !== '') return numValue;
-  return null;
-}
-
-// Trim float noise from sums (0.1 + 0.2) without touching real precision
-function tidy(value: number): number {
-  return Number(value.toPrecision(12));
-}
-
 function readValue<T>(value: ValueOrGetter<T> | undefined): T | undefined {
   return typeof value === 'function' ? (value as () => T)() : value;
 }
@@ -300,10 +251,6 @@ function tradeFrameKind(type: unknown): 'snapshot' | 'update' | null {
     default:
       return null;
   }
-}
-
-function formatNumber(value: number): string {
-  return Number.isFinite(value) ? String(tidy(value)) : String(value);
 }
 
 export class LighterLiquidationSource implements LiquidationSource {
@@ -653,7 +600,7 @@ export class LighterLiquidationSource implements LiquidationSource {
       // Snapshots carry recent history: never emit, only remember the ids
       let seeded = 0;
       for (const row of rows) {
-        const tradeId = idString(row.trade_id_str, row.trade_id);
+        const tradeId = lighterTradeId(row);
         if (tradeId === null) continue;
         this.seen.add(tradeId);
         seeded++;
@@ -668,7 +615,7 @@ export class LighterLiquidationSource implements LiquidationSource {
 
     const touched = new Set<Group>();
     for (const row of rows) {
-      const tradeId = idString(row.trade_id_str, row.trade_id);
+      const tradeId = lighterTradeId(row);
       if (tradeId === null) {
         logWarnWithTimestamp('Lighter liquidations: dropping a liquidation row without trade_id (cannot dedupe):', JSON.stringify(row));
         continue;
@@ -707,60 +654,18 @@ export class LighterLiquidationSource implements LiquidationSource {
   }
 
   private parseFill(row: Record<string, unknown>, tradeId: string, channelMarketId: number | null): Fill | null {
-    const rowMarketId = marketIdValue(row.market_id);
-    const marketId = rowMarketId ?? channelMarketId;
-    const reject = (why: string) => {
-      logWarnWithTimestamp(`Lighter liquidations: dropping liquidation fill ${tradeId}: ${why}`);
-      return null;
-    };
-    if (marketId === null) return reject('no market id');
-    if (typeof row.is_maker_ask !== 'boolean') return reject(`is_maker_ask is ${JSON.stringify(row.is_maker_ask)}, not a boolean`);
-    const size = positiveNumber(row.size);
-    const price = positiveNumber(row.price);
-    if (size === null) return reject(`bad size ${JSON.stringify(row.size)}`);
-    if (price === null) return reject(`bad price ${JSON.stringify(row.price)}`);
-
-    const isMakerAsk = row.is_maker_ask;
-    const takerOrderId = (isMakerAsk ? idString(row.bid_id_str, row.bid_id) : idString(row.ask_id_str, row.ask_id)) ?? '?';
-    const txHash = typeof row.tx_hash === 'string' && row.tx_hash !== '' ? row.tx_hash : null;
-
     // timestamp, else transaction_time; one more than 24 h off the local clock is unusable (receive time is
-    // used and noted). A timestamp ahead of the clock is clamped to now so the fill can't outlive the hunter's
-    // threshold window.
-    const now = this.now();
-    let time: number | null = null;
-    for (const candidate of [row.timestamp, row.transaction_time]) {
-      const ms = lighterTimestampToMs(candidate);
-      if (ms !== null && Math.abs(ms - now) <= TIMESTAMP_SANITY_WINDOW_MS) {
-        time = ms;
-        break;
-      }
+    // used and noted). A timestamp ahead of the clock is clamped to now.
+    const parsed = parseLighterLiquidationFill(row, tradeId, channelMarketId, { now: this.now, timestampWindowMs: TIMESTAMP_SANITY_WINDOW_MS });
+    if ('error' in parsed) {
+      logWarnWithTimestamp(`Lighter liquidations: dropping liquidation fill ${tradeId}: ${parsed.error}`);
+      return null;
     }
-    const aheadMs = time !== null && time > now ? time - now : 0;
-
-    return {
-      tradeId,
-      marketId,
-      txHash,
-      takerOrderId,
-      side: lighterForcedSide(isMakerAsk),
-      size,
-      price,
-      usdAmount: positiveNumber(row.usd_amount),
-      time: time === null ? now : Math.min(time, now),
-      timeFallback: time === null,
-      aheadMs,
-      askAccount: accountIndex(row.ask_account_id),
-      bidAccount: accountIndex(row.bid_account_id),
-      takerSignChanged: typeof row.taker_position_sign_changed === 'boolean' ? row.taker_position_sign_changed : null,
-      takerSizeBefore: finiteNumber(row.taker_position_size_before),
-      mismatchedChannelMarketId:
-        rowMarketId !== null && channelMarketId !== null && rowMarketId !== channelMarketId ? channelMarketId : null,
-    };
+    return parsed.fill;
   }
 
   private addToGroup(fill: Fill): Group {
-    const key = `${fill.marketId}:${fill.txHash ?? `trade-${fill.tradeId}`}:${fill.takerOrderId}`;
+    const key = lighterGroupKey(fill);
     let group = this.groups.get(key);
     if (!group) {
       group = {
@@ -823,30 +728,15 @@ export class LighterLiquidationSource implements LiquidationSource {
     const now = this.now();
     const resolved = this.resolveMarket(group.marketId);
     const market = resolved.market;
-    const excludedAccounts = this.excludedAccounts(market);
-    const isExcluded = (fill: Fill) =>
-      (fill.askAccount !== null && excludedAccounts.has(fill.askAccount)) ||
-      (fill.bidAccount !== null && excludedAccounts.has(fill.bidAccount));
-    const tradable = group.fills.filter((fill) => !isExcluded(fill));
-    const excluded = group.fills.filter(isExcluded);
-    const counted = tradable.length > 0 ? tradable : group.fills;
-
-    const sizeSum = counted.reduce((sum, fill) => sum + fill.size, 0);
-    const notional = counted.reduce((sum, fill) => sum + fill.size * fill.price, 0);
-    const samePrice = counted.every((fill) => fill.price === counted[0].price);
-    const quantity = tidy(sizeSum);
-    const averagePrice = samePrice ? counted[0].price : tidy(notional / sizeSum);
-    const eventTime = Math.max(...counted.map((fill) => fill.time));
+    const { tradable, excluded, counted, quantity, averagePrice, eventTime, usdAmount: usdSum } =
+      summarizeLighterFills(group.fills, this.excludedAccounts(market));
     const ageMs = now - eventTime;
-    const usdSum = counted.every((fill) => fill.usdAmount !== null)
-      ? counted.reduce((sum, fill) => sum + (fill.usdAmount ?? 0), 0)
-      : notional;
 
     const dropReasons: string[] = [];
     if (!market) dropReasons.push(resolved.error ?? `market ${group.marketId} is not mapped to a configured symbol`);
     else if (market.disabledReason) dropReasons.push(`market disabled: ${market.disabledReason}`);
     if (tradable.length === 0) {
-      dropReasons.push('every fill is against the LLP / insurance fund (takeover, not a book liquidation)');
+      dropReasons.push(LIGHTER_LLP_ONLY_REASON);
     }
     if (ageMs > this.maxEventAgeMs) dropReasons.push(`stale: ${ageMs} ms old (limit ${this.maxEventAgeMs} ms)`);
 
@@ -872,29 +762,14 @@ export class LighterLiquidationSource implements LiquidationSource {
     notes.push(this.bboNote(group.side, counted, bbo));
     dropReasons.push(...this.sideVerificationFailures(group, counted, bbo, firstFillTime));
 
+    const live = this.liveMode;
     let event: LiquidationEvent | null = null;
     if (market) {
-      const multiplier = market.multiplier ?? 1;
-      const botQuantity = multiplier === 1 ? quantity : tidy(quantity * multiplier);
-      const botPrice = multiplier === 1 ? averagePrice : tidy(averagePrice / multiplier);
-      event = {
-        symbol: market.botSymbol,
-        side: group.side,
-        orderType: 'LIMIT',
-        quantity: botQuantity,
-        price: botPrice,
-        averagePrice: botPrice,
-        orderStatus: 'FILLED',
-        orderLastFilledQuantity: botQuantity,
-        orderFilledAccumulatedQuantity: botQuantity,
-        orderTradeTime: eventTime,
-        eventTime,
-        qty: botQuantity,
-        time: eventTime,
-      };
+      event = lighterLiquidationEvent(market, group.side, quantity, averagePrice, eventTime);
+      // Storage files the hunter's copy and the detection record under the same id
+      setLiquidationOrigin(event, { venue: 'lighter', externalId: group.key, mode: live ? 'live' : 'shadow' });
     }
 
-    const live = this.liveMode;
     const emit = live && dropReasons.length === 0 && event !== null && this.onLiquidation !== null;
     const detection: LighterLiquidationDetection = {
       key: group.key,
@@ -943,25 +818,11 @@ export class LighterLiquidationSource implements LiquidationSource {
     // A tx whose fills sit on both sides of the book is not a one-directional forced order
     if (group.fills[0].txHash !== null) {
       const sides = this.txSides.get(this.txSideKey(group.marketId, group.fills[0].txHash))?.sides;
-      if (sides && sides.size > 1) failures.push('side unverified: tx has fills on both sides');
+      if (sides && sides.size > 1) failures.push(LIGHTER_TX_BOTH_SIDES_FAILURE);
     }
 
     // The taker must have held a position that each fill reduced without flipping
-    if (fills.some((fill) => fill.takerSignChanged === null || fill.takerSizeBefore === null)) {
-      failures.push('side unverified: taker_position_size_before / taker_position_sign_changed missing');
-    }
-    if (fills.some((fill) => fill.takerSignChanged === true)) {
-      failures.push('side unverified: taker_position_sign_changed=true (a liquidation never flips the taker)');
-    }
-    if (fills.some((fill) => fill.takerSizeBefore !== null && Math.abs(fill.takerSizeBefore) < fill.size)) {
-      failures.push('side unverified: fill larger than the taker position before it');
-    }
-    const sizes = fills.map((fill) => fill.takerSizeBefore).filter((size): size is number => size !== null);
-    if (side === 'SELL' && sizes.some((size) => size < 0)) {
-      failures.push('side unverified: forced SELL but the taker was short');
-    } else if (side === 'BUY' && this.sawSignedSizeBefore && sizes.some((size) => size > 0)) {
-      failures.push('side unverified: forced BUY but the taker was long');
-    }
+    failures.push(...lighterPositionGateFailures(side, fills, this.sawSignedSizeBefore));
 
     // Book check against the best bid / ask from before the first fill (bookBefore): a forced SELL fills at or
     // below the mid, a forced BUY at or above it (every fill)
@@ -984,22 +845,8 @@ export class LighterLiquidationSource implements LiquidationSource {
 
   // §2.4 cross-checks (a) and (b), also logged as notes for diagnosis (the gates above decide trading)
   private crossChecks(side: ForcedSide, fills: Fill[]): string[] {
-    const notes: string[] = [];
-    if (fills.some((fill) => fill.takerSignChanged === true)) {
-      notes.push('CHECK: taker_position_sign_changed=true (a liquidation should not flip the taker)');
-    }
-    for (const fill of fills) {
-      if (fill.takerSizeBefore !== null && fill.takerSizeBefore < 0) this.sawSignedSizeBefore = true;
-    }
-    const sizes = fills.map((fill) => fill.takerSizeBefore).filter((size): size is number => size !== null);
-    if (sizes.length > 0) {
-      if (side === 'SELL' && sizes.some((size) => size < 0)) {
-        notes.push(`CHECK: forced SELL but taker_position_size_before is negative (${sizes.join(', ')}): the taker was short`);
-      } else if (side === 'BUY' && this.sawSignedSizeBefore && sizes.some((size) => size > 0)) {
-        notes.push(`CHECK: forced BUY but taker_position_size_before is positive (${sizes.join(', ')}): the taker was long`);
-      }
-    }
-    return notes;
+    if (lighterSawSignedSize(fills)) this.sawSignedSizeBefore = true;
+    return lighterCrossCheckNotes(side, fills, this.sawSignedSizeBefore);
   }
 
   // §2.4 cross-check (c): a forced SELL prints at or below the best bid, a forced BUY at or above the best ask
@@ -1099,37 +946,15 @@ export class LighterLiquidationSource implements LiquidationSource {
   }
 
   private resolveMarket(marketId: number): { market: LighterLiquidationMarket | null; error?: string } {
-    let resolved: string | LighterLiquidationMarket | undefined;
-    try {
-      resolved = this.options.resolveSymbol(marketId);
-    } catch (error) {
-      return { market: null, error: `symbol lookup failed: ${error instanceof Error ? error.message : String(error)}` };
-    }
-    if (resolved === undefined || resolved === null) return { market: null };
-    if (typeof resolved === 'string') {
-      return resolved === '' ? { market: null } : { market: { botSymbol: resolved } };
-    }
-    if (typeof resolved.botSymbol !== 'string' || resolved.botSymbol === '') return { market: null };
-    const multiplier = resolved.multiplier ?? 1;
-    if (!Number.isFinite(multiplier) || multiplier <= 0) {
-      return { market: null, error: `invalid multiplier ${String(resolved.multiplier)} for market ${marketId}` };
-    }
-    return { market: resolved };
+    return resolveLighterMarket(this.options.resolveSymbol, marketId);
   }
 
   private excludedAccounts(market: LighterLiquidationMarket | null): Set<number> {
-    const excluded = new Set<number>([LIGHTER_INSURANCE_FUND_OPERATOR_ACCOUNT_INDEX]);
-    const fund = market?.insuranceFundAccountIndex;
-    if (typeof fund === 'number' && Number.isSafeInteger(fund) && fund >= 0 && fund !== NIL_ACCOUNT_INDEX) excluded.add(fund);
-    try {
-      for (const value of readValue(this.options.excludedAccountIndexes) ?? []) {
-        const index = accountIndex(value);
-        if (index !== null && index !== NIL_ACCOUNT_INDEX) excluded.add(index);
-      }
-    } catch (error) {
-      logErrorWithTimestamp('Lighter liquidations: reading the excluded accounts failed:', error);
-    }
-    return excluded;
+    return lighterExcludedAccounts(
+      market,
+      () => readValue(this.options.excludedAccountIndexes),
+      (error) => logErrorWithTimestamp('Lighter liquidations: reading the excluded accounts failed:', error)
+    );
   }
 
   private botSymbolOf(marketId: number): string | null {

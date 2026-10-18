@@ -29,7 +29,8 @@
     "test:watch": "tsx watch tests/**/*.test.ts",
     "optimize:ui": "node optimize-config.js",
     "lighter:signer": "node scripts/lighter-signer.js",
-    "lighter:check": "tsx scripts/lighter-live-check.ts"
+    "lighter:check": "tsx scripts/lighter-live-check.ts",
+    "lighter:backfill": "tsx scripts/lighter-backfill.ts"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",

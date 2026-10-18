@@ -1,14 +1,17 @@
-import { liquidationStorage } from './liquidationStorage';
+import { DEFAULT_LIQUIDATION_RETENTION_DAYS, liquidationStorage } from './liquidationStorage';
 
 export class CleanupScheduler {
   private intervalId: NodeJS.Timeout | null = null;
   private readonly intervalMs: number;
+  // global.liquidationRetentionDays, read on every run (config reloads); 0 keeps everything
+  private getRetentionDays: () => number | undefined = () => undefined;
 
   constructor(intervalHours: number = 24) {
     this.intervalMs = intervalHours * 60 * 60 * 1000;
   }
 
-  start(): void {
+  start(getRetentionDays?: () => number | undefined): void {
+    if (getRetentionDays) this.getRetentionDays = getRetentionDays;
     if (this.intervalId) {
       console.log('Cleanup scheduler already running');
       return;
@@ -36,7 +39,9 @@ export class CleanupScheduler {
       console.log('Running liquidation cleanup...');
       const startTime = Date.now();
 
-      const deletedCount = await liquidationStorage.cleanupOldLiquidations();
+      const retentionDays = this.retentionDays();
+      const deletedCount = await liquidationStorage.cleanupOldLiquidations(retentionDays);
+      await liquidationStorage.cleanupOldCandles(retentionDays);
 
       const duration = Date.now() - startTime;
       console.log(`Cleanup completed in ${duration}ms. Deleted ${deletedCount} records.`);
@@ -50,6 +55,11 @@ export class CleanupScheduler {
     } catch (error) {
       console.error('Error during cleanup:', error);
     }
+  }
+
+  retentionDays(): number {
+    const days = this.getRetentionDays();
+    return typeof days === 'number' && Number.isFinite(days) && days >= 0 ? days : DEFAULT_LIQUIDATION_RETENTION_DAYS;
   }
 
   async runOnce(): Promise<void> {

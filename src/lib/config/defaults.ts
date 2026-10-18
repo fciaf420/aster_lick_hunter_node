@@ -52,6 +52,7 @@ export const DEFAULT_CONFIG: Config = {
     paperMode: true,
     positionMode: 'HEDGE',
     maxOpenPositions: 10,
+    liquidationRetentionDays: 7,
     exchange: 'aster',
     liquidationSource: 'aster',
     server: {

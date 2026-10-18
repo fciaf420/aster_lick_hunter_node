@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withAuth } from '@/lib/auth/with-auth';
-import { startOptimization } from '@/lib/services/optimizerService';
+import { OPTIMIZER_VENUES, startOptimization, type OptimizerVenue } from '@/lib/services/optimizerService';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,7 +14,9 @@ export const dynamic = 'force-dynamic';
  * {
  *   weights: { pnl: 50, sharpe: 30, drawdown: 20 },
  *   capitalAllocation?: number,
- *   symbols?: string[]
+ *   symbols?: string[],
+ *   venue?: 'aster' | 'lighter',     // Default: the configured trading venue (global.exchange)
+ *   includeSkipped?: boolean         // Lighter: also count detections the feed did not trade
  * }
  * 
  * Response:
@@ -80,11 +82,27 @@ export const POST = withAuth(async (request: NextRequest) => {
       );
     }
 
+    if (body.venue !== undefined && body.venue !== null && !OPTIMIZER_VENUES.includes(body.venue)) {
+      return NextResponse.json(
+        { success: false, error: `Venue must be one of: ${OPTIMIZER_VENUES.join(', ')}` },
+        { status: 400 }
+      );
+    }
+
+    if (body.includeSkipped !== undefined && typeof body.includeSkipped !== 'boolean') {
+      return NextResponse.json(
+        { success: false, error: 'includeSkipped must be a boolean' },
+        { status: 400 }
+      );
+    }
+
     // Start optimization job
     const jobId = await startOptimization({
       weights: { pnl, sharpe, drawdown },
       capitalAllocation: body.capitalAllocation,
       symbols: body.symbols,
+      venue: (body.venue ?? undefined) as OptimizerVenue | undefined,
+      includeSkipped: body.includeSkipped,
     });
 
     return NextResponse.json({
