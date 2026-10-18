@@ -733,7 +733,7 @@ export default function PositionTable({
                 <div role="alert" className="flex flex-col items-center gap-1">
                   <span className="flex items-center gap-1 text-sm text-destructive">
                     <AlertTriangle className="h-3.5 w-3.5" />
-                    Couldn&apos;t load positions — retrying
+                    Couldn&apos;t load positions
                   </span>
                   <span className="text-[10px] text-muted-foreground">{loadError}</span>
                 </div>

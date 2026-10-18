@@ -432,7 +432,7 @@ describe('PositionTable', () => {
     });
 
     describe('when loading positions fails', () => {
-      const OUTAGE = "Couldn't load positions — retrying";
+      const OUTAGE = "Couldn't load positions";
 
       it('shows a distinct outage state with the error muted, not the "no open positions" state', async () => {
         (dataStore.fetchPositions as jest.Mock).mockRejectedValue(new Error('Positions API failed: 502'));
