@@ -62,6 +62,24 @@ const migrations: ConfigMigration[] = [
 
       return config;
     }
+  },
+  // Migration from v1.1.0 to v1.2.0 - Add trading venue and liquidation source selection
+  {
+    fromVersion: '1.1.0',
+    toVersion: '1.2.0',
+    migrate: (config: any) => {
+      config.version = '1.2.0';
+
+      // Existing configs keep trading on Aster with Aster liquidations
+      if (config.global) {
+        config.global.exchange = config.global.exchange ?? 'aster';
+        config.global.liquidationSource = config.global.liquidationSource ?? 'aster';
+      }
+
+      console.log('Migrated to v1.2.0: Added trading venue and liquidation source selection');
+
+      return config;
+    }
   }
 ];
 

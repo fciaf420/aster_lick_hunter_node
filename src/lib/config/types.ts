@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LIQUIDATION_SOURCE_IDS, VENUE_IDS } from '../exchange/types';
 
 export const symbolConfigSchema = z.object({
   // Volume thresholds
@@ -75,12 +76,18 @@ export const globalConfigSchema = z.object({
   maxOpenPositions: z.number().min(1).optional(),
   useThresholdSystem: z.boolean().optional(),
   hunterCooldownMs: z.number().min(0).optional(),
+  exchange: z.enum(VENUE_IDS).optional(),
+  liquidationSource: z.enum(LIQUIDATION_SOURCE_IDS).optional(),
   server: serverConfigSchema,
   rateLimit: rateLimitConfigSchema,
 });
 
+// Credentials for trading venues other than Aster, keyed by venue id
+export const venueCredentialsSchema = z.record(z.enum(VENUE_IDS), z.record(z.string())).optional();
+
 export const configSchema = z.object({
   api: apiCredentialsSchema,
+  venues: venueCredentialsSchema,
   symbols: z.record(symbolConfigSchema),
   global: globalConfigSchema,
   version: z.string().optional(),

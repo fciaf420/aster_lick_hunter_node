@@ -29,6 +29,8 @@
     "positionMode": "HEDGE",
     "maxOpenPositions": 5,
     "useThresholdSystem": false,
+    "exchange": "aster",
+    "liquidationSource": "aster",
     "server": {
       "dashboardPassword": "admin",
       "dashboardPort": 3000,
@@ -48,5 +50,5 @@
       "maxConcurrentRequests": 3
     }
   },
-  "version": "1.1.0"
+  "version": "1.2.0"
 }

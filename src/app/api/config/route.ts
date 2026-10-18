@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { configLoader } from '@/lib/config/configLoader';
 import { configSchema } from '@/lib/config/types';
+import { getLiquidationSourceEntry, getVenueEntry } from '@/lib/exchange/catalog';
 
 
 export async function GET() {
@@ -56,6 +57,18 @@ export async function POST(request: Request) {
 
     // Validate config
     const validatedConfig = configSchema.parse(body);
+
+    // Only implemented venues and liquidation sources can be selected
+    const unavailable = [
+      getVenueEntry(validatedConfig.global.exchange),
+      getLiquidationSourceEntry(validatedConfig.global.liquidationSource),
+    ].find(entry => entry.status !== 'available');
+    if (unavailable) {
+      return NextResponse.json(
+        { error: 'Config validation failed', details: `${unavailable.name} is not supported yet` },
+        { status: 400 }
+      );
+    }
 
     // Save using the config loader (saves to user config)
     await configLoader.saveConfig(validatedConfig);

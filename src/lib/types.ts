@@ -1,3 +1,5 @@
+import type { LiquidationSourceId, VenueId } from './exchange/types';
+
 export interface SymbolConfig {
   // Volume thresholds
   volumeThresholdUSDT?: number;       // Legacy field for backward compatibility
@@ -66,12 +68,15 @@ export interface GlobalConfig {
   maxOpenPositions?: number; // Max number of open positions (hedged pairs count as one)
   useThresholdSystem?: boolean; // Enable 60-second rolling volume threshold system (default: false)
   hunterCooldownMs?: number; // Minimum ms between threshold-triggered entries per symbol side (default: 120000)
+  exchange?: VenueId;       // Trading venue (default: 'aster')
+  liquidationSource?: LiquidationSourceId; // Where liquidation signals come from (default: 'aster')
   server?: ServerConfig;    // Optional server configuration
   rateLimit?: RateLimitConfig; // Rate limit configuration
 }
 
 export interface Config {
-  api: ApiCredentials;
+  api: ApiCredentials;     // Aster credentials
+  venues?: Partial<Record<VenueId, Record<string, string>>>; // Credentials for other trading venues
   symbols: Record<string, SymbolConfig>; // key: symbol like "BTCUSDT"
   global: GlobalConfig;
   version?: string; // Optional version field for config schema versioning

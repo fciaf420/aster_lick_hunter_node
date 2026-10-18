@@ -18,6 +18,8 @@ import { startRateLimitLogging } from '../lib/api/rateLimitMonitor';
 import { initializeRateLimitToasts } from '../lib/api/rateLimitToasts';
 import { thresholdMonitor } from '../lib/services/thresholdMonitor';
 import { logWithTimestamp, logErrorWithTimestamp, logWarnWithTimestamp } from '../lib/utils/timestamp';
+import { createExchangeAdapter, getConfiguredLiquidationSource, getConfiguredVenue, resolveLiquidationSource } from '../lib/exchange/registry';
+import { getLiquidationSourceEntry, getVenueEntry } from '../lib/exchange/catalog';
 
 // Helper function to kill all child processes (synchronous for exit handler)
 function killAllProcesses() {
@@ -64,6 +66,11 @@ logWithTimestamp('Bot is already running');
       // Initialize config manager and load configuration
       this.config = await configManager.initialize();
       logWithTimestamp('✅ Configuration loaded');
+
+      // Resolve the trading venue and liquidation source; ones that aren't implemented yet stop the bot here
+      const exchange = createExchangeAdapter(this.config);
+      const liquidationSource = resolveLiquidationSource(this.config);
+logWithTimestamp(`🏦 Trading venue: ${getVenueEntry(exchange.id).name} | Liquidation source: ${getLiquidationSourceEntry(liquidationSource).name}`);
 
       // Validate trade sizes against exchange minimums
       const { validateAllTradeSizes } = await import('../lib/validation/tradeSizeValidator');
@@ -515,6 +522,13 @@ logWithTimestamp('🔄 Applying config update...');
         symbols: Object.keys(newConfig.symbols),
       });
 
+      // Switching venue or liquidation source mid-run is unsafe (open positions live on the old venue)
+      if (oldConfig && (getConfiguredVenue(oldConfig) !== getConfiguredVenue(newConfig) ||
+          getConfiguredLiquidationSource(oldConfig) !== getConfiguredLiquidationSource(newConfig))) {
+logWarnWithTimestamp('⚠️  Trading venue or liquidation source changed - restart the bot to apply it (close open positions first)');
+        this.statusBroadcaster.logActivity('Config: Venue change saved, restart the bot to apply');
+      }
+
       // Notify about critical changes
       if (oldConfig && oldConfig.global.paperMode !== newConfig.global.paperMode) {
 logWithTimestamp(`⚠️  Paper Mode changed: ${oldConfig.global.paperMode} → ${newConfig.global.paperMode}`);
@@ -553,9 +567,11 @@ logWithTimestamp('✅ VWAP symbols updated');
       }
 
       // Broadcast config update to web UI
+      // Credentials are left out: this goes to every dashboard client
+      const { api: _api, venues: _venues, ...publicConfig } = newConfig;
       this.statusBroadcaster.broadcast('config_updated', {
         timestamp: new Date(),
-        config: newConfig,
+        config: publicConfig,
       });
 
 logWithTimestamp('✅ Config update applied successfully');

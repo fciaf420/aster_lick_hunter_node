@@ -1,6 +1,6 @@
 import { Config } from './types';
 
-export const DEFAULT_CONFIG_VERSION = '1.1.0';
+export const DEFAULT_CONFIG_VERSION = '1.2.0';
 
 export const DEFAULT_CONFIG: Config = {
   api: {
@@ -44,6 +44,8 @@ export const DEFAULT_CONFIG: Config = {
     paperMode: true,
     positionMode: 'HEDGE',
     maxOpenPositions: 10,
+    exchange: 'aster',
+    liquidationSource: 'aster',
     server: {
       dashboardPassword: '',
       dashboardPort: 3000,
