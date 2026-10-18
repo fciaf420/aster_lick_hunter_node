@@ -636,6 +636,27 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                 </div>
               </div>
 
+              <div className="space-y-2">
+                <Label htmlFor="liquidationRetentionDays">Liquidation History Retention (days)</Label>
+                <div className="flex items-center space-x-4">
+                  <Input
+                    id="liquidationRetentionDays"
+                    type="number"
+                    value={config.global.liquidationRetentionDays ?? 7}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value);
+                      handleGlobalChange('liquidationRetentionDays', isNaN(value) ? 7 : Math.max(0, value));
+                    }}
+                    className="w-24"
+                    min="0"
+                    step="1"
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    Recorded liquidations and candles older than this are deleted daily (0 keeps everything)
+                  </span>
+                </div>
+              </div>
+
               <Separator />
 
               {/* Threshold System Setting */}

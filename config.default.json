@@ -29,6 +29,7 @@
     "positionMode": "HEDGE",
     "maxOpenPositions": 5,
     "useThresholdSystem": false,
+    "liquidationRetentionDays": 7,
     "exchange": "aster",
     "liquidationSource": "aster",
     "server": {

@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { OptimizerWeightSliders } from './OptimizerWeightSliders';
 import { Loader2, Play, ChevronDown, ChevronUp } from 'lucide-react';
 import { useConfig } from '@/components/ConfigProvider';
@@ -13,14 +14,23 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 
+export type OptimizerVenueChoice = 'aster' | 'lighter';
+
+export interface OptimizerDataOptions {
+  venue?: OptimizerVenueChoice;     // Unset: the configured trading venue
+  includeSkipped: boolean;          // Lighter: also count detections the feed did not trade
+}
+
 interface OptimizerConfigPanelProps {
   pnlWeight: number;
   sharpeWeight: number;
   drawdownWeight: number;
   onWeightsChange: (pnl: number, sharpe: number, drawdown: number) => void;
-  onStartOptimization: (selectedSymbols: string[]) => void;
+  onStartOptimization: (selectedSymbols: string[], options: OptimizerDataOptions) => void;
   isStarting: boolean;
 }
+
+const VENUE_LABELS: Record<OptimizerVenueChoice, string> = { aster: 'Aster', lighter: 'Lighter' };
 
 export function OptimizerConfigPanel({
   pnlWeight,
@@ -35,6 +45,10 @@ export function OptimizerConfigPanel({
     Object.keys(config?.symbols || {})
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [venueChoice, setVenueChoice] = useState<OptimizerVenueChoice | 'configured'>('configured');
+  const [includeSkipped, setIncludeSkipped] = useState(false);
+  const configuredVenue: OptimizerVenueChoice = config?.global?.exchange === 'lighter' ? 'lighter' : 'aster';
+  const venue = venueChoice === 'configured' ? configuredVenue : venueChoice;
 
   const availableSymbols = Object.keys(config?.symbols || {});
   const allSelected = selectedSymbols.length === availableSymbols.length;
@@ -60,7 +74,10 @@ export function OptimizerConfigPanel({
     if (selectedSymbols.length === 0) {
       return;
     }
-    onStartOptimization(selectedSymbols);
+    onStartOptimization(selectedSymbols, {
+      venue: venueChoice === 'configured' ? undefined : venueChoice,
+      includeSkipped: venue === 'lighter' && includeSkipped,
+    });
   };
 
   return (
@@ -120,6 +137,44 @@ export function OptimizerConfigPanel({
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* Liquidation data venue */}
+      <div>
+        <div className="mb-3 flex items-center gap-2">
+          <Label className="text-base font-semibold">Liquidation Data</Label>
+        </div>
+        <div className="space-y-3 rounded-lg border bg-card p-4">
+          <Select value={venueChoice} onValueChange={(value) => setVenueChoice(value as OptimizerVenueChoice | 'configured')}>
+            <SelectTrigger className="w-full sm:w-72">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="configured">Configured venue ({VENUE_LABELS[configuredVenue]})</SelectItem>
+              <SelectItem value="aster">Aster</SelectItem>
+              <SelectItem value="lighter">Lighter</SelectItem>
+            </SelectContent>
+          </Select>
+          {venue === 'lighter' && (
+            <>
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="include-skipped"
+                  checked={includeSkipped}
+                  onCheckedChange={(checked) => setIncludeSkipped(checked === true)}
+                />
+                <label htmlFor="include-skipped" className="text-sm font-medium leading-none">
+                  Include detections the feed did not trade (stale, LLP takeovers, unverified side)
+                </label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Uses Lighter liquidations recorded by the bot and by <code>npm run lighter:backfill</code>, priced with
+                Lighter 1m candles. Lighter reports every liquidation rather than one snapshot per second, so its
+                suggested thresholds differ from Aster&apos;s.
+              </p>
+            </>
+          )}
         </div>
       </div>
 
