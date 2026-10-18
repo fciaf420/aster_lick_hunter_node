@@ -52,8 +52,10 @@ function SelectTrigger({
 function SelectContent({
   className,
   children,
-  position = "item-aligned",
-  align = "center",
+  // Project customisation: keep the dropdown-below-the-trigger look (upstream
+  // defaults to item-aligned, which overlays the trigger). See AGENTS.md.
+  position = "popper",
+  align = "start",
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
   return (

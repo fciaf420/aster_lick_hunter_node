@@ -351,7 +351,7 @@ export default function LiquidationSidebar({ volumeThresholds = {}, maxEvents = 
                           )}
                         </div>
                         <span className={`text-[10px] font-medium ${
-                          isVeryHot ? 'text-destructive' : isHot ? 'text-orange-400' : 'text-muted-foreground/70'
+                          isVeryHot ? 'text-loss' : isHot ? 'text-orange-400' : 'text-muted-foreground/70'
                         }`}>
                           {maxProgress.toFixed(0)}%
                         </span>

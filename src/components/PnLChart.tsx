@@ -698,7 +698,7 @@ export default function PnLChart() {
                   dataKey="cumulativePnl"
                   stroke={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "var(--profit)" : "var(--loss)"}
                   fill={chartData.length > 0 && (chartData[chartData.length - 1].cumulativePnl ?? 0) >= 0 ? "var(--profit)" : "var(--loss)"}
-                  fillOpacity={0.15}
+                  fillOpacity={0.25}
                   strokeWidth={2}
                 />
               </AreaChart>
