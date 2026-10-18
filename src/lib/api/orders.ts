@@ -46,11 +46,19 @@ export async function placeOrder(params: {
       }
     }
     
+    // Closing orders (SL/TP, reduce-only, or hedge-mode orders against the position side) must keep
+    // the position's size, so they skip the min-notional bump (a price of 0 disables that check)
+    const isClosingOrder = params.reduceOnly === true ||
+      params.type === 'STOP_MARKET' ||
+      params.type === 'TAKE_PROFIT_MARKET' ||
+      (params.positionSide === 'LONG' && params.side === 'SELL') ||
+      (params.positionSide === 'SHORT' && params.side === 'BUY');
+
     // Validate and adjust quantity
     const { quantity: adjustedQty, adjusted } = symbolPrecision.validateAndAdjustQuantity(
       params.symbol,
       params.quantity,
-      priceForValidation
+      isClosingOrder ? 0 : priceForValidation
     );
     
     if (adjusted) {

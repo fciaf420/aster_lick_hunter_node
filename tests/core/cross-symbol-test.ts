@@ -9,7 +9,9 @@ import {
   createMockConfig,
   assert,
   assertEqual,
-  wait as _wait
+  wait as _wait,
+  mockExchangeHttp,
+  finishTests
 } from '../utils/test-helpers';
 
 // Create a testable version of PositionManager
@@ -280,11 +282,15 @@ async function main() {
   log(colors.cyan + colors.bold + '🧪 CROSS-SYMBOL TP/SL TEST SUITE' + colors.reset);
   log(colors.cyan + '============================================================' + colors.reset);
 
+  // Fail any request that would reach the real exchange
+  mockExchangeHttp();
+
   await testCrossSymbolTPSLPreservation();
 
   log(colors.cyan + '============================================================' + colors.reset);
   log(colors.cyan + colors.bold + '✨ Test Complete' + colors.reset);
   log(colors.cyan + '============================================================' + colors.reset);
+  finishTests();
 }
 
 // Run tests if executed directly

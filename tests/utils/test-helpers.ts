@@ -1,5 +1,7 @@
 import { Config } from '../../src/lib/bot/config';
 import { LiquidationEvent, OrderBook, Position } from '../../src/lib/types';
+import { getRateLimitedAxios } from '../../src/lib/api/requestInterceptor';
+import axios, { AxiosAdapter, InternalAxiosRequestConfig } from 'axios';
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 
@@ -34,13 +36,42 @@ export function logTest(name: string, passed: boolean, details?: string) {
   }
 }
 
+export type MockHttpHandler = (config: InternalAxiosRequestConfig) => unknown | Promise<unknown>;
+
+// Route every exchange HTTP call (plain axios and the rate-limited instance) to `handler`,
+// so tests never reach the real API. The handler's return value becomes response.data; throw to fail.
+export function mockExchangeHttp(handler?: MockHttpHandler): void {
+  const adapter: AxiosAdapter = async (config) => {
+    if (!handler) {
+      throw new Error(`Unmocked exchange request: ${config.method?.toUpperCase()} ${config.url}`);
+    }
+    const data = await handler(config);
+    return { data, status: 200, statusText: 'OK', headers: {}, config };
+  };
+  axios.defaults.adapter = adapter;
+  getRateLimitedAxios().defaults.adapter = adapter;
+}
+
+// Failures across every TestSummary in this process, used for the exit code
+let totalFailures = 0;
+
+// Exit with a code that reflects the results; also stops timers/sockets left open by the code under test
+export function finishTests(): never {
+  process.exit(totalFailures > 0 ? 1 : 0);
+}
+
 export class TestSummary {
   private tests: { name: string; passed: boolean; error?: string }[] = [];
   private startTime: number = Date.now();
 
   add(name: string, passed: boolean, error?: string) {
     this.tests.push({ name, passed, error });
+    if (!passed) totalFailures++;
     logTest(name, passed, error);
+  }
+
+  get hasErrors(): boolean {
+    return this.tests.some(t => !t.passed);
   }
 
   async run(name: string, testFn: () => Promise<void>): Promise<void> {

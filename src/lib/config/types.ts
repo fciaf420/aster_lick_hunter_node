@@ -22,6 +22,7 @@ export const symbolConfigSchema = z.object({
   usePostOnly: z.boolean().optional(),
   maxSlippageBps: z.number().optional(),
   orderType: z.enum(['LIMIT', 'MARKET']).optional(),
+  forceMarketEntry: z.boolean().optional(),
 
   // VWAP protection settings (optional)
   vwapProtection: z.boolean().optional(),
@@ -30,6 +31,8 @@ export const symbolConfigSchema = z.object({
 
   // Threshold system settings
   useThreshold: z.boolean().optional(),
+  thresholdTimeWindow: z.number().min(0).optional(),
+  thresholdCooldown: z.number().min(0).optional(),
   hunterCooldownMs: z.number().min(0).optional(),
 }).refine(data => {
   // Ensure we have either legacy or new volume thresholds

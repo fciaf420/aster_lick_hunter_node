@@ -12,7 +12,9 @@ import {
   createMockLiquidation as _createMockLiquidation,
   assert,
   assertEqual,
-  wait
+  wait,
+  mockExchangeHttp,
+  finishTests
 } from '../utils/test-helpers';
 
 // Mock PositionTracker for testing
@@ -332,6 +334,9 @@ async function main() {
   log('🧪 HUNTER PENDING ORDERS TEST SUITE', colors.cyan + colors.bold);
   log('=' .repeat(60), colors.cyan);
 
+  // Fail any request that would reach the real exchange
+  mockExchangeHttp();
+
   try {
     await testPendingOrderManagement();
     await testPendingOrderErrorHandling();
@@ -344,6 +349,7 @@ async function main() {
     log('but are ONLY removed when PositionManager emits fill/cancel events.', colors.yellow);
     log('If orders fail during placement, they remain in pendingOrders forever!', colors.red);
     log('\nFIX NEEDED: Add removePendingOrder() in catch blocks of placeTrade()', colors.green);
+    finishTests();
 
   } catch (error) {
     logSection('❌ Test Suite Failed');

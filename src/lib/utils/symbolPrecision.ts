@@ -40,7 +40,9 @@ export class SymbolPrecisionManager {
         // Parse quantity limits
         const maxQuantity = lotSizeFilter.maxQty ? parseFloat(lotSizeFilter.maxQty) : undefined;
         const minQuantity = lotSizeFilter.minQty ? parseFloat(lotSizeFilter.minQty) : undefined;
-        const minNotional = minNotionalFilter?.minNotional ? parseFloat(minNotionalFilter.minNotional) : undefined;
+        // Aster reports the MIN_NOTIONAL filter value as `notional`; keep `minNotional` as a fallback
+        const minNotionalValue = minNotionalFilter?.notional ?? minNotionalFilter?.minNotional;
+        const minNotional = minNotionalValue ? parseFloat(minNotionalValue) : undefined;
 
         this.symbolFilters.set(symbol, {
           symbol,

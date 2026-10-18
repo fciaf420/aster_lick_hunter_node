@@ -6,7 +6,6 @@
  */
 
 import { Hunter } from '../../src/lib/bot/hunter';
-import { loadConfig } from '../../src/lib/bot/config';
 import {
   TestSummary,
   logSection,
@@ -14,20 +13,23 @@ import {
   colors,
   assert,
   assertEqual,
-  wait as _wait
+  wait as _wait,
+  createMockConfig,
+  mockExchangeHttp,
+  finishTests
 } from '../utils/test-helpers';
 
 async function testPendingOrderFix() {
   logSection('Testing Pending Order Fix - Cleanup on Failure');
   const summary = new TestSummary();
 
-  await summary.run('Load configuration', async () => {
-    const config = await loadConfig();
-    assert(config !== null, 'Config should load');
+  await summary.run('Create test configuration', async () => {
+    const config = createMockConfig();
+    assert(config !== null, 'Config should be created');
   });
 
   await summary.run('Test that pending orders are cleared on failure', async () => {
-    const config = await loadConfig();
+    const config = createMockConfig();
     config.global.paperMode = false; // Need real mode to test order placement
     const hunter = new Hunter(config, false);
     const hunterAny = hunter as any;
@@ -52,7 +54,7 @@ async function testPendingOrderFix() {
   });
 
   await summary.run('Test fallback order cleanup', async () => {
-    const config = await loadConfig();
+    const config = createMockConfig();
     config.global.paperMode = false;
     const hunter = new Hunter(config, false);
     const hunterAny = hunter as any;
@@ -68,7 +70,7 @@ async function testPendingOrderFix() {
   });
 
   await summary.run('Test periodic cleanup mechanism', async () => {
-    const config = await loadConfig();
+    const config = createMockConfig();
     const hunter = new Hunter(config, false);
     const hunterAny = hunter as any;
 
@@ -94,7 +96,7 @@ async function testPendingOrderFix() {
   });
 
   await summary.run('Test cleanup in error catch blocks', async () => {
-    const config = await loadConfig();
+    const config = createMockConfig();
     config.global.paperMode = false;
     const hunter = new Hunter(config, false);
     const hunterAny = hunter as any;
@@ -118,7 +120,7 @@ async function testPendingOrderFix() {
   });
 
   await summary.run('Verify the actual ASTERUSDT scenario is fixed', async () => {
-    const config = await loadConfig();
+    const config = createMockConfig();
     config.global.paperMode = false;
     const hunter = new Hunter(config, false);
     const hunterAny = hunter as any;
@@ -148,7 +150,10 @@ async function testPeriodicCleanup() {
   const summary = new TestSummary();
 
   await summary.run('Test periodic cleanup starts and stops', async () => {
-    const config = await loadConfig();
+    const config = createMockConfig();
+    // No API keys: paper mode simulates liquidations instead of connecting to the live stream
+    config.api.apiKey = '';
+    config.api.secretKey = '';
     const hunter = new Hunter(config, false);
     const hunterAny = hunter as any;
 
@@ -162,7 +167,7 @@ async function testPeriodicCleanup() {
   });
 
   await summary.run('Test debug output', async () => {
-    const config = await loadConfig();
+    const config = createMockConfig();
     const hunter = new Hunter(config, false);
     const hunterAny = hunter as any;
 
@@ -189,6 +194,12 @@ async function main() {
   log('🔧 PENDING ORDER FIX VERIFICATION TEST', colors.cyan + colors.bold);
   log('=' .repeat(60), colors.cyan);
 
+  // Never reach the real exchange; start() only needs exchange info
+  mockExchangeHttp((config) => {
+    if (config.url?.includes('/fapi/v1/exchangeInfo')) return { symbols: [] };
+    throw new Error(`Unmocked exchange request: ${config.method?.toUpperCase()} ${config.url}`);
+  });
+
   try {
     await testPendingOrderFix();
     await testPeriodicCleanup();
@@ -200,6 +211,7 @@ async function main() {
     log('3. Periodic cleanup removes stale orders every 30 seconds', colors.green);
     log('4. Debug logging helps track pending order state', colors.green);
     log('\n✨ The ASTERUSDT blocking issue is FIXED!', colors.green + colors.bold);
+    finishTests();
 
   } catch (error) {
     logSection('❌ Fix Verification Failed');

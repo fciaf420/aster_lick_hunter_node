@@ -11,7 +11,8 @@ import {
   assert,
   assertEqual,
   assertClose,
-  wait as _wait
+  wait as _wait,
+  finishTests
 } from '../utils/test-helpers';
 
 async function testPositionManagerInitialization() {
@@ -197,7 +198,7 @@ async function testOrderFillHandling() {
     const filledQty = 0.7;
     const remainingQty = orderQty - filledQty;
 
-    assertEqual(remainingQty, 0.3, 'Should calculate remaining quantity');
+    assertClose(remainingQty, 0.3, 1e-9, 'Should calculate remaining quantity');
     assert(remainingQty > 0, 'Should identify partial fill');
   });
 
@@ -419,6 +420,7 @@ async function main() {
     await testErrorRecovery();
 
     logSection('✨ All Position Manager Tests Complete');
+    finishTests();
   } catch (error) {
     logSection('❌ Test Suite Failed');
     console.error(error);

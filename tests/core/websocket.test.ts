@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 
-import { WebSocketService } from '../../src/lib/services/websocketService';
+import websocketService from '../../src/lib/services/websocketService';
 import {
   TestSummary,
   logSection,
@@ -10,7 +10,8 @@ import {
   MockWebSocketClient,
   assert,
   assertEqual,
-  wait
+  wait,
+  finishTests
 } from '../utils/test-helpers';
 
 async function testWebSocketInitialization() {
@@ -18,7 +19,7 @@ async function testWebSocketInitialization() {
   const summary = new TestSummary();
 
   await summary.run('Create WebSocketService instance', async () => {
-    const service = new WebSocketService();
+    const service = websocketService;
     assert(service !== null, 'WebSocketService should be created');
   });
 
@@ -374,6 +375,7 @@ async function main() {
     await testMultipleConnections();
 
     logSection('✨ All WebSocket Tests Complete');
+    finishTests();
   } catch (error) {
     logSection('❌ Test Suite Failed');
     console.error(error);

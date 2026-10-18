@@ -174,7 +174,7 @@ const cumulativeData: CumulativeDailyPnL[] = dailyPnL.map(day => {
 });
 
 console.log('Cumulative PnL Data:\n');
-cumulativeData.forEach((day, index) => {
+cumulativeData.forEach((day) => {
   const emoji = day.cumulativePnl >= 0 ? '📈' : '📉';
   const dailySign = day.netPnl >= 0 ? '+' : '';
   const cumulativeSign = day.cumulativePnl >= 0 ? '+' : '';

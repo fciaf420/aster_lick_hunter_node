@@ -13,7 +13,8 @@ import {
   wait,
   assert,
   assertEqual,
-  assertClose
+  assertClose,
+  finishTests
 } from '../utils/test-helpers';
 
 async function testHunterInitialization() {
@@ -22,14 +23,14 @@ async function testHunterInitialization() {
 
   await summary.run('Create Hunter instance', async () => {
     const config = createMockConfig();
-    const hunter = new Hunter(config.symbols, config.api);
+    const hunter = new Hunter(config);
     assert(hunter !== null, 'Hunter should be created');
   });
 
   await summary.run('Paper mode configuration', async () => {
     const config = createMockConfig();
     config.global.paperMode = true;
-    const _hunter = new Hunter(config.symbols, config.api, true);
+    const hunter = new Hunter(config);
     assert(hunter !== null, 'Hunter should work in paper mode');
   });
 
@@ -42,7 +43,7 @@ async function testLiquidationProcessing() {
 
   await summary.run('Process valid liquidation event', async () => {
     const config = createMockConfig();
-    const _hunter = new Hunter(config.symbols, config.api, true);
+    const _hunter = new Hunter(config);
 
     const liquidation = createMockLiquidation({
       symbol: 'BTCUSDT',
@@ -60,7 +61,7 @@ async function testLiquidationProcessing() {
   await summary.run('Filter low volume liquidations', async () => {
     const config = createMockConfig();
     config.symbols.BTCUSDT.volumeThresholdUSDT = 100000;
-    const _hunter = new Hunter(config.symbols, config.api, true);
+    const _hunter = new Hunter(config);
 
     const liquidation = createMockLiquidation({
       symbol: 'BTCUSDT',
@@ -97,8 +98,8 @@ async function testOrderPlacement() {
     const buyPrice = markPrice * (1 - offsetBps / 10000);
     const sellPrice = markPrice * (1 + offsetBps / 10000);
 
-    assertClose(buyPrice, 49995, 0.01, 'Buy price should be below mark price');
-    assertClose(sellPrice, 50005, 0.01, 'Sell price should be above mark price');
+    assertClose(buyPrice, 49950, 0.01, 'Buy price should be below mark price');
+    assertClose(sellPrice, 50050, 0.01, 'Sell price should be above mark price');
   });
 
   await summary.run('Apply leverage to trade size', async () => {
@@ -165,8 +166,8 @@ async function testOrderBookAnalysis() {
     const maxBuyPrice = entryPrice * (1 + maxSlippageBps / 10000);
     const maxSellPrice = entryPrice * (1 - maxSlippageBps / 10000);
 
-    assertEqual(maxBuyPrice, 50025, 'Max buy price with slippage');
-    assertEqual(maxSellPrice, 49975, 'Max sell price with slippage');
+    assertClose(maxBuyPrice, 50250, 0.01, 'Max buy price with slippage');
+    assertClose(maxSellPrice, 49750, 0.01, 'Max sell price with slippage');
   });
 
   summary.print();
@@ -225,7 +226,7 @@ async function testPaperModeSimulation() {
     const config = createMockConfig();
     config.global.paperMode = true;
 
-    const _hunter = new Hunter(config.symbols, config.api, true);
+    const _hunter = new Hunter(config);
 
     const mockLiquidation = createMockLiquidation({
       symbol: 'BTCUSDT',
@@ -273,6 +274,7 @@ async function main() {
     await testPaperModeSimulation();
 
     logSection('✨ All Hunter Tests Complete');
+    finishTests();
   } catch (error) {
     logSection('❌ Test Suite Failed');
     console.error(error);

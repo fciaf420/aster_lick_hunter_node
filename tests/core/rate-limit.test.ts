@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 
-import { RateLimitManager } from '../../src/lib/api/rateLimitManager';
+import { getRateLimitManager } from '../../src/lib/api/rateLimitManager';
 import {
   TestSummary,
   logSection,
@@ -9,7 +9,8 @@ import {
   assert,
   assertEqual,
   assertClose,
-  wait as _wait
+  wait as _wait,
+  finishTests
 } from '../utils/test-helpers';
 
 async function testRateLimitInitialization() {
@@ -17,18 +18,18 @@ async function testRateLimitInitialization() {
   const summary = new TestSummary();
 
   await summary.run('Create RateLimitManager instance', async () => {
-    const _manager = RateLimitManager.getInstance();
+    const _manager = getRateLimitManager();
     assert(_manager !== null, 'RateLimitManager should be created');
   });
 
   await summary.run('Singleton pattern', async () => {
-    const manager1 = RateLimitManager.getInstance();
-    const manager2 = RateLimitManager.getInstance();
+    const manager1 = getRateLimitManager();
+    const manager2 = getRateLimitManager();
     assert(manager1 === manager2, 'Should return same instance');
   });
 
   await summary.run('Initialize with default limits', async () => {
-    const _manager = RateLimitManager.getInstance();
+    const _manager = getRateLimitManager();
     const limits = {
       orderLimit: 300,
       weightLimit: 1200,
@@ -342,6 +343,7 @@ async function main() {
     await testAdaptiveThrottling();
 
     logSection('✨ All Rate Limit Tests Complete');
+    finishTests();
   } catch (error) {
     logSection('❌ Test Suite Failed');
     console.error(error);

@@ -89,7 +89,7 @@ async function runTests() {
       const hunterCode = Hunter.toString();
       assert(hunterCode.includes('-4061'), 'Hunter should handle -4061 error');
       assert(hunterCode.includes('Position mode mismatch detected'), 'Hunter should detect position mode mismatch');
-      assert(hunterCode.includes('Retrying with position mode:'), 'Hunter should retry with different mode');
+      assert(hunterCode.includes('Retrying with corrected mode:'), 'Hunter should retry with different mode');
 
       log('✅ Position mode retry logic is implemented');
 

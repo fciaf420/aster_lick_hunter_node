@@ -14,7 +14,8 @@ import {
   assert,
   assertEqual,
   assertClose,
-  wait
+  wait,
+  finishTests
 } from '../utils/test-helpers';
 
 async function testFullTradingFlow() {
@@ -31,7 +32,7 @@ async function testFullTradingFlow() {
 
   await summary.run('Initialize bot components', async () => {
     const config = createMockConfig();
-    const hunter = new Hunter(config.symbols, config.api, true);
+    const hunter = new Hunter(config);
     const positionManager = new PositionManager(config.symbols, config.api, true);
 
     assert(hunter !== null, 'Hunter should be initialized');
@@ -368,6 +369,7 @@ async function main() {
     await testPerformanceMetrics();
 
     logSection('✨ All Integration Tests Complete');
+    finishTests();
   } catch (error) {
     logSection('❌ Test Suite Failed');
     console.error(error);

@@ -8,7 +8,8 @@ import {
   colors,
   assert,
   assertEqual as _assertEqual,
-  wait as _wait
+  wait as _wait,
+  finishTests
 } from '../utils/test-helpers';
 
 async function testErrorLogging() {
@@ -239,6 +240,7 @@ async function main() {
     await testErrorSeverity();
 
     logSection('✨ All Error Logging Tests Complete');
+    finishTests();
   } catch (error) {
     logSection('❌ Test Suite Failed');
     console.error(error);
