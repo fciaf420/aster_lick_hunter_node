@@ -487,7 +487,8 @@ Enable remote monitoring from other devices on your network:
 | `tsx` | TypeScript execution with watch mode |
 | `concurrently` | Run web + bot simultaneously |
 | `@radix-ui/*` | UI component library |
-| `recharts` | Trading charts |
+| `recharts` 3 | Trading charts (via the shadcn `ChartContainer`) |
+| `@tanstack/react-table` 8 | Data tables (`src/components/data-table`) |
 | `tailwindcss` v4 | Styling |
 | `sqlite3` | Database for history and logs |
 | `better-sqlite3` | Synchronous SQLite |

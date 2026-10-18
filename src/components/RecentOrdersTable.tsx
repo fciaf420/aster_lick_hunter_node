@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import type { ColumnDef } from '@tanstack/react-table';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -12,14 +13,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { DataTable } from '@/components/data-table/data-table';
+import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header';
 import {
   TrendingUp,
   TrendingDown,
@@ -34,6 +29,259 @@ import orderStore from '@/lib/services/orderStore';
 import { Order, OrderStatus, OrderSide, OrderType } from '@/lib/types/order';
 import { useConfig } from '@/components/ConfigProvider';
 import websocketService from '@/lib/services/websocketService';
+
+// Format time
+const formatTime = (timestamp: number) => {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+
+  return date.toLocaleDateString();
+};
+
+// Format price
+const formatPrice = (price: string | undefined) => {
+  if (!price || price === '0') return '-';
+  const num = parseFloat(price);
+  if (num < 0.01) return num.toFixed(6);
+  if (num < 1) return num.toFixed(4);
+  return num.toFixed(2);
+};
+
+// Format quantity
+const formatQuantity = (qty: string | undefined) => {
+  if (!qty || qty === '0') return '-';
+  const num = parseFloat(qty);
+  if (num < 0.001) return num.toFixed(6);
+  if (num < 1) return num.toFixed(4);
+  return num.toFixed(3);
+};
+
+// Format PnL
+const formatPnL = (pnl: string | undefined) => {
+  if (!pnl || pnl === '0') return null;
+  const num = parseFloat(pnl);
+  const formatted = Math.abs(num).toFixed(2);
+  return { value: num, formatted: `${num >= 0 ? '+' : '-'}$${formatted}` };
+};
+
+// Get status icon and color
+const getStatusBadge = (status: OrderStatus) => {
+  switch (status) {
+    case OrderStatus.FILLED:
+      return (
+        <Badge className="bg-profit/10 text-profit border-profit/20">
+          <CheckCircle2 className="w-3 h-3 mr-1" />
+          Filled
+        </Badge>
+      );
+    case OrderStatus.NEW:
+    case OrderStatus.PARTIALLY_FILLED:
+      return (
+        <Badge className="bg-blue-600/10 text-blue-600 border-blue-600/20">
+          <Clock className="w-3 h-3 mr-1" />
+          {status === OrderStatus.NEW ? 'Open' : 'Partial'}
+        </Badge>
+      );
+    case OrderStatus.CANCELED:
+    case OrderStatus.EXPIRED:
+      return (
+        <Badge className="bg-gray-600/10 text-gray-600 border-gray-600/20">
+          <XCircle className="w-3 h-3 mr-1" />
+          {status === OrderStatus.CANCELED ? 'Canceled' : 'Expired'}
+        </Badge>
+      );
+    case OrderStatus.REJECTED:
+      return (
+        <Badge className="bg-loss/10 text-loss border-loss/20">
+          <AlertCircle className="w-3 h-3 mr-1" />
+          Rejected
+        </Badge>
+      );
+    default:
+      return <Badge variant="outline">{status}</Badge>;
+  }
+};
+
+// Get order type badge
+const getTypeBadge = (type: OrderType) => {
+  const colors: Record<string, string> = {
+    [OrderType.MARKET]: 'bg-purple-600/10 text-purple-600 border-purple-600/20',
+    [OrderType.LIMIT]: 'bg-blue-600/10 text-blue-600 border-blue-600/20',
+    [OrderType.STOP_MARKET]: 'bg-orange-600/10 text-orange-600 border-orange-600/20',
+    [OrderType.TAKE_PROFIT_MARKET]: 'bg-profit/10 text-profit border-profit/20',
+    [OrderType.TRAILING_STOP_MARKET]: 'bg-yellow-600/10 text-yellow-600 border-yellow-600/20',
+    [OrderType.LIQUIDATION]: 'bg-loss/10 text-loss border-loss/20',
+  };
+
+  return (
+    <Badge className={colors[type] || 'bg-gray-600/10 text-gray-600 border-gray-600/20'}>
+      {type.replace(/_/g, ' ')}
+    </Badge>
+  );
+};
+
+// Determine position action type
+const getPositionAction = (order: Order): string => {
+  // Check if this is a reduce-only order (closing/reducing position)
+  if (order.reduceOnly) {
+    // Check if it's a stop-loss or take-profit
+    if (order.type === OrderType.STOP_MARKET || order.type === 'STOP') {
+      return 'STOP LOSS';
+    }
+    if (order.type === OrderType.TAKE_PROFIT_MARKET || order.type === 'TAKE_PROFIT') {
+      return 'TAKE PROFIT';
+    }
+    // Check if it fully closed the position (would need position tracking for accuracy)
+    // For now, we'll label all other reduce-only as REDUCE
+    return 'REDUCE';
+  }
+
+  // Check if this is a close-all position order
+  if (order.closePosition) {
+    return 'CLOSE ALL';
+  }
+
+  // For non-reduce orders, it's either OPEN or ADD
+  // Without position history, we'll label as OPEN for now
+  // In a full implementation, you'd track if a position existed before this order
+  return 'OPEN';
+};
+
+// Get position action badge
+const getPositionActionBadge = (order: Order) => {
+  const action = getPositionAction(order);
+
+  const colors: Record<string, string> = {
+    'OPEN': 'bg-blue-600/10 text-blue-600 border-blue-600/20',
+    'ADD': 'bg-cyan-600/10 text-cyan-600 border-cyan-600/20',
+    'REDUCE': 'bg-yellow-600/10 text-yellow-600 border-yellow-600/20',
+    'CLOSE': 'bg-gray-600/10 text-gray-600 border-gray-600/20',
+    'CLOSE ALL': 'bg-gray-600/10 text-gray-600 border-gray-600/20',
+    'STOP LOSS': 'bg-loss/10 text-loss border-loss/20',
+    'TAKE PROFIT': 'bg-profit/10 text-profit border-profit/20',
+  };
+
+  return (
+    <Badge className={colors[action] || 'bg-gray-600/10 text-gray-600 border-gray-600/20'} variant="outline">
+      {action}
+    </Badge>
+  );
+};
+
+// Numeric value of an order field for sorting; fields that render as "-" / blank sort last
+const toNumber = (value: string | undefined | null): number | undefined => {
+  if (!value || value === '0') return undefined;
+  const num = parseFloat(value);
+  return Number.isNaN(num) ? undefined : num;
+};
+
+// Same columns, order and rendering as before. Time, Symbol, Price, Quantity, Filled and PnL can be
+// sorted; without a sort the rows keep the order the order store delivers them in.
+const orderColumns: ColumnDef<Order>[] = [
+  {
+    id: 'time',
+    accessorFn: (order) => order.updateTime,
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Time" />,
+    cell: ({ row }) => formatTime(row.original.updateTime),
+    meta: { headerClassName: 'w-[100px]', cellClassName: 'text-xs text-muted-foreground' },
+  },
+  {
+    id: 'symbol',
+    accessorFn: (order) => order.symbol.replace('USDT', ''),
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Symbol" />,
+    cell: ({ row }) => row.original.symbol.replace('USDT', ''),
+    meta: { headerClassName: 'w-[100px]', cellClassName: 'font-medium' },
+  },
+  {
+    id: 'action',
+    header: 'Action',
+    enableSorting: false,
+    cell: ({ row }) => getPositionActionBadge(row.original),
+  },
+  {
+    id: 'type',
+    header: 'Type',
+    enableSorting: false,
+    cell: ({ row }) => getTypeBadge(row.original.type),
+  },
+  {
+    id: 'side',
+    header: 'Side',
+    enableSorting: false,
+    cell: ({ row }) => {
+      const order = row.original;
+      return (
+        <Badge
+          variant="outline"
+          className={order.side === OrderSide.BUY ? 'text-long' : 'text-short'}
+        >
+          {order.side === OrderSide.BUY ? (
+            <TrendingUp className="w-3 h-3 mr-1" />
+          ) : (
+            <TrendingDown className="w-3 h-3 mr-1" />
+          )}
+          {order.side}
+        </Badge>
+      );
+    },
+  },
+  {
+    id: 'price',
+    accessorFn: (order) => toNumber(order.avgPrice || order.price),
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Price" align="right" />,
+    sortUndefined: 'last',
+    cell: ({ row }) => formatPrice(row.original.avgPrice || row.original.price),
+    meta: { headerClassName: 'text-right', cellClassName: 'text-right font-mono' },
+  },
+  {
+    id: 'quantity',
+    accessorFn: (order) => toNumber(order.origQty),
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Quantity" align="right" />,
+    sortUndefined: 'last',
+    cell: ({ row }) => formatQuantity(row.original.origQty),
+    meta: { headerClassName: 'text-right', cellClassName: 'text-right font-mono' },
+  },
+  {
+    id: 'filled',
+    accessorFn: (order) => toNumber(order.executedQty),
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Filled" align="right" />,
+    sortUndefined: 'last',
+    cell: ({ row }) => formatQuantity(row.original.executedQty),
+    meta: { headerClassName: 'text-right', cellClassName: 'text-right font-mono' },
+  },
+  {
+    id: 'status',
+    header: 'Status',
+    enableSorting: false,
+    cell: ({ row }) => getStatusBadge(row.original.status),
+  },
+  {
+    id: 'pnl',
+    accessorFn: (order) => toNumber(order.realizedProfit),
+    header: ({ column }) => <DataTableColumnHeader column={column} title="PnL" align="right" />,
+    sortUndefined: 'last',
+    cell: ({ row }) => {
+      const pnl = formatPnL(row.original.realizedProfit);
+      return (
+        pnl && (
+          <span className={pnl.value >= 0 ? 'text-profit' : 'text-loss'}>
+            {pnl.formatted}
+          </span>
+        )
+      );
+    },
+    meta: { headerClassName: 'text-right', cellClassName: 'text-right font-mono' },
+  },
+];
 
 interface RecentOrdersTableProps {
   maxRows?: number;
@@ -181,153 +429,6 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
     };
   }, []); // No dependencies - setup once on mount
 
-  // Format time
-  const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-
-    return date.toLocaleDateString();
-  };
-
-  // Format price
-  const formatPrice = (price: string | undefined) => {
-    if (!price || price === '0') return '-';
-    const num = parseFloat(price);
-    if (num < 0.01) return num.toFixed(6);
-    if (num < 1) return num.toFixed(4);
-    return num.toFixed(2);
-  };
-
-  // Format quantity
-  const formatQuantity = (qty: string | undefined) => {
-    if (!qty || qty === '0') return '-';
-    const num = parseFloat(qty);
-    if (num < 0.001) return num.toFixed(6);
-    if (num < 1) return num.toFixed(4);
-    return num.toFixed(3);
-  };
-
-  // Format PnL
-  const formatPnL = (pnl: string | undefined) => {
-    if (!pnl || pnl === '0') return null;
-    const num = parseFloat(pnl);
-    const formatted = Math.abs(num).toFixed(2);
-    return { value: num, formatted: `${num >= 0 ? '+' : '-'}$${formatted}` };
-  };
-
-  // Get status icon and color
-  const getStatusBadge = (status: OrderStatus) => {
-    switch (status) {
-      case OrderStatus.FILLED:
-        return (
-          <Badge className="bg-profit/10 text-profit border-profit/20">
-            <CheckCircle2 className="w-3 h-3 mr-1" />
-            Filled
-          </Badge>
-        );
-      case OrderStatus.NEW:
-      case OrderStatus.PARTIALLY_FILLED:
-        return (
-          <Badge className="bg-blue-600/10 text-blue-600 border-blue-600/20">
-            <Clock className="w-3 h-3 mr-1" />
-            {status === OrderStatus.NEW ? 'Open' : 'Partial'}
-          </Badge>
-        );
-      case OrderStatus.CANCELED:
-      case OrderStatus.EXPIRED:
-        return (
-          <Badge className="bg-gray-600/10 text-gray-600 border-gray-600/20">
-            <XCircle className="w-3 h-3 mr-1" />
-            {status === OrderStatus.CANCELED ? 'Canceled' : 'Expired'}
-          </Badge>
-        );
-      case OrderStatus.REJECTED:
-        return (
-          <Badge className="bg-loss/10 text-loss border-loss/20">
-            <AlertCircle className="w-3 h-3 mr-1" />
-            Rejected
-          </Badge>
-        );
-      default:
-        return <Badge variant="outline">{status}</Badge>;
-    }
-  };
-
-  // Get order type badge
-  const getTypeBadge = (type: OrderType) => {
-    const colors: Record<string, string> = {
-      [OrderType.MARKET]: 'bg-purple-600/10 text-purple-600 border-purple-600/20',
-      [OrderType.LIMIT]: 'bg-blue-600/10 text-blue-600 border-blue-600/20',
-      [OrderType.STOP_MARKET]: 'bg-orange-600/10 text-orange-600 border-orange-600/20',
-      [OrderType.TAKE_PROFIT_MARKET]: 'bg-profit/10 text-profit border-profit/20',
-      [OrderType.TRAILING_STOP_MARKET]: 'bg-yellow-600/10 text-yellow-600 border-yellow-600/20',
-      [OrderType.LIQUIDATION]: 'bg-loss/10 text-loss border-loss/20',
-    };
-
-    return (
-      <Badge className={colors[type] || 'bg-gray-600/10 text-gray-600 border-gray-600/20'}>
-        {type.replace(/_/g, ' ')}
-      </Badge>
-    );
-  };
-
-  // Determine position action type
-  const getPositionAction = (order: Order): string => {
-    // Check if this is a reduce-only order (closing/reducing position)
-    if (order.reduceOnly) {
-      // Check if it's a stop-loss or take-profit
-      if (order.type === OrderType.STOP_MARKET || order.type === 'STOP') {
-        return 'STOP LOSS';
-      }
-      if (order.type === OrderType.TAKE_PROFIT_MARKET || order.type === 'TAKE_PROFIT') {
-        return 'TAKE PROFIT';
-      }
-      // Check if it fully closed the position (would need position tracking for accuracy)
-      // For now, we'll label all other reduce-only as REDUCE
-      return 'REDUCE';
-    }
-
-    // Check if this is a close-all position order
-    if (order.closePosition) {
-      return 'CLOSE ALL';
-    }
-
-    // For non-reduce orders, it's either OPEN or ADD
-    // Without position history, we'll label as OPEN for now
-    // In a full implementation, you'd track if a position existed before this order
-    return 'OPEN';
-  };
-
-  // Get position action badge
-  const getPositionActionBadge = (order: Order) => {
-    const action = getPositionAction(order);
-
-    const colors: Record<string, string> = {
-      'OPEN': 'bg-blue-600/10 text-blue-600 border-blue-600/20',
-      'ADD': 'bg-cyan-600/10 text-cyan-600 border-cyan-600/20',
-      'REDUCE': 'bg-yellow-600/10 text-yellow-600 border-yellow-600/20',
-      'CLOSE': 'bg-gray-600/10 text-gray-600 border-gray-600/20',
-      'CLOSE ALL': 'bg-gray-600/10 text-gray-600 border-gray-600/20',
-      'STOP LOSS': 'bg-loss/10 text-loss border-loss/20',
-      'TAKE PROFIT': 'bg-profit/10 text-profit border-profit/20',
-    };
-
-    return (
-      <Badge className={colors[action] || 'bg-gray-600/10 text-gray-600 border-gray-600/20'} variant="outline">
-        {action}
-      </Badge>
-    );
-  };
-
   // Get statistics
   const statistics = useMemo(() => {
     // Calculate statistics for all symbols
@@ -392,8 +493,6 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
       closedTrades: ordersWithPnL.length,
     };
   }, [orders]);
-
-  const displayedOrders = showMore ? orders : orders.slice(0, 10);
 
   return (
     <Card>
@@ -494,85 +593,16 @@ export default function RecentOrdersTable({ maxRows: _maxRows = 50 }: RecentOrde
           </div>
         ) : (
           <>
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[100px]">Time</TableHead>
-                    <TableHead className="w-[100px]">Symbol</TableHead>
-                    <TableHead>Action</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Side</TableHead>
-                    <TableHead className="text-right">Price</TableHead>
-                    <TableHead className="text-right">Quantity</TableHead>
-                    <TableHead className="text-right">Filled</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">PnL</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {displayedOrders.map((order) => {
-                    const pnl = formatPnL(order.realizedProfit);
-                    const isFlashing = flashingOrders.has(order.orderId);
-
-                    return (
-                      <TableRow
-                        key={order.orderId}
-                        className={`
-                          ${isFlashing ? 'animate-pulse bg-blue-500/5' : ''}
-                          transition-colors duration-200
-                        `}
-                      >
-                        <TableCell className="text-xs text-muted-foreground">
-                          {formatTime(order.updateTime)}
-                        </TableCell>
-                        <TableCell className="font-medium">
-                          {order.symbol.replace('USDT', '')}
-                        </TableCell>
-                        <TableCell>
-                          {getPositionActionBadge(order)}
-                        </TableCell>
-                        <TableCell>
-                          {getTypeBadge(order.type)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant="outline"
-                            className={order.side === OrderSide.BUY ? 'text-long' : 'text-short'}
-                          >
-                            {order.side === OrderSide.BUY ? (
-                              <TrendingUp className="w-3 h-3 mr-1" />
-                            ) : (
-                              <TrendingDown className="w-3 h-3 mr-1" />
-                            )}
-                            {order.side}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {formatPrice(order.avgPrice || order.price)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {formatQuantity(order.origQty)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {formatQuantity(order.executedQty)}
-                        </TableCell>
-                        <TableCell>
-                          {getStatusBadge(order.status)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {pnl && (
-                            <span className={pnl.value >= 0 ? 'text-profit' : 'text-loss'}>
-                              {pnl.formatted}
-                            </span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+            <DataTable
+              columns={orderColumns}
+              data={orders}
+              getRowId={(order) => String(order.orderId)}
+              // Show More reveals every loaded order; sorting applies to all of them before the cut
+              pagination={{ pageSize: showMore ? Math.max(orders.length, 1) : 10, controls: false }}
+              rowClassName={(order) =>
+                `${flashingOrders.has(order.orderId) ? 'animate-pulse bg-blue-500/5' : ''} transition-colors duration-200`
+              }
+            />
 
             <div className="mt-4 flex items-center justify-center gap-4">
               {orders.length > 10 && (
