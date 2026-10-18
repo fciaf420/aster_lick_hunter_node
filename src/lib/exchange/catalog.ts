@@ -1,4 +1,5 @@
 import type { LiquidationSourceId, VenueId } from './types';
+import { ASTER_SIGNUP_URL } from './aster/constants';
 
 // Client-safe description of each venue and liquidation source (no secrets, no Node-only imports)
 
@@ -36,7 +37,7 @@ export const VENUE_CATALOG: VenueCatalogEntry[] = [
     chain: 'Aster L1 / BNB Chain',
     status: 'available',
     description: 'Binance-style perpetual futures. Uses V1 API keys (API key + secret).',
-    signupUrl: 'https://www.asterdex.com/en/referral/3TixB2',
+    signupUrl: ASTER_SIGNUP_URL,
     credentialFields: [
       { key: 'apiKey', label: 'API Key', secret: false },
       { key: 'secretKey', label: 'Secret Key', secret: true },
@@ -71,16 +72,15 @@ export const VENUE_CATALOG: VenueCatalogEntry[] = [
     supportsHedgeMode: false,
   },
   {
-    id: 'drift',
-    name: 'Drift',
+    id: 'phoenix',
+    name: 'Phoenix',
     chain: 'Solana',
     status: 'coming_soon',
-    description: 'Solana perpetuals. Trades through a delegated sub-account.',
-    signupUrl: 'https://www.drift.trade',
+    description: 'Solana order book perps by Ellipsis Labs (USDC collateral).',
+    signupUrl: 'https://phoenix.trade',
     credentialFields: [
-      { key: 'authority', label: 'Authority Wallet Address', secret: false },
-      { key: 'delegatePrivateKey', label: 'Delegate Private Key', secret: true },
-      { key: 'subAccountId', label: 'Sub-account ID', secret: false },
+      { key: 'walletAddress', label: 'Wallet Address', secret: false },
+      { key: 'privateKey', label: 'Wallet Private Key', secret: true },
     ],
     supportsHedgeMode: false,
   },

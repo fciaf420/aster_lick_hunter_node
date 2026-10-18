@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
+import { createPublicExchangeAdapter } from '@/lib/exchange/registry';
+import { configLoader } from '@/lib/config/configLoader';
 
 interface ExchangeSymbol {
   symbol: string;
@@ -8,12 +9,12 @@ interface ExchangeSymbol {
 
 export async function GET() {
   try {
-    // Fetch exchange info from Aster Finance
-    const response = await axios.get('https://fapi.asterdex.com/fapi/v1/exchangeInfo');
+    // Fetch exchange info from the trading venue
+    const exchangeInfo = await createPublicExchangeAdapter(configLoader.getConfig()).getExchangeInfo({ bypassRateLimit: true });
 
     const symbols: ExchangeSymbol[] = [];
 
-    for (const symbolInfo of response.data.symbols) {
+    for (const symbolInfo of exchangeInfo.symbols) {
       // Only include active USDT perpetual contracts
       if (symbolInfo.status === 'TRADING' &&
           symbolInfo.symbol.endsWith('USDT') &&

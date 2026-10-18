@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getBalance, getAccountInfo } from '@/lib/api/market';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
 import { loadConfig } from '@/lib/bot/config';
 import { getBalanceService } from '@/lib/services/balanceService';
 import { withAuth } from '@/lib/auth/with-auth';
@@ -36,9 +36,10 @@ export const GET = withAuth(async (request: NextRequest, _user) => {
 
   try {
     const config = await loadConfig();
+    const exchange = createExchangeAdapter(config);
 
     // If no API key is configured, return mock data
-    if (!config.api.apiKey || !config.api.secretKey) {
+    if (!exchange.hasCredentials()) {
       return NextResponse.json({
         totalBalance: 10000,
         availableBalance: 8500,
@@ -106,7 +107,7 @@ export const GET = withAuth(async (request: NextRequest, _user) => {
 
     // Fallback to REST API if WebSocket service is not available or data is stale
     try {
-      const accountData = await getAccountInfo(config.api);
+      const accountData = await exchange.getAccountInfo();
 
       if (accountData) {
         // Use pre-calculated USDT-equivalent totals from account endpoint
@@ -143,7 +144,7 @@ export const GET = withAuth(async (request: NextRequest, _user) => {
     }
 
     // Final fallback to balance API
-    const balanceData = await getBalance(config.api);
+    const balanceData = await exchange.getBalance();
 
     let totalBalance = 0;
     let availableBalance = 0;

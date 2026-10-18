@@ -1,10 +1,10 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import { Config, LiquidationEvent, SymbolConfig } from '../types';
-import { getMarkPrice, getExchangeInfo, getAccountInfo } from '../api/market';
-import { placeOrder, setLeverage } from '../api/orders';
 import { calculateOptimalPrice, validateOrderParams, analyzeOrderBookDepth, getSymbolFilters } from '../api/pricing';
-import { getPositionSide, getPositionMode } from '../api/positionMode';
+import { getPositionSide } from '../api/positionMode';
+import type { ExchangeAdapter } from '../exchange/types';
+import { createExchangeAdapter, getConfiguredLiquidationSource, getLiquidationStreamUrl } from '../exchange/registry';
 import { PositionTracker } from './positionManager';
 import { liquidationStorage } from '../services/liquidationStorage';
 import { vwapService } from '../services/vwapService';
@@ -36,11 +36,14 @@ export class Hunter extends EventEmitter {
   private cleanupInterval: NodeJS.Timeout | null = null; // Periodic cleanup timer
   private syncInterval: NodeJS.Timeout | null = null; // Position mode sync timer
   private lastModeSync: number = Date.now(); // Track last mode sync time
+  private readonly exchange: ExchangeAdapter;
 
-  constructor(config: Config, isHedgeMode: boolean = false) {
+  // Without an injected adapter, one is built for the configured venue that reads this.config's credentials
+  constructor(config: Config, isHedgeMode: boolean = false, exchange?: ExchangeAdapter) {
     super();
     this.config = config;
     this.isHedgeMode = isHedgeMode;
+    this.exchange = exchange ?? createExchangeAdapter(config, () => this.config.api);
 
     // Initialize threshold monitor with config
     thresholdMonitor.updateConfig(config);
@@ -235,13 +238,13 @@ logWithTimestamp('Hunter: Stopped periodic cleanup of stale pending orders');
 
   // Synchronize position mode with the exchange
   public async syncPositionMode(): Promise<void> {
-    if (!this.config.api.apiKey || !this.config.api.secretKey) {
+    if (!this.exchange.hasCredentials()) {
 logWithTimestamp('Hunter: Skipping position mode sync - no API keys configured');
       return;
     }
 
     try {
-      const actualMode = await getPositionMode(this.config.api);
+      const actualMode = await this.exchange.getHedgeMode();
       if (actualMode !== this.isHedgeMode) {
 logWithTimestamp(`Hunter: Position mode mismatch detected. Local: ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'}, Exchange: ${actualMode ? 'HEDGE' : 'ONE-WAY'}`);
         this.isHedgeMode = actualMode;
@@ -287,7 +290,7 @@ logErrorWithTimestamp('Hunter: Failed to sync position mode during periodic chec
 
     // Initialize symbol precision manager with exchange info
     try {
-      const exchangeInfo = await getExchangeInfo();
+      const exchangeInfo = await this.exchange.getExchangeInfo();
       symbolPrecision.parseExchangeInfo(exchangeInfo);
 logWithTimestamp('Hunter: Symbol precision manager initialized');
     } catch (error) {
@@ -307,7 +310,7 @@ logErrorWithTimestamp('Hunter: Failed to initialize symbol precision manager:', 
     }
 
     // In paper mode with no API keys, simulate liquidation events
-    if (this.config.global.paperMode && (!this.config.api.apiKey || !this.config.api.secretKey)) {
+    if (this.config.global.paperMode && !this.exchange.hasCredentials()) {
 logWithTimestamp('Hunter: Running in paper mode without API keys - simulating liquidations');
       this.simulateLiquidations();
     } else {
@@ -335,7 +338,8 @@ logWithTimestamp('Hunter: Stopped periodic position mode sync');
   }
 
   private connectWebSocket(): void {
-    this.ws = new WebSocket('wss://fstream.asterdex.com/ws/!forceOrder@arr');
+    const streamUrl = getLiquidationStreamUrl(getConfiguredLiquidationSource(this.config));
+    this.ws = new WebSocket(streamUrl);
 
     this.ws.on('open', () => {
 logWithTimestamp('Hunter WS connected');
@@ -375,7 +379,7 @@ logErrorWithTimestamp('Hunter: WS message parse error:', error);
 logErrorWithTimestamp('Hunter WS error:', error);
       // Log to error database
       errorLogger.logWebSocketError(
-        'wss://fstream.asterdex.com/ws/!forceOrder@arr',
+        streamUrl,
         error instanceof Error ? error : new Error(String(error)),
         1
       );
@@ -581,9 +585,9 @@ logWithTimestamp(`Hunter: ✓ Cooldown passed - Triggering ${tradeSide} trade fo
   private async analyzeAndTrade(liquidation: LiquidationEvent, symbolConfig: SymbolConfig, forcedSide?: 'BUY' | 'SELL'): Promise<void> {
     try {
       // Get mark price and recent 1m kline
-      const [markPriceData] = Array.isArray(await getMarkPrice(liquidation.symbol)) ?
-        await getMarkPrice(liquidation.symbol) as any[] :
-        [await getMarkPrice(liquidation.symbol)];
+      const [markPriceData] = Array.isArray(await this.exchange.getMarkPrice(liquidation.symbol)) ?
+        await this.exchange.getMarkPrice(liquidation.symbol) as any[] :
+        [await this.exchange.getMarkPrice(liquidation.symbol)];
 
       const markPrice = parseFloat(markPriceData.markPrice);
 
@@ -625,7 +629,8 @@ logWithTimestamp(`Hunter: ✓ Cooldown passed - Triggering ${tradeSide} trade fo
               'BUY',
               liquidation.price,
               timeframe,
-              lookback
+              lookback,
+              this.exchange
             );
           }
 
@@ -668,7 +673,8 @@ logWithTimestamp(`Hunter: VWAP Check Passed - Price $${liquidation.price.toFixed
               'SELL',
               liquidation.price,
               timeframe,
-              lookback
+              lookback,
+              this.exchange
             );
           }
 
@@ -781,7 +787,7 @@ logWithTimestamp(`Hunter: Skipping trade - would exceed max margin for ${symbol}
 
         // Check available margin from exchange to prevent insufficient balance errors
         try {
-          const accountInfo = await getAccountInfo(this.config.api);
+          const accountInfo = await this.exchange.getAccountInfo();
           const totalBalance = parseFloat(accountInfo.totalWalletBalance || '0');
           const availableBalance = parseFloat(accountInfo.availableBalance || '0');
           const usedMargin = totalBalance - availableBalance;
@@ -862,13 +868,13 @@ logWithTimestamp(`Hunter: PAPER MODE - Would place ${side} order for ${symbol}, 
         const priceOffsetBps = symbolConfig.priceOffsetBps || 1;
         const usePostOnly = symbolConfig.usePostOnly || false;
 
-        const optimalPrice = await calculateOptimalPrice(symbol, side, priceOffsetBps, usePostOnly);
+        const optimalPrice = await calculateOptimalPrice(symbol, side, priceOffsetBps, usePostOnly, this.exchange);
         if (optimalPrice) {
           orderPrice = optimalPrice;
 
           // Analyze liquidity at this price level
           const targetNotional = symbolConfig.tradeSize * orderPrice;
-          const liquidityAnalysis = await analyzeOrderBookDepth(symbol, side, targetNotional);
+          const liquidityAnalysis = await analyzeOrderBookDepth(symbol, side, targetNotional, this.exchange);
 
           if (!liquidityAnalysis.liquidityOk) {
 logWithTimestamp(`Hunter: Limited liquidity for ${symbol} ${side} - may use market order instead`);
@@ -890,7 +896,7 @@ logWithTimestamp(`Hunter: Could not calculate optimal price for ${symbol} - fall
       }
 
       // Fetch symbol info for precision and filters
-      const symbolInfo = await getSymbolFilters(symbol);
+      const symbolInfo = await getSymbolFilters(symbol, this.exchange);
       if (!symbolInfo) {
 logErrorWithTimestamp(`Hunter: Could not fetch symbol info for ${symbol}`);
         return;
@@ -906,7 +912,7 @@ logErrorWithTimestamp(`Hunter: Could not fetch symbol info for ${symbol}`);
         currentPrice = orderPrice;
       } else {
         // For market orders, fetch the current mark price
-        const markPriceData = await getMarkPrice(symbol);
+        const markPriceData = await this.exchange.getMarkPrice(symbol);
         currentPrice = parseFloat(Array.isArray(markPriceData) ? markPriceData[0].markPrice : markPriceData.markPrice);
       }
 
@@ -976,7 +982,7 @@ logErrorWithTimestamp(`  RECOMMENDED: Set trade size to at least ${recommendedTr
         // Always format price using symbolPrecision (which now has defaults)
         orderPrice = symbolPrecision.formatPrice(symbol, orderPrice);
 
-        const validation = await validateOrderParams(symbol, side, orderPrice, quantity);
+        const validation = await validateOrderParams(symbol, side, orderPrice, quantity, this.exchange);
         if (!validation.valid) {
 logErrorWithTimestamp(`Hunter: Order validation failed for ${symbol}: ${validation.error}`);
           return;
@@ -988,7 +994,7 @@ logErrorWithTimestamp(`Hunter: Order validation failed for ${symbol}: ${validati
       }
 
       // Set leverage if needed
-      await setLeverage(symbol, symbolConfig.leverage, this.config.api);
+      await this.exchange.setLeverage(symbol, symbolConfig.leverage);
 
 logWithTimestamp(`Hunter: Calculated quantity for ${symbol}: margin=${tradeSizeUSDT} USDT (${side === 'BUY' ? 'long' : 'short'}), leverage=${symbolConfig.leverage}x, price=${currentPrice}, notional=${notionalUSDT} USDT, quantity=${quantity}`);
 
@@ -1025,7 +1031,7 @@ logWithTimestamp(`Hunter: Order params - Symbol: ${symbol}, Side: ${side}, Posit
 
       try {
         // Place the order
-        order = await placeOrder(orderParams, this.config.api);
+        order = await this.exchange.placeOrder(orderParams);
 
         const displayPrice = orderType === 'LIMIT' ? ` at ${orderPrice}` : '';
         logWithTimestamp(`Hunter: Placed ${orderType} ${side} order for ${symbol}${displayPrice}, orderId: ${order.orderId}`);
@@ -1045,7 +1051,7 @@ logWithTimestamp(`Hunter: Position mode error for ${symbol}. Checking exchange m
 
           try {
             // Query the actual position mode from exchange
-            const actualMode = await getPositionMode(this.config.api);
+            const actualMode = await this.exchange.getHedgeMode();
 logWithTimestamp(`Hunter: Exchange mode: ${actualMode ? 'HEDGE' : 'ONE-WAY'}, Local mode: ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'}`);
 
             // Only retry if modes actually differ
@@ -1068,7 +1074,7 @@ logWithTimestamp(`Hunter: Retrying with corrected mode: ${this.isHedgeMode ? 'HE
 
               try {
                 // Retry the order
-                order = await placeOrder(orderParams, this.config.api);
+                order = await this.exchange.placeOrder(orderParams);
 
                 const displayPrice = orderType === 'LIMIT' ? ` at ${orderPrice}` : '';
 logWithTimestamp(`Hunter: ✅ Order placed after mode correction for ${symbol}${displayPrice}, orderId: ${order.orderId}`);
@@ -1350,10 +1356,10 @@ logWithTimestamp(`Hunter: Retrying with market order for ${symbol}`);
         let fallbackPositionSide: 'BOTH' | 'LONG' | 'SHORT' = 'BOTH';
 
         try {
-          await setLeverage(symbol, symbolConfig.leverage, this.config.api);
+          await this.exchange.setLeverage(symbol, symbolConfig.leverage);
 
           // Fetch symbol info for precision and filters
-          const fallbackSymbolInfo = await getSymbolFilters(symbol);
+          const fallbackSymbolInfo = await getSymbolFilters(symbol, this.exchange);
           if (!fallbackSymbolInfo) {
 logErrorWithTimestamp(`Hunter: Could not fetch symbol info for fallback order ${symbol}`);
             throw new Error('Symbol info unavailable');
@@ -1364,7 +1370,7 @@ logErrorWithTimestamp(`Hunter: Could not fetch symbol info for fallback order ${
           const fallbackMinNotional = fallbackMinNotionalFilter ? parseFloat(fallbackMinNotionalFilter.notional || '5') : 5;
 
           // Fetch current price for fallback market order
-          const markPriceData = await getMarkPrice(symbol);
+          const markPriceData = await this.exchange.getMarkPrice(symbol);
           const rawFallbackPrice = parseFloat(Array.isArray(markPriceData) ? markPriceData[0].markPrice : markPriceData.markPrice);
 
           // Always use symbolPrecision formatting (which now has defaults)
@@ -1394,13 +1400,13 @@ logWithTimestamp(`Hunter: Using position mode: ${this.isHedgeMode ? 'HEDGE' : 'O
           fallbackTempId = `fallback_${Date.now()}_${symbol}_${side}`;
           this.addPendingOrder(fallbackTempId, symbol, side);
 
-          const fallbackOrder = await placeOrder({
+          const fallbackOrder = await this.exchange.placeOrder({
             symbol,
             side,
             type: 'MARKET',
             quantity: fallbackQuantity,
             positionSide: fallbackPositionSide,
-          }, this.config.api);
+          });
 
 logWithTimestamp(`Hunter: Fallback market order placed for ${symbol}, orderId: ${fallbackOrder.orderId}`);
 

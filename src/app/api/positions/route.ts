@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getPositions } from '@/lib/api/orders';
-import { getOpenOrders } from '@/lib/api/market';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
 import { loadConfig } from '@/lib/bot/config';
 import { withAuth } from '@/lib/auth/with-auth';
 
@@ -31,16 +30,17 @@ export const GET = withAuth(async (request: NextRequest, _user) => {
 
   try {
     const config = await loadConfig();
+    const exchange = createExchangeAdapter(config);
 
     // If no API key is configured, return empty positions
-    if (!config.api.apiKey || !config.api.secretKey) {
+    if (!exchange.hasCredentials()) {
       return NextResponse.json([]);
     }
 
     // Get positions and open orders from exchange
     const [positions, openOrders] = await Promise.all([
-      getPositions(config.api),
-      getOpenOrders(undefined, config.api)
+      exchange.getPositions(),
+      exchange.getOpenOrders()
     ]);
 
     // Filter out positions with zero amount and format for UI

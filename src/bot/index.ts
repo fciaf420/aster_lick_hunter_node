@@ -7,7 +7,6 @@ import { StatusBroadcaster } from './websocketServer';
 import { initializeBalanceService, stopBalanceService, getBalanceService } from '../lib/services/balanceService';
 import { initializePriceService, stopPriceService, getPriceService } from '../lib/services/priceService';
 import { vwapStreamer } from '../lib/services/vwapStreamer';
-import { getPositionMode, setPositionMode } from '../lib/api/positionMode';
 import { execSync } from 'child_process';
 import { cleanupScheduler } from '../lib/services/cleanupScheduler';
 import { db } from '../lib/db/database';
@@ -68,13 +67,14 @@ logWithTimestamp('Bot is already running');
       logWithTimestamp('✅ Configuration loaded');
 
       // Resolve the trading venue and liquidation source; ones that aren't implemented yet stop the bot here
-      const exchange = createExchangeAdapter(this.config);
+      // The adapter reads credentials from the current config, so reloaded API keys apply
+      const exchange = createExchangeAdapter(this.config, () => this.config!.api);
       const liquidationSource = resolveLiquidationSource(this.config);
 logWithTimestamp(`🏦 Trading venue: ${getVenueEntry(exchange.id).name} | Liquidation source: ${getLiquidationSourceEntry(liquidationSource).name}`);
 
       // Validate trade sizes against exchange minimums
       const { validateAllTradeSizes } = await import('../lib/validation/tradeSizeValidator');
-      const validationResult = await validateAllTradeSizes(this.config);
+      const validationResult = await validateAllTradeSizes(this.config, exchange);
 
       if (!validationResult.valid) {
 logErrorWithTimestamp('❌ CONFIGURATION ERROR: Trade sizes below exchange minimums detected!');
@@ -169,8 +169,7 @@ logErrorWithTimestamp('❌ Config error:', error.message);
       });
 
       // Check API keys
-      const hasValidApiKeys = this.config.api.apiKey && this.config.api.secretKey &&
-                              this.config.api.apiKey.length > 0 && this.config.api.secretKey.length > 0;
+      const hasValidApiKeys = exchange.hasCredentials();
 
       if (!hasValidApiKeys) {
 logWithTimestamp('⚠️  WARNING: No API keys configured. Running in PAPER MODE only.');
@@ -192,7 +191,8 @@ logErrorWithTimestamp('❌ Cannot run in LIVE mode without API keys!');
         // Initialize balance service and set up WebSocket broadcasting
         try {
 logWithTimestamp('Initializing balance service...');
-          await initializeBalanceService(this.config.api);
+          // The balance service keeps the credentials it started with (a static snapshot, as before)
+          await initializeBalanceService(createExchangeAdapter(this.config));
 
           // Connect balance service to status broadcaster
           const balanceService = getBalanceService();
@@ -218,7 +218,7 @@ logErrorWithTimestamp('Failed to initialize balance service:', error);
 
         // Check and set position mode
         try {
-          this.isHedgeMode = await getPositionMode(this.config.api);
+          this.isHedgeMode = await exchange.getHedgeMode();
 logWithTimestamp(`📊 Position Mode: ${this.isHedgeMode ? 'HEDGE MODE' : 'ONE-WAY MODE'}`);
 
           // If config specifies a position mode and it differs from current, automatically set it
@@ -229,7 +229,7 @@ logWithTimestamp(`⚠️  Config specifies ${this.config.global.positionMode} mo
 logWithTimestamp(`🔄 Automatically changing position mode to match config...`);
 
               try {
-                await setPositionMode(wantHedgeMode, this.config.api);
+                await exchange.setHedgeMode(wantHedgeMode);
                 this.isHedgeMode = wantHedgeMode;
 logWithTimestamp(`✅ Position mode successfully changed to ${this.config.global.positionMode}`);
               } catch (error: any) {
@@ -306,7 +306,7 @@ logWithTimestamp('[Bot] Bot will continue without real-time balance updates');
 
         // Initialize Price Service for real-time mark prices
         try {
-          await initializePriceService();
+          await initializePriceService(exchange);
 logWithTimestamp('✅ Real-time price service started');
 
           // Listen for mark price updates and broadcast to web UI
@@ -326,7 +326,7 @@ logErrorWithTimestamp('⚠️  Price service failed to start:', error.message);
 
         // Initialize VWAP Streamer for real-time VWAP calculations
         try {
-          await vwapStreamer.start(this.config);
+          await vwapStreamer.start(this.config, exchange);
 
           // Listen for VWAP updates and broadcast to web UI
           vwapStreamer.on('vwap', (vwapData) => {
@@ -350,7 +350,7 @@ logErrorWithTimestamp('⚠️  VWAP streamer failed to start:', error.message);
       }
 
       // Initialize Position Manager
-      this.positionManager = new PositionManager(this.config, this.isHedgeMode);
+      this.positionManager = new PositionManager(this.config, this.isHedgeMode, exchange);
 
       // Inject status broadcaster for real-time position updates
       this.positionManager.setStatusBroadcaster(this.statusBroadcaster);
@@ -380,7 +380,7 @@ logErrorWithTimestamp('⚠️  Position Manager failed to start:', error.message
       }
 
       // Initialize Hunter
-      this.hunter = new Hunter(this.config, this.isHedgeMode);
+      this.hunter = new Hunter(this.config, this.isHedgeMode, exchange);
 
       // Inject status broadcaster for order events
       this.hunter.setStatusBroadcaster(this.statusBroadcaster);

@@ -1,7 +1,10 @@
 import type { Kline, MarkPrice, Order } from '../types';
+import type { Trade } from '../types/order';
+import type { AccountUpdate } from '../api/userDataStream';
+import type { DailyPnL, IncomeHistoryParams, IncomeRecord, SymbolPnL } from '../api/income';
 
 // Trading venues the bot knows about. Only venues marked 'available' in the catalog have an adapter.
-export const VENUE_IDS = ['aster', 'hyperliquid', 'lighter', 'drift'] as const;
+export const VENUE_IDS = ['aster', 'hyperliquid', 'lighter', 'phoenix'] as const;
 export type VenueId = typeof VENUE_IDS[number];
 
 // Where liquidation signals come from (can differ from the trading venue)
@@ -71,17 +74,62 @@ export interface OrderRequest {
   timeInForce?: 'GTC' | 'IOC' | 'FOK' | 'GTX';
 }
 
+export interface RequestOptions {
+  // Send immediately instead of through the shared rate-limit queue. Used where the bot has
+  // always bypassed the queue (position sync, SL/TP price checks, UI symbol lookups).
+  bypassRateLimit?: boolean;
+}
+
+export interface TickerPrice {
+  symbol: string;
+  price: string;
+}
+
+export interface ProtectiveOrdersRequest {
+  symbol: string;
+  side: 'BUY' | 'SELL';         // BUY protects a short, SELL protects a long
+  quantity: number;
+  stopLossPrice: number;
+  takeProfitPrice: number;
+  positionSide?: 'BOTH' | 'LONG' | 'SHORT';
+  reduceOnly?: boolean;
+}
+
+// Balance/position stream used by the balance service (Binance-style ACCOUNT_UPDATE events)
+export interface AccountStream {
+  start(onAccountUpdate?: (data: AccountUpdate) => void): Promise<void>;
+  stop(): Promise<void>;
+  isHealthy(): boolean;
+}
+
+export type IncomeRange = '24h' | '7d' | '30d' | '90d' | '1y' | 'all';
+
+// Trade, order and income history for the dashboard. Shapes are still Aster's;
+// normalizing them across venues is left for when a second venue is added.
+export interface AccountHistory {
+  getIncomeHistory(params?: IncomeHistoryParams): Promise<IncomeRecord[]>;
+  getTimeRangeIncome(range: IncomeRange): Promise<IncomeRecord[]>;
+  aggregateDailyPnLWithTrades(records: IncomeRecord[], symbols: string[], startTime: number, endTime: number): Promise<DailyPnL[]>;
+  aggregateBySymbolWithTrades(records: IncomeRecord[], symbols: string[], startTime: number, endTime: number): Promise<SymbolPnL[]>;
+  getAllOrders(symbol: string, startTime?: number, endTime?: number, limit?: number): Promise<Order[]>;
+  getUserTrades(symbol: string, params?: { startTime?: number; endTime?: number; fromId?: number; limit?: number }): Promise<Trade[]>;
+}
+
 export interface ExchangeAdapter {
   readonly id: VenueId;
   readonly capabilities: VenueCapabilities;
   hasCredentials(): boolean;
 
-  // WebSocket endpoints for public and user-data streams
-  readonly streamBaseUrl: string;
+  // Stream URLs (messages use Binance-style event formats)
+  getMarkPriceStreamUrl(): string;
+  getKlineStreamUrl(subscriptions: { symbol: string; interval: string }[]): string;
+  getUserDataStreamUrl(listenKey: string): string;
 
   // Market data
-  getExchangeInfo(): Promise<any>;
+  getExchangeInfo(options?: RequestOptions): Promise<any>;
   getMarkPrice(symbol?: string): Promise<MarkPrice | MarkPrice[]>;
+  getTickerPrice(symbol: string, options?: RequestOptions): Promise<TickerPrice>;
+  getAllTickerPrices(options?: RequestOptions): Promise<TickerPrice[]>;
   getKlines(symbol: string, interval?: string, limit?: number): Promise<Kline[]>;
   getOrderBook(symbol: string, limit?: number): Promise<any>;
   getBookTicker(symbol: string): Promise<any>;
@@ -89,14 +137,22 @@ export interface ExchangeAdapter {
   // Account
   getAccountInfo(): Promise<any>;
   getBalance(): Promise<any>;
-  getPositions(symbol?: string): Promise<VenuePosition[]>;
-  getOpenOrders(symbol?: string): Promise<VenueOrder[]>;
+  getPositions(symbol?: string, options?: RequestOptions): Promise<VenuePosition[]>;
+  getOpenOrders(symbol?: string, options?: RequestOptions): Promise<VenueOrder[]>;
   getHedgeMode(): Promise<boolean>;
   setHedgeMode(enabled: boolean): Promise<void>;
   setLeverage(symbol: string, leverage: number): Promise<any>;
+  readonly history: AccountHistory;
+
+  // User data stream (order fills, position and balance updates)
+  createUserDataStream(): Promise<string>;   // returns the stream key for getUserDataStreamUrl
+  keepAliveUserDataStream(): Promise<void>;
+  closeUserDataStream(): Promise<void>;
+  createAccountStream(): AccountStream;
 
   // Orders
   placeOrder(request: OrderRequest): Promise<Order>;
+  placeProtectiveOrders(request: ProtectiveOrdersRequest): Promise<{ stopLoss?: Order; takeProfit?: Order; errors: string[] }>;
   cancelOrder(symbol: string, orderId: number): Promise<any>;
   cancelAllOrders(symbol: string): Promise<any>;
 }

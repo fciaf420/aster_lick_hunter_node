@@ -2,8 +2,9 @@ import { buildSignedQuery } from './auth';
 import { ApiCredentials } from '../types';
 import { getRateLimitedAxios } from './requestInterceptor';
 import { getUserTrades } from './market';
+import { ASTER_REST_BASE_URL } from '../exchange/aster/constants';
 
-const BASE_URL = 'https://fapi.asterdex.com';
+const BASE_URL = ASTER_REST_BASE_URL;
 
 // Simple cache to prevent duplicate API calls
 const incomeCache = new Map<string, { data: IncomeRecord[]; timestamp: number }>();

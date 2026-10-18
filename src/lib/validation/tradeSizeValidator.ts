@@ -1,6 +1,6 @@
 import { Config } from '../types';
-import { getExchangeInfo } from '../api/market';
-import axios from 'axios';
+import type { ExchangeAdapter } from '../exchange/types';
+import { createExchangeAdapter } from '../exchange/registry';
 
 export interface TradeSizeValidationResult {
   valid: boolean;
@@ -21,18 +21,21 @@ export interface TradeSizeWarning {
 /**
  * Validates all configured trade sizes against exchange minimums
  */
-export async function validateAllTradeSizes(config: Config): Promise<TradeSizeValidationResult> {
+export async function validateAllTradeSizes(
+  config: Config,
+  exchange: ExchangeAdapter = createExchangeAdapter(config)
+): Promise<TradeSizeValidationResult> {
   const warnings: TradeSizeWarning[] = [];
 
   try {
     // Fetch exchange info and current prices for all symbols
-    const [exchangeInfo, pricesResponse] = await Promise.all([
-      getExchangeInfo(),
-      axios.get('https://fapi.asterdex.com/fapi/v1/ticker/price')
+    const [exchangeInfo, prices] = await Promise.all([
+      exchange.getExchangeInfo(),
+      exchange.getAllTickerPrices({ bypassRateLimit: true })
     ]);
 
     const priceMap = new Map<string, number>();
-    pricesResponse.data.forEach((item: any) => {
+    prices.forEach((item: any) => {
       priceMap.set(item.symbol, parseFloat(item.price));
     });
 

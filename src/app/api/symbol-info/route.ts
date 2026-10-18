@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getExchangeInfo } from '@/lib/api/market';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
 import { loadConfig } from '@/lib/bot/config';
 
 interface SymbolPrecisionInfo {
@@ -51,11 +51,11 @@ export async function GET() {
       return NextResponse.json(Object.fromEntries(symbolInfoCache));
     }
 
-    // Load config to get API credentials (not currently used but kept for future needs)
-    await loadConfig();
+    // Load config to pick the trading venue
+    const config = await loadConfig();
 
     // Fetch exchange info
-    const exchangeInfo = await getExchangeInfo();
+    const exchangeInfo = await createExchangeAdapter(config).getExchangeInfo();
 
     // Parse symbol precision info
     const symbolInfo = new Map<string, SymbolPrecisionInfo>();

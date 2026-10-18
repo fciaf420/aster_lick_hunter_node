@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getTimeRangeIncome, aggregateBySymbolWithTrades } from '@/lib/api/income';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
 import { configLoader } from '@/lib/config/configLoader';
 import { withAuth } from '@/lib/auth/with-auth';
 
@@ -14,20 +14,16 @@ export const GET = withAuth(async (request: Request, _user) => {
       config = await configLoader.loadConfig();
     }
 
-    if (!config.api || !config.api.apiKey || !config.api.secretKey) {
+    const exchange = createExchangeAdapter(config);
+    if (!config.api || !exchange.hasCredentials()) {
       return NextResponse.json(
         { error: 'API credentials not configured' },
         { status: 500 }
       );
     }
 
-    const credentials = {
-      apiKey: config.api.apiKey,
-      secretKey: config.api.secretKey,
-    };
-
     // Fetch income history
-    const records = await getTimeRangeIncome(credentials, range);
+    const records = await exchange.history.getTimeRangeIncome(range);
 
     // Discover symbols from income records (includes ALL traded symbols)
     const symbolsFromIncome = Array.from(new Set(records.map(r => r.symbol).filter(s => s)));
@@ -60,9 +56,8 @@ export const GET = withAuth(async (request: Request, _user) => {
     }
 
     // Aggregate by symbol WITH REAL realized PnL from trades
-    const symbols = await aggregateBySymbolWithTrades(
+    const symbols = await exchange.history.aggregateBySymbolWithTrades(
       records,
-      credentials,
       symbolsFromIncome,
       startTime,
       now

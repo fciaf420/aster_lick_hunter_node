@@ -1,4 +1,14 @@
-import { getOrderBook, getBookTicker, getExchangeInfo } from './market';
+import type { ExchangeAdapter } from '../exchange/types';
+import { createPublicExchangeAdapter } from '../exchange/registry';
+
+// Market data these helpers read; the caller's exchange adapter, else the default venue's public data
+type MarketData = Pick<ExchangeAdapter, 'getExchangeInfo' | 'getBookTicker' | 'getOrderBook'>;
+let defaultMarketData: MarketData | null = null;
+function marketData(exchange?: MarketData): MarketData {
+  if (exchange) return exchange;
+  defaultMarketData ??= createPublicExchangeAdapter();
+  return defaultMarketData;
+}
 
 // Depth levels come back as [price, quantity] pairs
 type OrderBookEntry = [price: string, quantity: string];
@@ -50,7 +60,7 @@ const DEFAULT_FILTERS = {
 };
 
 // Get symbol filters from exchange info
-export async function getSymbolFilters(symbol: string): Promise<SymbolInfo | null> {
+export async function getSymbolFilters(symbol: string, exchange?: MarketData): Promise<SymbolInfo | null> {
   const now = Date.now();
 
   // Use cache if available and not expired
@@ -63,7 +73,7 @@ export async function getSymbolFilters(symbol: string): Promise<SymbolInfo | nul
   }
 
   try {
-    exchangeInfoCache = await getExchangeInfo();
+    exchangeInfoCache = await marketData(exchange).getExchangeInfo();
     exchangeInfoCacheTime = now;
 
     const symbolInfo = exchangeInfoCache.symbols.find((s: any) => s.symbol === symbol);
@@ -104,16 +114,17 @@ export async function calculateOptimalPrice(
   symbol: string,
   side: 'BUY' | 'SELL',
   priceOffsetBps: number = 1, // 1 basis point default offset
-  usePostOnly: boolean = false
+  usePostOnly: boolean = false,
+  exchange?: MarketData
 ): Promise<number | null> {
   try {
     // Get current best bid/ask
-    const bookTicker = await getBookTicker(symbol);
+    const bookTicker = await marketData(exchange).getBookTicker(symbol);
     const bestBid = parseFloat(bookTicker.bidPrice);
     const bestAsk = parseFloat(bookTicker.askPrice);
 
     // Get symbol filters for price precision
-    const symbolInfo = await getSymbolFilters(symbol);
+    const symbolInfo = await getSymbolFilters(symbol, exchange);
     const tickSize = symbolInfo?.filters.find(f => f.filterType === 'PRICE_FILTER')?.tickSize || '0.01';
 
     let targetPrice: number;
@@ -164,10 +175,11 @@ export async function validateOrderParams(
   symbol: string,
   side: 'BUY' | 'SELL',
   price: number,
-  quantity: number
+  quantity: number,
+  exchange?: MarketData
 ): Promise<{ valid: boolean; adjustedPrice?: number; adjustedQuantity?: number; error?: string }> {
   try {
-    const symbolInfo = await getSymbolFilters(symbol);
+    const symbolInfo = await getSymbolFilters(symbol, exchange);
     if (!symbolInfo) {
       console.warn(`validateOrderParams: Symbol info not found for ${symbol}, using defaults`);
       // Use default filters and still validate/format
@@ -240,14 +252,15 @@ export async function validateOrderParams(
 export async function analyzeOrderBookDepth(
   symbol: string,
   side: 'BUY' | 'SELL',
-  targetNotional: number = 10000 // Target order size in USDT
+  targetNotional: number = 10000, // Target order size in USDT
+  exchange?: MarketData
 ): Promise<{
   avgPrice: number;
   priceImpact: number;
   liquidityOk: boolean;
 }> {
   try {
-    const orderBook: OrderBookData = await getOrderBook(symbol, 20); // Get deeper book
+    const orderBook: OrderBookData = await marketData(exchange).getOrderBook(symbol, 20); // Get deeper book
     const orders = side === 'BUY' ? orderBook.asks : orderBook.bids;
 
     let cumulativeNotional = 0;

@@ -1,11 +1,8 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
-import axios, { AxiosResponse } from 'axios';
 import { Config } from '../types';
-import { buildSignedQuery } from '../api/auth';
-import { getExchangeInfo, getMarkPrice } from '../api/market';
-import { placeOrder, cancelOrder } from '../api/orders';
-import { placeStopLossAndTakeProfit } from '../api/batchOrders';
+import type { ExchangeAdapter } from '../exchange/types';
+import { createExchangeAdapter } from '../exchange/registry';
 import { symbolPrecision } from '../utils/symbolPrecision';
 import { getBalanceService } from '../services/balanceService';
 import { errorLogger } from '../services/errorLogger';
@@ -55,7 +52,6 @@ interface ExchangeOrder {
   reduceOnly: boolean;
 }
 
-const BASE_URL = 'https://fapi.asterdex.com';
 
 // Position tracking interface for Hunter
 export interface PositionTracker {
@@ -82,10 +78,21 @@ export class PositionManager extends EventEmitter implements PositionTracker {
   private orderCancellationLocks: Set<string> = new Set(); // Prevent concurrent order cancellation for same symbol
   private symbolLeverage: Map<string, number> = new Map(); // Track leverage per symbol from ACCOUNT_CONFIG_UPDATE
 
-  constructor(config: Config, isHedgeMode: boolean = false) {
+  private readonly injectedExchange: ExchangeAdapter | null;
+  private defaultExchange: ExchangeAdapter | null = null;
+
+  constructor(config: Config, isHedgeMode: boolean = false, exchange?: ExchangeAdapter) {
     super();
     this.config = config;
     this.isHedgeMode = isHedgeMode;
+    this.injectedExchange = exchange ?? null;
+  }
+
+  // Without an injected adapter, one is built on first use for the configured venue, reading this.config's credentials
+  private get exchange(): ExchangeAdapter {
+    if (this.injectedExchange) return this.injectedExchange;
+    this.defaultExchange ??= createExchangeAdapter(this.config, () => this.config.api);
+    return this.defaultExchange;
   }
 
   // Set status broadcaster for position updates
@@ -178,7 +185,7 @@ logWithTimestamp('PositionManager: Starting...');
     // Fetch exchange info to get symbol precision
     try {
 logWithTimestamp('PositionManager: Fetching exchange info for symbol precision...');
-      const exchangeInfo = await getExchangeInfo();
+      const exchangeInfo = await this.exchange.getExchangeInfo();
       symbolPrecision.parseExchangeInfo(exchangeInfo);
     } catch (error: any) {
 logErrorWithTimestamp('PositionManager: Failed to fetch exchange info:', error.message);
@@ -186,7 +193,7 @@ logErrorWithTimestamp('PositionManager: Failed to fetch exchange info:', error.m
     }
 
     // Skip user data stream in paper mode with no API keys
-    if (this.config.global.paperMode && (!this.config.api.apiKey || !this.config.api.secretKey)) {
+    if (this.config.global.paperMode && !this.exchange.hasCredentials()) {
 logWithTimestamp('PositionManager: Running in paper mode without API keys - simulating streams');
       return;
     }
@@ -214,17 +221,12 @@ logWithTimestamp('PositionManager: Stopping...');
   }
 
   private async startUserDataStream(): Promise<void> {
-    // For listen key endpoint, typically only needs API key header, no signature
-    const headers = {
-      'X-MBX-APIKEY': this.config.api.apiKey  // Binance-style header
-    };
-
-    const response: AxiosResponse = await axios.post(`${BASE_URL}/fapi/v1/listenKey`, null, { headers });
-    this.listenKey = response.data.listenKey;
+    this.listenKey = await this.exchange.createUserDataStream();
 logWithTimestamp('PositionManager: Got listenKey:', this.listenKey);
 
     // Start WS
-    this.ws = new WebSocket(`wss://fstream.asterdex.com/ws/${this.listenKey}`);
+    const streamUrl = this.exchange.getUserDataStreamUrl(this.listenKey!);
+    this.ws = new WebSocket(streamUrl);
 
     this.ws.on('open', () => {
 logWithTimestamp('PositionManager WS connected');
@@ -255,7 +257,7 @@ logErrorWithTimestamp('PositionManager: WS message parse error:', error);
 logErrorWithTimestamp('PositionManager WS error:', error);
       // Log to error database
       errorLogger.logWebSocketError(
-        `wss://fstream.asterdex.com/ws/${this.listenKey}`,
+        streamUrl,
         error instanceof Error ? error : new Error(String(error)),
         1
       );
@@ -297,10 +299,7 @@ logWithTimestamp('PositionManager WS closed - reconnecting...');
   private async keepalive(): Promise<void> {
     if (!this.listenKey) return;
     try {
-      const headers = {
-        'X-MBX-APIKEY': this.config.api.apiKey
-      };
-      await axios.put(`${BASE_URL}/fapi/v1/listenKey`, null, { headers });
+      await this.exchange.keepAliveUserDataStream();
 logWithTimestamp('PositionManager: Keepalive sent');
     } catch (error) {
 logErrorWithTimestamp('PositionManager: Keepalive error:', error);
@@ -318,10 +317,7 @@ logErrorWithTimestamp('PositionManager: Keepalive error:', error);
   private async closeUserDataStream(): Promise<void> {
     if (!this.listenKey) return;
     try {
-      const headers = {
-        'X-MBX-APIKEY': this.config.api.apiKey
-      };
-      await axios.delete(`${BASE_URL}/fapi/v1/listenKey`, { headers });
+      await this.exchange.closeUserDataStream();
 logWithTimestamp('PositionManager: User data stream closed');
     } catch (error) {
 logErrorWithTimestamp('PositionManager: Close stream error:', error);
@@ -532,26 +528,12 @@ logErrorWithTimestamp('PositionManager: Failed to sync with exchange:', error);
 
   // Get all positions from exchange
   private async getPositionsFromExchange(): Promise<ExchangePosition[]> {
-    const params = {};
-    const queryString = buildSignedQuery(params, this.config.api);
-
-    const response = await axios.get(`${BASE_URL}/fapi/v2/positionRisk?${queryString}`, {
-      headers: { 'X-MBX-APIKEY': this.config.api.apiKey }
-    });
-
-    return response.data;
+    return this.exchange.getPositions(undefined, { bypassRateLimit: true });
   }
 
   // Get all open orders from exchange
   private async getOpenOrdersFromExchange(): Promise<ExchangeOrder[]> {
-    const params = {};
-    const queryString = buildSignedQuery(params, this.config.api);
-
-    const response = await axios.get(`${BASE_URL}/fapi/v1/openOrders?${queryString}`, {
-      headers: { 'X-MBX-APIKEY': this.config.api.apiKey }
-    });
-
-    return response.data;
+    return this.exchange.getOpenOrders(undefined, { bypassRateLimit: true });
   }
 
   // Helper to create consistent position keys
@@ -668,7 +650,7 @@ logErrorWithTimestamp(`PositionManager: Max retries reached for cancelling ${ord
 
   // Cancel order by ID
   private async cancelOrderById(symbol: string, orderId: number): Promise<void> {
-    await cancelOrder({ symbol, orderId }, this.config.api);
+    await this.exchange.cancelOrder(symbol, orderId);
   }
 
   private handleEvent(event: any): void {
@@ -1455,8 +1437,8 @@ logErrorWithTimestamp('PositionManager: Failed to check existing orders, proceed
       // Use batch orders when placing both SL and TP to save API calls
       if (placeSL && placeTP) {
         // Get current market price to validate stop loss placement
-        const ticker = await axios.get(`https://fapi.asterdex.com/fapi/v1/ticker/price?symbol=${symbol}`);
-        const currentPrice = parseFloat(ticker.data.price);
+        const ticker = await this.exchange.getTickerPrice(symbol, { bypassRateLimit: true });
+        const currentPrice = parseFloat(ticker.price);
 
         // Calculate SL price
         const rawSlPrice = isLong
@@ -1513,7 +1495,7 @@ logWithTimestamp(`PositionManager: Closing position at market instead of placing
               marketParams.reduceOnly = true;
             }
 
-            const marketOrder = await placeOrder(marketParams, this.config.api);
+            const marketOrder = await this.exchange.placeOrder(marketParams);
             logWithTimestamp(`PositionManager: Position closed at market! Order ID: ${marketOrder.orderId}, PnL: ~${pnlPercent.toFixed(2)}%`);
 
             if (this.statusBroadcaster) {
@@ -1558,7 +1540,7 @@ logWithTimestamp(`  Position Mode: ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'}`);
 logWithTimestamp(`  Position Side: ${orderPositionSide}`);
 
         // Place both orders in a single batch request (saves 1 API call)
-        const batchResult = await placeStopLossAndTakeProfit({
+        const batchResult = await this.exchange.placeProtectiveOrders({
           symbol,
           side: side as 'BUY' | 'SELL',
           quantity: formattedQuantity,
@@ -1566,7 +1548,7 @@ logWithTimestamp(`  Position Side: ${orderPositionSide}`);
           takeProfitPrice: tpPrice,
           positionSide: orderPositionSide as 'BOTH' | 'LONG' | 'SHORT',
           reduceOnly: orderPositionSide === 'BOTH',
-        }, this.config.api);
+        });
 
         // Handle results
         if (batchResult.stopLoss) {
@@ -1681,8 +1663,8 @@ logWithTimestamp(`PositionManager: Placing protection orders individually for ${
       if (placeSL) {
         // Place orders individually if not placing both
         // Get current market price to avoid "Order would immediately trigger" error
-        const ticker = await axios.get(`https://fapi.asterdex.com/fapi/v1/ticker/price?symbol=${symbol}`);
-        const currentPrice = parseFloat(ticker.data.price);
+        const ticker = await this.exchange.getTickerPrice(symbol, { bypassRateLimit: true });
+        const currentPrice = parseFloat(ticker.price);
 
         const rawSlPrice = isLong
           ? entryPrice * (1 - symbolConfig.slPercent / 100)
@@ -1731,7 +1713,7 @@ logWithTimestamp(`  Formatted SL price: ${slPrice}`);
           orderParams.reduceOnly = true;
         }
 
-        const slOrder = await placeOrder(orderParams, this.config.api);
+        const slOrder = await this.exchange.placeOrder(orderParams);
 
         orders.slOrderId = typeof slOrder.orderId === 'string' ? parseInt(slOrder.orderId) : slOrder.orderId;
 logWithTimestamp(`PositionManager: Placed SL (STOP_MARKET) for ${symbol} at ${slPrice.toFixed(4)}, orderId: ${slOrder.orderId}`);
@@ -1750,8 +1732,8 @@ logWithTimestamp(`PositionManager: Placed SL (STOP_MARKET) for ${symbol} at ${sl
       // Place Take Profit
       if (placeTP) {
         // Get current market price to check if TP would trigger immediately
-        const ticker = await axios.get(`https://fapi.asterdex.com/fapi/v1/ticker/price?symbol=${symbol}`);
-        const currentPrice = parseFloat(ticker.data.price);
+        const ticker = await this.exchange.getTickerPrice(symbol, { bypassRateLimit: true });
+        const currentPrice = parseFloat(ticker.price);
 
         const rawTpPrice = isLong
           ? entryPrice * (1 + symbolConfig.tpPercent / 100)
@@ -1791,7 +1773,7 @@ logWithTimestamp(`PositionManager: Closing position at market - already past TP 
               marketParams.reduceOnly = true;
             }
 
-            const marketOrder = await placeOrder(marketParams, this.config.api);
+            const marketOrder = await this.exchange.placeOrder(marketParams);
             logWithTimestamp(`PositionManager: Position closed at market! Order ID: ${marketOrder.orderId}, PnL: ~${pnlPercent.toFixed(2)}%`);
 
             if (this.statusBroadcaster) {
@@ -1837,7 +1819,7 @@ logWithTimestamp(`  Formatted TP price: ${tpPrice}`);
             tpParams.reduceOnly = true;
           }
 
-          const tpOrder = await placeOrder(tpParams, this.config.api);
+          const tpOrder = await this.exchange.placeOrder(tpParams);
           orders.tpOrderId = typeof tpOrder.orderId === 'string' ? parseInt(tpOrder.orderId) : tpOrder.orderId;
 logWithTimestamp(`PositionManager: Placed TP for ${symbol} at ${tpPrice}, orderId: ${tpOrder.orderId}`);
 
@@ -2301,7 +2283,7 @@ logWithTimestamp(`PositionManager: WebSocket mark price stale for ${symbol} (${p
         // Fallback to API if WebSocket price is not available or stale
         if (markPrice <= 0) {
           try {
-            const apiPriceData = await getMarkPrice(symbol) as any;
+            const apiPriceData = await this.exchange.getMarkPrice(symbol) as any;
             if (apiPriceData && apiPriceData.markPrice) {
               markPrice = parseFloat(apiPriceData.markPrice);
 logWithTimestamp(`PositionManager: Fetched mark price from API for ${symbol}: ${markPrice}`);
@@ -2370,7 +2352,7 @@ logWithTimestamp(`PositionManager: Auto-closing ${symbol} at market - Price exce
                 marketParams.reduceOnly = true;
               }
 
-              const marketOrder = await placeOrder(marketParams, this.config.api);
+              const marketOrder = await this.exchange.placeOrder(marketParams);
 logWithTimestamp(`PositionManager: Position ${symbol} closed at market! Order ID: ${marketOrder.orderId}`);
 
               if (this.statusBroadcaster) {
@@ -2601,7 +2583,7 @@ logWarnWithTimestamp(`PositionManager: Position ${symbol} ${side} not found`);
     const quantity = Math.abs(posAmt);
     const closeSide = posAmt > 0 ? 'SELL' : 'BUY';
 
-    await placeOrder({
+    await this.exchange.placeOrder({
       symbol,
       side: closeSide,
       type: 'MARKET',
@@ -2609,7 +2591,7 @@ logWarnWithTimestamp(`PositionManager: Position ${symbol} ${side} not found`);
       positionSide: (targetPosition.positionSide || 'BOTH') as 'BOTH' | 'LONG' | 'SHORT',
       // Only use reduceOnly in One-way mode
       ...(targetPosition.positionSide === 'BOTH' ? { reduceOnly: true } : {}),
-    }, this.config.api);
+    });
 
     // Remove from our maps (will be confirmed by ACCOUNT_UPDATE)
     this.currentPositions.delete(targetKey);

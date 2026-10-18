@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { placeOrder } from '@/lib/api/orders';
-import { getPositions } from '@/lib/api/orders';
-import { getPositionMode } from '@/lib/api/positionMode';
 import { loadConfig } from '@/lib/bot/config';
 import { symbolPrecision } from '@/lib/utils/symbolPrecision';
-import { getExchangeInfo } from '@/lib/api/market';
 import { invalidateIncomeCache } from '@/lib/api/income';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
 
 export async function POST(
   request: NextRequest,
@@ -23,9 +20,10 @@ export async function POST(
     }
 
     const config = await loadConfig();
+    const exchange = createExchangeAdapter(config);
 
     // If no API key is configured, return simulation mode
-    if (!config.api.apiKey || !config.api.secretKey) {
+    if (!exchange.hasCredentials()) {
       return NextResponse.json({
         success: true,
         message: `Simulated closing ${symbol} ${side} position`,
@@ -34,11 +32,11 @@ export async function POST(
     }
 
     // Load exchange info for precision validation
-    const exchangeInfo = await getExchangeInfo();
+    const exchangeInfo = await exchange.getExchangeInfo();
     symbolPrecision.parseExchangeInfo(exchangeInfo);
 
     // Get current positions to find the specific position
-    const positions = await getPositions(config.api);
+    const positions = await exchange.getPositions();
 
     // Find the target position
     const targetPosition = positions.find(pos => {
@@ -79,7 +77,7 @@ export async function POST(
     // Get current position mode from exchange
     let isHedgeMode = false;
     try {
-      isHedgeMode = await getPositionMode(config.api);
+      isHedgeMode = await exchange.getHedgeMode();
       console.log(`Position mode: ${isHedgeMode ? 'HEDGE' : 'ONE_WAY'}`);
     } catch (error) {
       console.warn('Failed to fetch position mode, defaulting to ONE_WAY:', error);
@@ -118,7 +116,7 @@ export async function POST(
     console.log(`Closing position with params:`, orderParams);
 
     // Place the market order to close the position
-    const orderResult = await placeOrder(orderParams, config.api);
+    const orderResult = await exchange.placeOrder(orderParams);
 
     console.log(`Successfully closed position ${symbol} ${side}:`, orderResult);
 

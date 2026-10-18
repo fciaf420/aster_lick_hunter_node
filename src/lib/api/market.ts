@@ -2,8 +2,9 @@ import { AxiosResponse } from 'axios';
 import { ApiCredentials, MarkPrice, Kline } from '../types';
 import { buildSignedQuery, paramsToQuery } from './auth';
 import { getRateLimitedAxios } from './requestInterceptor';
+import { ASTER_REST_BASE_URL } from '../exchange/aster/constants';
 
-const BASE_URL = 'https://fapi.asterdex.com';
+const BASE_URL = ASTER_REST_BASE_URL;
 
 // Public endpoints (no authentication)
 export async function getExchangeInfo(): Promise<any> {
@@ -152,6 +153,13 @@ export async function getSymbolPrice(symbol: string): Promise<any> {
   const query = paramsToQuery(params);
   const axios = getRateLimitedAxios();
   const response: AxiosResponse = await axios.get(`${BASE_URL}/fapi/v1/ticker/price?${query}`);
+  return response.data;
+}
+
+// Get latest prices for all symbols
+export async function getAllSymbolPrices(): Promise<any[]> {
+  const axios = getRateLimitedAxios();
+  const response: AxiosResponse = await axios.get(`${BASE_URL}/fapi/v1/ticker/price`);
   return response.data;
 }
 

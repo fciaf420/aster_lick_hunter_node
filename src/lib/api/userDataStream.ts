@@ -2,9 +2,10 @@ import WebSocket from 'ws';
 import { ApiCredentials } from '../types';
 import { getRateLimitedAxios } from './requestInterceptor';
 import { logWithTimestamp, logErrorWithTimestamp, logWarnWithTimestamp } from '../utils/timestamp';
+import { ASTER_REST_BASE_URL, ASTER_STREAM_BASE_URL } from '../exchange/aster/constants';
 
-const BASE_URL = 'https://fapi.asterdex.com';
-const WS_BASE_URL = 'wss://fstream.asterdex.com';
+const BASE_URL = ASTER_REST_BASE_URL;
+const WS_BASE_URL = ASTER_STREAM_BASE_URL;
 
 export interface BalanceUpdate {
   asset: string;

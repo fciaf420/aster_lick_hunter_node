@@ -5,8 +5,9 @@ import { buildSignedForm, buildSignedQuery } from './auth';
 import { getRateLimitedAxios } from './requestInterceptor';
 import { symbolPrecision } from '../utils/symbolPrecision';
 import { getMarkPrice } from './market';
+import { ASTER_REST_BASE_URL } from '../exchange/aster/constants';
 
-const BASE_URL = 'https://fapi.asterdex.com';
+const BASE_URL = ASTER_REST_BASE_URL;
 
 // Place a new order (POST)
 export async function placeOrder(params: {

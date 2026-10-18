@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllOrders, getUserTrades } from '@/lib/api/orders';
+import { createExchangeAdapter } from '@/lib/exchange/registry';
 import { loadConfig } from '@/lib/bot/config';
 import { Order, OrderStatus } from '@/lib/types/order';
 
@@ -10,6 +10,7 @@ const CACHE_TTL = 10000; // 10 seconds
 export async function GET(request: NextRequest) {
   try {
     const config = await loadConfig();
+    const exchange = createExchangeAdapter(config);
     const searchParams = request.nextUrl.searchParams;
 
     // Extract query parameters
@@ -26,8 +27,7 @@ export async function GET(request: NextRequest) {
     // If no symbols configured, try to get symbols from recent income history
     if (configuredSymbols.length === 0 && !symbol) {
       try {
-        const { getIncomeHistory } = await import('@/lib/api/income');
-        const recentIncome = await getIncomeHistory(config.api, {
+        const recentIncome = await exchange.history.getIncomeHistory({
           startTime: Date.now() - 30 * 24 * 60 * 60 * 1000, // Last 30 days
           limit: 1000,
         });
@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
     const fetchSymbol = symbol || (configuredSymbols.length > 0 ? configuredSymbols[0] : 'BTCUSDT');
 
     // If no API key is configured, return empty array
-    if (!config.api.apiKey || !config.api.secretKey) {
+    if (!exchange.hasCredentials()) {
       return NextResponse.json([]);
     }
 
@@ -65,9 +65,8 @@ export async function GET(request: NextRequest) {
 
       if (symbol && symbol !== 'ALL') {
         // Fetch for specific symbol
-        const orders = await getAllOrders(
+        const orders = await exchange.history.getAllOrders(
           symbol,
-          config.api,
           startTime ? parseInt(startTime) : undefined,
           endTime ? parseInt(endTime) : undefined,
           Math.min(limit * 2, 1000)
@@ -83,9 +82,8 @@ export async function GET(request: NextRequest) {
 
         for (const sym of configuredSymbols) {
           try {
-            const orders = await getAllOrders(
+            const orders = await exchange.history.getAllOrders(
               sym,
-              config.api,
               startTime ? parseInt(startTime) : undefined,
               endTime ? parseInt(endTime) : undefined,
               Math.min(perSymbolLimit, 500)
@@ -99,9 +97,8 @@ export async function GET(request: NextRequest) {
         console.log(`[Orders API] Total orders fetched from all symbols: ${allOrders.length}`);
       } else {
         // Fallback to default symbol
-        const orders = await getAllOrders(
+        const orders = await exchange.history.getAllOrders(
           fetchSymbol,
-          config.api,
           startTime ? parseInt(startTime) : undefined,
           endTime ? parseInt(endTime) : undefined,
           Math.min(limit * 2, 1000)
@@ -115,7 +112,7 @@ export async function GET(request: NextRequest) {
       if (symbol && symbol !== 'ALL') {
         // Fetch trades for specific symbol
         try {
-          const trades = await getUserTrades(symbol, config.api, {
+          const trades = await exchange.history.getUserTrades(symbol, {
             startTime: startTime ? parseInt(startTime) : Date.now() - 7 * 24 * 60 * 60 * 1000,
             endTime: endTime ? parseInt(endTime) : Date.now(),
             limit: 1000,
@@ -133,7 +130,7 @@ export async function GET(request: NextRequest) {
         // Fetch trades for all configured symbols
         for (const sym of configuredSymbols) {
           try {
-            const trades = await getUserTrades(sym, config.api, {
+            const trades = await exchange.history.getUserTrades(sym, {
               startTime: startTime ? parseInt(startTime) : Date.now() - 7 * 24 * 60 * 60 * 1000,
               endTime: endTime ? parseInt(endTime) : Date.now(),
               limit: 1000,

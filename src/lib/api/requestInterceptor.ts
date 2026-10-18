@@ -7,6 +7,7 @@
 
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { getRateLimitManager, RequestPriority } from './rateLimitManager';
+import { ASTER_REST_BASE_URL } from '../exchange/aster/constants';
 
 // Endpoint weight mapping based on API documentation
 const ENDPOINT_WEIGHTS: Record<string, number> = {
@@ -80,7 +81,7 @@ export interface RateLimitedAxiosInstance extends AxiosInstance {
 /**
  * Create a rate-limited axios instance
  */
-export function createRateLimitedAxios(baseURL: string = 'https://fapi.asterdex.com'): RateLimitedAxiosInstance {
+export function createRateLimitedAxios(baseURL: string = ASTER_REST_BASE_URL): RateLimitedAxiosInstance {
   const instance = axios.create({
     baseURL,
     timeout: 10000,  // Default timeout, will be overridden for specific endpoints

@@ -21,14 +21,14 @@ async function testPositionManagerInitialization() {
 
   await summary.run('Create PositionManager instance', async () => {
     const config = createMockConfig();
-    const manager = new PositionManager(config.symbols, config.api);
+    const manager = new PositionManager(config);
     assert(manager !== null, 'PositionManager should be created');
   });
 
   await summary.run('Initialize with paper mode', async () => {
     const config = createMockConfig();
     config.global.paperMode = true;
-    const manager = new PositionManager(config.symbols, config.api, true);
+    const manager = new PositionManager(config);
     assert(manager !== null, 'PositionManager should work in paper mode');
   });
 

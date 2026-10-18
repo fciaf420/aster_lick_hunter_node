@@ -33,7 +33,7 @@ async function testFullTradingFlow() {
   await summary.run('Initialize bot components', async () => {
     const config = createMockConfig();
     const hunter = new Hunter(config);
-    const positionManager = new PositionManager(config.symbols, config.api, true);
+    const positionManager = new PositionManager(config);
 
     assert(hunter !== null, 'Hunter should be initialized');
     assert(positionManager !== null, 'PositionManager should be initialized');

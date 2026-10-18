@@ -1,5 +1,6 @@
 import { Kline } from '../types';
-import { getKlines } from '../api/market';
+import type { ExchangeAdapter } from '../exchange/types';
+import { createPublicExchangeAdapter } from '../exchange/registry';
 
 interface VWAPCache {
   value: number;
@@ -10,6 +11,14 @@ interface VWAPCache {
 class VWAPService {
   private cache: Map<string, VWAPCache> = new Map();
   private readonly CACHE_TTL = 60000; // 60 seconds cache TTL (increased since we have WebSocket now)
+  private defaultExchange: ExchangeAdapter | null = null;
+
+  // Klines come from the given exchange, else the default venue's public market data
+  private getExchange(exchange?: ExchangeAdapter): ExchangeAdapter {
+    if (exchange) return exchange;
+    this.defaultExchange ??= createPublicExchangeAdapter();
+    return this.defaultExchange;
+  }
 
   /**
    * Calculate VWAP from kline data
@@ -51,7 +60,8 @@ class VWAPService {
   public async getVWAP(
     symbol: string,
     timeframe: string = '1m',
-    lookback: number = 100
+    lookback: number = 100,
+    exchange?: ExchangeAdapter
   ): Promise<number> {
     const cacheKey = `${symbol}_${timeframe}_${lookback}`;
     const cached = this.cache.get(cacheKey);
@@ -63,7 +73,7 @@ class VWAPService {
 
     try {
       // Fetch klines from the exchange
-      const klines = await getKlines(symbol, timeframe, lookback);
+      const klines = await this.getExchange(exchange).getKlines(symbol, timeframe, lookback);
 
       // Calculate VWAP
       const vwap = this.calculateVWAP(klines);
@@ -90,9 +100,10 @@ class VWAPService {
     symbol: string,
     currentPrice: number,
     timeframe: string = '1m',
-    lookback: number = 100
+    lookback: number = 100,
+    exchange?: ExchangeAdapter
   ): Promise<'above' | 'below'> {
-    const vwap = await this.getVWAP(symbol, timeframe, lookback);
+    const vwap = await this.getVWAP(symbol, timeframe, lookback, exchange);
     return currentPrice > vwap ? 'above' : 'below';
   }
 
@@ -105,10 +116,11 @@ class VWAPService {
     side: 'BUY' | 'SELL',
     currentPrice: number,
     timeframe: string = '1m',
-    lookback: number = 100
+    lookback: number = 100,
+    exchange?: ExchangeAdapter
   ): Promise<{ allowed: boolean; vwap: number; reason?: string }> {
     try {
-      const vwap = await this.getVWAP(symbol, timeframe, lookback);
+      const vwap = await this.getVWAP(symbol, timeframe, lookback, exchange);
       const position = currentPrice > vwap ? 'above' : 'below';
 
       // For BUY orders (longs), we want price to be below VWAP
