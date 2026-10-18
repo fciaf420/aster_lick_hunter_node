@@ -26,9 +26,11 @@ import {
 } from '../lib/exchange/registry';
 import { BETA_WARNING, getLiquidationSourceEntry, getVenueEntry } from '../lib/exchange/catalog';
 import type { ExchangeAdapter } from '../lib/exchange/types';
-import { LighterAdapter } from '../lib/exchange/lighter/LighterAdapter';
+import { isLighterHedgeAdapter } from '../lib/exchange/lighter/LighterHedgeAdapter';
 import {
   applyLighterConfig,
+  isLighterVenueAdapter,
+  lighterUnmanagedShortAccountWarning,
   readLighterSettings,
   resolveLighterProfile,
   setLighterAlertSink,
@@ -37,6 +39,7 @@ import {
   type LighterRuntimeAlert,
 } from '../lib/exchange/lighter/runtime';
 import { withoutSecrets } from '../lib/config/redact';
+import { lighterHedgeState } from '../lib/config/types';
 
 // Helper function to kill all child processes (synchronous for exit handler)
 function killAllProcesses() {
@@ -215,10 +218,24 @@ logErrorWithTimestamp('❌ Cannot run in LIVE mode without API keys!');
 
       // Lighter: check the network, the registered API key and the key's permissions before anything trades.
       // Trading methods refuse to sign until these pass; in live mode a failure stops the bot here.
-      if (hasValidApiKeys && exchange instanceof LighterAdapter) {
+      // Hedge mode checks both sub-accounts (each key, the same master, wrong-direction positions).
+      if (hasValidApiKeys && isLighterVenueAdapter(exchange)) {
         try {
-          const report = await exchange.verifyStartup();
+          if (isLighterHedgeAdapter(exchange)) {
+            // verifyStartup itself logs the same-master check and raises the different-master and wrong-direction
+            // alerts (dashboard), so only the summary is logged here
+            const report = await exchange.verifyStartup();
+logWithTimestamp(`✅ Lighter startup checks passed (${report.profile}) for both hedge-mode accounts`);
+            for (const side of ['LONG', 'SHORT'] as const) {
+              if (report.wrongSign.some(position => position.side === side)) {
+                const name = side === 'LONG' ? 'long' : 'short';
+logWarnWithTimestamp(`⚠️  Lighter hedge mode: the ${name} account holds a position of the wrong direction; every new ${name} entry is refused until it is closed`);
+              }
+            }
+          } else {
+            const report = await exchange.verifyStartup();
 logWithTimestamp(`✅ Lighter startup checks passed (${report.profile}, account ${report.accountIndex}, API key ${report.apiKeyIndex})`);
+          }
         } catch (error: any) {
           const message = error?.message || String(error);
 logErrorWithTimestamp('❌ Lighter startup checks failed:', message);
@@ -273,6 +290,9 @@ logWithTimestamp(`📊 Position Mode: ${this.isHedgeMode ? 'HEDGE MODE' : 'ONE-W
             const wantHedgeMode = this.config.global.positionMode === 'HEDGE';
             if (wantHedgeMode && !exchange.capabilities.hedgeMode) {
 logWarnWithTimestamp(`⚠️  ${getVenueEntry(exchange.id).name} has no hedge mode (one netted position per symbol); using ONE-WAY mode`);
+              if (exchange.id === 'lighter') {
+logWarnWithTimestamp('   Lighter hedge mode works with a second sub-account for the shorts: set it up in the Lighter settings on the config page, then restart');
+              }
             } else if (wantHedgeMode !== this.isHedgeMode) {
 logWithTimestamp(`⚠️  Config specifies ${this.config.global.positionMode} mode but account is in ${this.isHedgeMode ? 'HEDGE' : 'ONE-WAY'} mode`);
 logWithTimestamp(`🔄 Automatically changing position mode to match config...`);
@@ -597,6 +617,19 @@ logWarnWithTimestamp(`⚠️  Lighter network changed to ${readLighterSettings(n
         this.statusBroadcaster.logActivity('Config: Lighter network change saved, restart the bot to apply');
       }
 
+      // Hedge mode (two sub-accounts) is chosen when the adapter is built: on / off or another short account
+      // only applies after a restart
+      if (oldConfig && getConfiguredVenue(newConfig) === 'lighter') {
+        const before = lighterHedgeState(oldConfig);
+        const after = lighterHedgeState(newConfig);
+        const shortBefore = oldConfig.venues?.lighter?.hedge?.shortAccount?.accountIndex;
+        const shortAfter = newConfig.venues?.lighter?.hedge?.shortAccount?.accountIndex;
+        if (before.mode !== after.mode || shortBefore !== shortAfter) {
+logWarnWithTimestamp(`⚠️  Lighter hedge mode settings changed (now ${after.mode === 'on' ? 'on' : after.mode === 'incomplete' ? 'incomplete' : 'off'}) - restart the bot to apply them`);
+          this.statusBroadcaster.logActivity('Config: Lighter hedge mode change saved, restart the bot to apply');
+        }
+      }
+
       // Lighter symbol mapping and the liquidation feed's shadow / live switch follow the new config now
       applyLighterConfig();
 
@@ -735,8 +768,30 @@ logWithTimestamp(live
         ? '⚠️  Lighter liquidation feed is LIVE: detected liquidations are traded'
         : '🕶️  Lighter liquidation feed is in SHADOW mode: liquidations are logged, never traded');
     }
-    if (exchange instanceof LighterAdapter) {
+    if (isLighterVenueAdapter(exchange)) {
       startLighterMarketRefresh(this.config);
+      this.logLighterHedgeMode(exchange);
+    }
+  }
+
+  // Lighter hedge mode (two sub-accounts): which accounts trade which side, or why the bot runs one-way
+  private logLighterHedgeMode(exchange: ExchangeAdapter): void {
+    if (!this.config) return;
+    const lighter = this.config.venues?.lighter;
+    const shortIndex = lighter?.hedge?.shortAccount?.accountIndex;
+    const hedge = lighterHedgeState(this.config);
+    if (hedge.mode === 'on' && isLighterHedgeAdapter(exchange)) {
+logWithTimestamp(`🔀 Lighter hedge mode: long account ${lighter?.accountIndex} (key ${lighter?.apiKeyIndex}), short account ${shortIndex} (key ${lighter?.hedge?.shortAccount?.apiKeyIndex})`);
+      return;
+    }
+    if (hedge.mode === 'incomplete') {
+logWarnWithTimestamp(`⚠️  Lighter hedge mode is enabled but the short account is incomplete (${hedge.problems.join('; ')}): running ONE-WAY on the main account`);
+    }
+    if (shortIndex !== undefined) {
+      // Best effort and not blocking: names the positions left on the short account when it can be read
+      void lighterUnmanagedShortAccountWarning(this.config).then(message => {
+        if (message) logWarnWithTimestamp(`⚠️  ${message}`);
+      });
     }
   }
 
@@ -751,6 +806,13 @@ logWithTimestamp(live
     if (event.source === 'late-tx') {
       this.statusBroadcaster.broadcastTradingError('Lighter Transaction Resolved Late', event.message, {
         component: 'LighterNonceManager',
+      });
+      return;
+    }
+    if (event.source === 'hedge') {
+      this.statusBroadcaster.broadcastTradingError('Lighter Hedge Mode', event.alert.message, {
+        component: 'LighterHedgeAdapter',
+        symbol: event.alert.symbol,
       });
       return;
     }

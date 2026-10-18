@@ -346,13 +346,49 @@ function rowToTxRecord(row: any): LighterTxRecord {
 
 export const LIGHTER_MAX_CLIENT_ORDER_INDEX = 2 ** 48 - 1;
 
+// Hedge mode (two sub-accounts): each account's bot orders get client order indexes from their own range, so an
+// index alone says which account an order lives on, and the shared journal key (profile, client_order_index)
+// never collides. The generator's base index is about 1.8e13 today and stays below the span (1e14) until 2286.
+export type LighterHedgeSide = 'LONG' | 'SHORT';
+
+export interface LighterClientOrderIndexRange {
+  offset: number;   // Added to the base index; a multiple of 100, so the role digit stays readable
+  span: number;     // The base index must stay below this
+}
+
+export const LIGHTER_HEDGE_COI_SPAN = 100_000_000_000_000;
+
+export const LIGHTER_HEDGE_COI_RANGES: Readonly<Record<LighterHedgeSide, LighterClientOrderIndexRange>> = Object.freeze({
+  LONG: Object.freeze({ offset: 0, span: LIGHTER_HEDGE_COI_SPAN }),
+  SHORT: Object.freeze({ offset: LIGHTER_HEDGE_COI_SPAN, span: LIGHTER_HEDGE_COI_SPAN }),
+});
+
+// Account side of a hedge-mode client order index: [1, 1e14) LONG, [1e14, 2e14) SHORT, anything else null
+export function lighterHedgeSideOfClientOrderIndex(coi: number): LighterHedgeSide | null {
+  if (!Number.isSafeInteger(coi) || coi < 1) return null;
+  if (coi < LIGHTER_HEDGE_COI_SPAN) return 'LONG';
+  if (coi < 2 * LIGHTER_HEDGE_COI_SPAN) return 'SHORT';
+  return null;
+}
+
 // coi = (floor(now / 10) * 10 + role) * 10 + seq: the 10 ms bucket with its last digit replaced by the role,
 // then a sequence digit. About 1.8e13 today, far below 2^48 - 1. seq runs 0..9 per (bucket, role); an 11th
 // index in the same 10 ms borrows the next bucket, so indexes never repeat within a process.
+// With a range (hedge mode), coi = range.offset + that index, which must stay below range.span.
 export class LighterClientOrderIndexGenerator {
   private readonly last = new Map<LighterOrderRole, { bucket: number; seq: number }>();
+  private readonly range: LighterClientOrderIndexRange | null;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(private readonly now: () => number = Date.now, range?: LighterClientOrderIndexRange) {
+    if (range !== undefined) {
+      const { offset, span } = range;
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset % 100 !== 0 ||
+        !Number.isSafeInteger(span) || span < 1 || offset + span - 1 > LIGHTER_MAX_CLIENT_ORDER_INDEX) {
+        throw new RangeError(`Invalid client order index range: offset ${String(offset)}, span ${String(span)}`);
+      }
+    }
+    this.range = range ? { offset: range.offset, span: range.span } : null;
+  }
 
   next(role: LighterOrderRole): number {
     if (role !== 1 && role !== 2 && role !== 3 && role !== 4) {
@@ -370,7 +406,11 @@ export class LighterClientOrderIndexGenerator {
       }
     }
     this.last.set(role, { bucket, seq });
-    const coi = (bucket * 10 + role) * 10 + seq;
+    const base = (bucket * 10 + role) * 10 + seq;
+    if (this.range && base >= this.range.span) {
+      throw new RangeError(`Client order index ${base} does not fit the range of ${this.range.span} indexes at offset ${this.range.offset}`);
+    }
+    const coi = this.range ? this.range.offset + base : base;
     if (!Number.isSafeInteger(coi) || coi < 1 || coi > LIGHTER_MAX_CLIENT_ORDER_INDEX) {
       throw new RangeError(`Client order index ${coi} is outside 1..${LIGHTER_MAX_CLIENT_ORDER_INDEX}`);
     }

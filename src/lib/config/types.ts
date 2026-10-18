@@ -124,6 +124,27 @@ const lighterSymbolOverrideSchema = z.union([
   z.object({ market: z.string().min(1), multiplier: z.number().positive().optional() }),
 ]);
 
+const lighterAccountIndexSchema = z.preprocess(optionalInteger, z.number().int().min(1).max(LIGHTER_MAX_ACCOUNT_INDEX).optional());
+const lighterApiKeyIndexSchema = z.preprocess(optionalInteger, z.number().int().min(0).max(LIGHTER_MAX_API_KEY_INDEX).optional());
+
+// Hedge mode emulation: longs on the main account, shorts on this second sub-account of the same master
+// (Lighter nets one position per market per account). Same network as the main account; its own API key.
+export const lighterHedgeAccountSchema = z.object({
+  accountIndex: lighterAccountIndexSchema,
+  apiKeyIndex: lighterApiKeyIndexSchema,
+  apiKeyPrivateKey: lighterHexKeySchema,
+  apiKeyPublicKey: lighterHexKeySchema,
+});
+
+// Off unless enabled is true: positionMode defaults to HEDGE, so filling in the short account alone must never
+// switch a running one-way setup to two accounts
+export const lighterHedgeConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  shortAccount: lighterHedgeAccountSchema.optional(),
+});
+
+export const LIGHTER_HEDGE_SAME_ACCOUNT_MESSAGE = 'must differ from the main (long) account index';
+
 export const lighterVenueConfigSchema = z.preprocess(
   // Older field names (the first catalog listing used apiPrivateKey / apiPublicKey)
   (value) => {
@@ -138,8 +159,8 @@ export const lighterVenueConfigSchema = z.preprocess(
   z.object({
     // Network. Robinhood profiles are accepted here but refused when saving or starting (gated, spec §1.1).
     profile: z.enum(LIGHTER_PROFILE_NAMES).optional(),
-    accountIndex: z.preprocess(optionalInteger, z.number().int().min(1).max(LIGHTER_MAX_ACCOUNT_INDEX).optional()),
-    apiKeyIndex: z.preprocess(optionalInteger, z.number().int().min(0).max(LIGHTER_MAX_API_KEY_INDEX).optional()),
+    accountIndex: lighterAccountIndexSchema,
+    apiKeyIndex: lighterApiKeyIndexSchema,
     apiKeyPrivateKey: lighterHexKeySchema,
     apiKeyPublicKey: lighterHexKeySchema,
     // false = shadow mode: Lighter liquidations are logged, never traded (spec §8 risk 1)
@@ -150,6 +171,17 @@ export const lighterVenueConfigSchema = z.preprocess(
     sendTxPerMin: z.number().int().min(1).max(LIGHTER_MAX_SEND_TX_PER_MIN).optional(),
     // Bot symbol -> Lighter backend symbol (e.g. "QNTUSDT": "QNT", or { "market": "1000NOT", "multiplier": 1000 })
     symbolOverrides: z.record(lighterSymbolOverrideSchema).optional(),
+    // Hedge mode via two sub-accounts (the account above holds the longs)
+    hedge: lighterHedgeConfigSchema.optional(),
+  }).superRefine((settings, ctx) => {
+    const shortIndex = settings.hedge?.shortAccount?.accountIndex;
+    if (settings.accountIndex !== undefined && shortIndex !== undefined && shortIndex === settings.accountIndex) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['hedge', 'shortAccount', 'accountIndex'],
+        message: LIGHTER_HEDGE_SAME_ACCOUNT_MESSAGE,
+      });
+    }
   })
 );
 
@@ -187,6 +219,60 @@ export function lighterCredentialProblems(settings: LighterVenueConfig | undefin
   if (!settings?.apiKeyPrivateKey) problems.push('API private key is missing');
   if (!settings?.apiKeyPublicKey) problems.push('API public key is missing');
   return problems;
+}
+
+// ===== Lighter hedge mode (two sub-accounts) =====
+// Structural views, so both the zod Config and the hand-written one in src/lib/types.ts (UI) fit
+
+export type LighterHedgeConfig = z.infer<typeof lighterHedgeConfigSchema>;
+
+interface LighterHedgeAccountView {
+  accountIndex?: number;
+  apiKeyIndex?: number;
+  apiKeyPrivateKey?: string;
+  apiKeyPublicKey?: string;
+}
+
+interface LighterHedgeSettingsView {
+  accountIndex?: number;
+  hedge?: { enabled?: boolean; shortAccount?: LighterHedgeAccountView } | null;
+}
+
+// What keeps the short account from being used: missing fields and the same index as the main (long) account.
+// Formats are checked by the schema. Never echoes secrets.
+export function lighterShortAccountProblems(settings: LighterHedgeSettingsView | null | undefined): string[] {
+  const short = settings?.hedge?.shortAccount;
+  const isSet = (value: unknown) => value !== undefined && value !== null && value !== '';
+  const problems: string[] = [];
+  if (!isSet(short?.accountIndex)) problems.push('short account index is missing');
+  if (!isSet(short?.apiKeyIndex)) problems.push('short account API key index is missing');
+  if (!isSet(short?.apiKeyPrivateKey)) problems.push('short account API private key is missing');
+  if (!isSet(short?.apiKeyPublicKey)) problems.push('short account API public key is missing');
+  if (isSet(short?.accountIndex) && Number(short?.accountIndex) === Number(settings?.accountIndex)) {
+    problems.push(`short account index ${LIGHTER_HEDGE_SAME_ACCOUNT_MESSAGE}`);
+  }
+  return problems;
+}
+
+export type LighterHedgeState =
+  | { mode: 'off'; reason: 'not-lighter' | 'one-way' | 'disabled' }
+  | { mode: 'incomplete'; problems: string[] }
+  | { mode: 'on' };
+
+// Whether the bot trades Lighter in hedge mode over two sub-accounts. On only when the venue is Lighter, the
+// position mode is HEDGE, hedge.enabled is true and the short account is complete (checked in that order).
+export function lighterHedgeState(
+  config: {
+    global?: { exchange?: string; positionMode?: string } | null;
+    venues?: { lighter?: LighterHedgeSettingsView | null } | null;
+  } | null | undefined
+): LighterHedgeState {
+  if (config?.global?.exchange !== 'lighter') return { mode: 'off', reason: 'not-lighter' };
+  if (config.global.positionMode !== 'HEDGE') return { mode: 'off', reason: 'one-way' };
+  const lighter = config.venues?.lighter;
+  if (lighter?.hedge?.enabled !== true) return { mode: 'off', reason: 'disabled' };
+  const problems = lighterShortAccountProblems(lighter);
+  return problems.length > 0 ? { mode: 'incomplete', problems } : { mode: 'on' };
 }
 
 export interface ConfigMigration {

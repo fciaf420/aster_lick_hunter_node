@@ -74,7 +74,7 @@ export class PositionManager extends EventEmitter implements PositionTracker {
   private statusBroadcaster: any; // Will be injected
   private isHedgeMode: boolean;
   private orderPlacementLocks: Set<string> = new Set(); // Prevent concurrent order placement for same position
-  private orderCancellationLocks: Set<string> = new Set(); // Prevent concurrent order cancellation for same symbol
+  private orderCancellationLocks: Set<string> = new Set(); // Prevent concurrent cancellation of one position's SL/TP
   private symbolLeverage: Map<string, number> = new Map(); // Track leverage per symbol from ACCOUNT_CONFIG_UPDATE
 
   private readonly injectedExchange: ExchangeAdapter | null;
@@ -382,6 +382,7 @@ logWithTimestamp(`PositionManager: Preserving tracked TP order ${tpOrder.orderId
               (o.type === 'STOP_MARKET' || o.type === 'STOP') &&
               o.reduceOnly &&
               ((isLong && o.side === 'SELL') || (!isLong && o.side === 'BUY')) &&
+              this.sameHedgeSide(o.positionSide, position.positionSide) &&
               Math.abs(parseFloat(o.origQty) - positionQty) < 0.00000001  // Quantity matches
             );
 
@@ -397,6 +398,7 @@ logWithTimestamp(`PositionManager: Matched SL order ${slOrder.orderId} to positi
               (o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT' || (o.type === 'LIMIT' && o.reduceOnly)) &&
               o.reduceOnly &&
               ((isLong && o.side === 'SELL') || (!isLong && o.side === 'BUY')) &&
+              this.sameHedgeSide(o.positionSide, position.positionSide) &&
               Math.abs(parseFloat(o.origQty) - positionQty) < 0.00000001  // Quantity matches
             );
 
@@ -499,6 +501,14 @@ logErrorWithTimestamp('PositionManager: Failed to sync with exchange:', error);
     });
   }
 
+  // Whether a reduce-only order can belong to a position by its hedge side: false only when both name a hedge side
+  // (LONG / SHORT) and they differ. In hedge mode a SELL can close a long (LONG) or be the TP of a wrong-direction
+  // position of the other side, so side and quantity alone may pick the other side's order. One-way: always true.
+  private sameHedgeSide(orderPositionSide?: string, positionSide?: string): boolean {
+    const isHedgeSide = (value?: string) => value === 'LONG' || value === 'SHORT';
+    return !(isHedgeSide(orderPositionSide) && isHedgeSide(positionSide) && orderPositionSide !== positionSide);
+  }
+
   // Helper to create consistent position keys
   private getPositionKey(symbol: string, positionSide: string, positionAmt: number): string {
     // For one-way mode (BOTH), include direction in key
@@ -547,10 +557,11 @@ logWarnWithTimestamp(`PositionManager: Position ${key} not found in map`);
   private async cancelProtectiveOrders(positionKey: string, orders: PositionOrders): Promise<void> {
     const [symbol] = positionKey.split('_');
 
-    // Add lock to prevent concurrent cancellations for the same symbol
-    const lockKey = `cancel_${symbol}`;
+    // Lock per position, not per symbol: in hedge mode the long and the short of one symbol can close back to back,
+    // and each has its own SL/TP to cancel
+    const lockKey = `cancel_${positionKey}`;
     if (this.orderCancellationLocks.has(lockKey)) {
-logWithTimestamp(`PositionManager: Order cancellation already in progress for ${symbol}, skipping`);
+logWithTimestamp(`PositionManager: Order cancellation already in progress for ${positionKey}, skipping`);
       return;
     }
 
@@ -852,7 +863,7 @@ logWithTimestamp(`PositionManager: Position ${key} was closed`);
           invalidateIncomeCache();
 logWithTimestamp(`PositionManager: Invalidated income cache after position ${key} closed`);
 
-          const cancelLockKey = `cancel_${symbol}`;
+          const cancelLockKey = `cancel_${key}`;
 
           // Only cancel if not already in progress
           if (!this.orderCancellationLocks.has(cancelLockKey)) {
@@ -862,7 +873,7 @@ logWithTimestamp(`PositionManager: Cancelling protective orders for closed posit
 logErrorWithTimestamp(`PositionManager: Failed to cancel protective orders for ${key}:`, error?.response?.data || error?.message);
             });
           } else {
-logWithTimestamp(`PositionManager: Order cancellation already in progress for ${symbol}, skipping`);
+logWithTimestamp(`PositionManager: Order cancellation already in progress for ${key}, skipping`);
           }
 
           // Clean up tracking maps
@@ -890,7 +901,7 @@ logWithTimestamp(`PositionManager: Order cancellation already in progress for ${
     const symbol = order.s;
     const orderType = order.o;
     const orderStatus = order.X;
-    const _positionSide = order.ps || 'BOTH';
+    const orderPositionSide = order.ps || 'BOTH';
     const side = order.S;
     // Canonical id, so it matches the ids tracked from placement results and REST (same value for Aster)
     const orderId = order.i === undefined || order.i === null ? order.i : normalizeOrderId(order.i);
@@ -914,7 +925,7 @@ logWithTimestamp(`PositionManager: ORDER_TRADE_UPDATE - Symbol: ${symbol}, Order
       let bestMatch: { key: string; position: ExchangePosition; quantityDiff: number } | null = null;
 
       for (const [key, position] of this.currentPositions.entries()) {
-        if (position.symbol === symbol) {
+        if (position.symbol === symbol && this.sameHedgeSide(orderPositionSide, position.positionSide)) {
           const posAmt = parseFloat(position.positionAmt);
           const positionQty = Math.abs(posAmt);
 
@@ -1322,7 +1333,8 @@ logWarnWithTimestamp(`PositionManager: Invalid entry price (${position.entryPric
         o.symbol === symbol &&
         (o.type === 'STOP_MARKET' || o.type === 'STOP') &&
         o.reduceOnly &&
-        ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
+        ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY')) &&
+        this.sameHedgeSide(o.positionSide, position.positionSide)
       );
 
       // Find ALL existing TP orders for this position
@@ -1330,7 +1342,8 @@ logWarnWithTimestamp(`PositionManager: Invalid entry price (${position.entryPric
         o.symbol === symbol &&
         (o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT' || o.type === 'LIMIT') &&
         o.reduceOnly &&
-        ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
+        ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY')) &&
+        this.sameHedgeSide(o.positionSide, position.positionSide)
       );
 
       // Handle multiple SL orders - keep the first one, cancel the rest
@@ -1976,9 +1989,9 @@ logWithTimestamp(`PositionManager: Order ${order.orderId} quantity mismatch - Or
 
         // If not tracked and there are multiple positions, check if it's an orphan
         if (!isTracked && symbolDetails.amounts.length > 1) {
-          // Check if any position matches this order's quantity
+          // Check if any position matches this order's quantity (amounts are signed: shorts are negative)
           const matchingPosition = symbolDetails.amounts.find(amt =>
-            Math.abs(parseFloat(order.origQty) - amt) < 0.00000001
+            Math.abs(parseFloat(order.origQty) - Math.abs(amt)) < 0.00000001
           );
 
           if (!matchingPosition) {
@@ -2027,7 +2040,7 @@ logWithTimestamp(`PositionManager: Found stuck entry order for ${order.symbol} -
       const ordersBySymbolAndType = new Map<string, { sl: ExchangeOrder[]; tp: ExchangeOrder[] }>();
 
       for (const [key, positionData] of activePositions) {
-        const { symbol, positionAmt } = positionData;
+        const { symbol, positionAmt, positionSide } = positionData;
 
         // Initialize order tracking for this symbol if needed
         if (!ordersBySymbolAndType.has(symbol)) {
@@ -2045,6 +2058,8 @@ logWithTimestamp(`PositionManager: Found stuck entry order for ${order.symbol} -
           // Must match position direction (SELL for LONG, BUY for SHORT)
           const directionMatches = (positionAmt > 0 && o.side === 'SELL') || (positionAmt < 0 && o.side === 'BUY');
           if (!directionMatches) return false;
+          // Hedge mode: the other side's orders are never this position's duplicates
+          if (!this.sameHedgeSide(o.positionSide, positionSide)) return false;
 
           // Additional validation: log what we're considering
 logWithTimestamp(`PositionManager: Evaluating SL order ${o.orderId} for position ${key} - Symbol: ${o.symbol}, Side: ${o.side}, Type: ${o.type}`);
@@ -2062,6 +2077,8 @@ logWithTimestamp(`PositionManager: Evaluating SL order ${o.orderId} for position
           // Must match position direction (SELL for LONG, BUY for SHORT)
           const directionMatches = (positionAmt > 0 && o.side === 'SELL') || (positionAmt < 0 && o.side === 'BUY');
           if (!directionMatches) return false;
+          // Hedge mode: the other side's orders are never this position's duplicates
+          if (!this.sameHedgeSide(o.positionSide, positionSide)) return false;
 
           // Additional validation: log what we're considering
 logWithTimestamp(`PositionManager: Evaluating TP order ${o.orderId} for position ${key} - Symbol: ${o.symbol}, Side: ${o.side}, Type: ${o.type}`);
@@ -2382,14 +2399,16 @@ logWarnWithTimestamp(`PositionManager: Tracked TP order ${trackedOrders.tpOrderI
           o.symbol === symbol &&
           (o.type === 'STOP_MARKET' || o.type === 'STOP') &&
           o.reduceOnly &&
-          ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
+          ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY')) &&
+          this.sameHedgeSide(o.positionSide, position.positionSide)
         );
 
         const tpOrder = openOrders.find(o =>
           o.symbol === symbol &&
           (o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT' || o.type === 'LIMIT') &&
           o.reduceOnly &&
-          ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
+          ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY')) &&
+          this.sameHedgeSide(o.positionSide, position.positionSide)
         );
 
         let needsAdjustment = false;
@@ -2483,14 +2502,16 @@ logWithTimestamp(`PositionManager: Checking orders for position ${positionKey} (
         o.symbol === symbol &&
         (o.type === 'STOP_MARKET' || o.type === 'STOP') &&
         o.reduceOnly &&
-        ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
+        ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY')) &&
+        this.sameHedgeSide(o.positionSide, position.positionSide)
       );
 
       const tpOrder = openOrders.find(o =>
         o.symbol === symbol &&
         (o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT' || o.type === 'LIMIT') &&
         o.reduceOnly &&
-        ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY'))
+        ((posAmt > 0 && o.side === 'SELL') || (posAmt < 0 && o.side === 'BUY')) &&
+        this.sameHedgeSide(o.positionSide, position.positionSide)
       );
 
       // Always adjust orders when position size changes

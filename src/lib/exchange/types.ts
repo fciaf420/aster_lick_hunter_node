@@ -200,6 +200,9 @@ export interface UserDataHandlers {
   onError?(error: Error): void;
   // Awaited before the adapter re-establishes a dropped stream (PositionManager re-syncs from REST here)
   beforeReconnect?(): Promise<void>;
+  // Called once with the stream's starting state (a.m 'BASELINE'): the full position set and balance the stream
+  // treats as already known. Not an event: it is never passed to onEvent.
+  onBaseline?(snapshot: AccountUpdateEvent): void;
 }
 
 export interface UserDataSubscription {
@@ -224,6 +227,12 @@ export interface AccountHistory {
   aggregateBySymbolWithTrades(records: IncomeRecord[], symbols: string[], startTime: number, endTime: number): Promise<SymbolPnL[]>;
   getAllOrders(symbol: string, startTime?: number, endTime?: number, limit?: number): Promise<Order[]>;
   getUserTrades(symbol: string, params?: { startTime?: number; endTime?: number; fromId?: number; limit?: number }): Promise<Trade[]>;
+}
+
+// Margin of the account a new entry would use (decimal strings in the margin asset)
+export interface EntryMargin {
+  totalWalletBalance: string;
+  availableBalance: string;
 }
 
 export interface ExchangeAdapter {
@@ -251,7 +260,12 @@ export interface ExchangeAdapter {
   getOpenOrders(symbol?: string, options?: RequestOptions): Promise<VenueOrder[]>;
   getHedgeMode(): Promise<boolean>;
   setHedgeMode(enabled: boolean): Promise<void>;
-  setLeverage(symbol: string, leverage: number): Promise<any>;
+  // positionSide: the side of the entry the leverage is set for. Venues that keep each position side on its own
+  // account (Lighter hedge mode) then set it on that account only; venues with one account ignore it.
+  setLeverage(symbol: string, leverage: number, positionSide?: 'LONG' | 'SHORT'): Promise<any>;
+  // Venues that keep each position side on its own account (Lighter hedge mode): the margin of the account an
+  // entry on that side would use. Venues with one account leave it out; callers then read getAccountInfo().
+  getEntryMargin?(positionSide: 'LONG' | 'SHORT'): Promise<EntryMargin>;
   readonly history: AccountHistory;
 
   // User data stream (order fills, position and balance updates). The adapter owns the connection:

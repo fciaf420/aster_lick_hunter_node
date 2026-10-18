@@ -24,7 +24,7 @@ import {
 } from '../errors/TradingErrors';
 import { errorLogger } from '../services/errorLogger';
 import { logWithTimestamp, logErrorWithTimestamp, logWarnWithTimestamp } from '../utils/timestamp';
-import { orderMayExist, orderMayExistUntil } from '../exchange/orderErrors';
+import { orderMayExist, orderMayExistUntil, orderRefusalRepeats } from '../exchange/orderErrors';
 
 export class Hunter extends EventEmitter {
   // How long a symbol stays blocked after an entry that may exist when the venue gives no bound (longer than a
@@ -796,9 +796,12 @@ logWithTimestamp(`Hunter: Skipping trade - would exceed max margin for ${symbol}
           }
         }
 
-        // Check available margin from exchange to prevent insufficient balance errors
+        // Check available margin from exchange to prevent insufficient balance errors. Venues that keep each side
+        // on its own account (Lighter hedge mode) report the margin of the account this entry goes to.
         try {
-          const accountInfo = await this.exchange.getAccountInfo();
+          const accountInfo = this.exchange.getEntryMargin
+            ? await this.exchange.getEntryMargin(side === 'BUY' ? 'LONG' : 'SHORT')
+            : await this.exchange.getAccountInfo();
           const totalBalance = parseFloat(accountInfo.totalWalletBalance || '0');
           const availableBalance = parseFloat(accountInfo.availableBalance || '0');
           const usedMargin = totalBalance - availableBalance;
@@ -1004,8 +1007,8 @@ logErrorWithTimestamp(`Hunter: Order validation failed for ${symbol}: ${validati
         if (validation.adjustedQuantity !== undefined) quantity = validation.adjustedQuantity;
       }
 
-      // Set leverage if needed
-      await this.exchange.setLeverage(symbol, symbolConfig.leverage);
+      // Set leverage if needed (for the side of this entry: a venue with an account per side sets only that one)
+      await this.exchange.setLeverage(symbol, symbolConfig.leverage, side === 'BUY' ? 'LONG' : 'SHORT');
 
 logWithTimestamp(`Hunter: Calculated quantity for ${symbol}: margin=${tradeSizeUSDT} USDT (${side === 'BUY' ? 'long' : 'short'}), leverage=${symbolConfig.leverage}x, price=${currentPrice}, notional=${notionalUSDT} USDT, quantity=${quantity}`);
 
@@ -1358,6 +1361,13 @@ logWarnWithTimestamp(`Hunter: Not placing a fallback order for ${symbol}: the fi
         return;
       }
 
+      // A refusal the venue repeats for any order of this entry (e.g. Lighter hedge mode's wrong-direction guard):
+      // a MARKET fallback would only be refused again
+      if (orderRefusalRepeats(error)) {
+logWarnWithTimestamp(`Hunter: Not placing a fallback order for ${symbol}: the venue refuses this entry until the cause is fixed`);
+        return;
+      }
+
       // If limit order fails, try fallback to market order
       if (symbolConfig.orderType !== 'MARKET') {
         // Check if too much time has passed since initial attempt (to avoid timestamp errors)
@@ -1376,7 +1386,7 @@ logWithTimestamp(`Hunter: Retrying with market order for ${symbol}`);
         let fallbackPositionSide: 'BOTH' | 'LONG' | 'SHORT' = 'BOTH';
 
         try {
-          await this.exchange.setLeverage(symbol, symbolConfig.leverage);
+          await this.exchange.setLeverage(symbol, symbolConfig.leverage, side === 'BUY' ? 'LONG' : 'SHORT');
 
           // Fetch symbol info for precision and filters
           const fallbackSymbolInfo = await getSymbolFilters(symbol, this.exchange);

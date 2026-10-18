@@ -1185,3 +1185,134 @@ describe('Lighter account stream', () => {
     });
   });
 });
+
+describe('onBaseline (hedge mode merges two account streams)', () => {
+  function restState(overrides: Partial<RestState> = {}): RestState {
+    return {
+      positions: [],
+      collateral: '1000.000000',
+      activeOrders: [],
+      accountOrders: [],
+      inactiveOrders: [],
+      trades: [],
+      accountGate: null,
+      rejectToken: null,
+      ...overrides,
+    };
+  }
+
+  it('hands the REST baseline to onBaseline once, never to onEvent', async () => {
+    const markets = await loadMarkets();
+    const fake = fakeSocketFactory();
+    const rest = restState({ positions: [restPosition(BTC, 'BTC', '0.01000', '97000.0'), restPosition(ETH, 'ETH', '-0.5000', '3000.00')] });
+    const http = createHttp(rest);
+    const events: UserDataEvent[] = [];
+    const baselines: AccountUpdateEvent[] = [];
+    const hooks = { disconnected: 0 };
+    active = await createLighterUserStream(
+      {
+        profile: 'testnet',
+        accountIndex: ACCOUNT,
+        apiKeyIndex: API_KEY,
+        getAuthToken: async () => tokenAt(Date.now() + 6 * HOUR, 1),
+        markets,
+        http: http.get,
+        wsFactory: fake.factory,
+        fillJoinWaitMs: 0,
+      },
+      { onEvent: (event) => events.push(event), onBaseline: (snapshot) => baselines.push(snapshot), onDisconnected: () => hooks.disconnected++ }
+    );
+
+    // Delivered while opening, before the socket is even up
+    expect(baselines).toHaveLength(1);
+    const [baseline] = baselines;
+    expect(baseline).toMatchObject({ e: 'ACCOUNT_UPDATE', E: START, T: START, a: { m: 'BASELINE', B: [{ a: 'USDC', wb: '1000', cw: '1000', bc: '0' }] } });
+    expect(positionsOf(baseline)).toEqual({ BTCUSDT: '0.01', ETHUSDT: '-0.5' });
+    expect(baseline.a.P?.every(position => position.ps === 'BOTH')).toBe(true);
+    expect(events).toEqual([]);
+
+    // Matching snapshots, reconciles and a reconnect never call it again; a real change goes to onEvent only
+    const first = connect(fake.last());
+    ack(first, { positions: rest.positions.map(toWsPosition) });
+    await settle();
+    await jest.advanceTimersByTimeAsync(30_000);
+    first.fail(new Error('ECONNRESET'));
+    expect(hooks.disconnected).toBe(1);
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(fake.sockets).toHaveLength(2);
+    ack(connect(fake.last()), { positions: rest.positions.map(toWsPosition) });
+    await settle();
+    fake.last().serverSend(positionsFrame('update', [wsPosition(BTC, '0.02000', '97100.0')]));
+    expect(baselines).toHaveLength(1);
+    const updates = accountUpdates(events);
+    expect(updates).toHaveLength(1);
+    expect(positionsOf(updates[0])).toEqual({ BTCUSDT: '0.02', ETHUSDT: '-0.5' });
+    expect(events.some(event => event.e === 'ACCOUNT_UPDATE' && event.a.m === 'BASELINE')).toBe(false);
+  });
+
+  it('hands the first WS snapshot to onBaseline when the REST seed failed (balance not known yet)', async () => {
+    const markets = await loadMarkets();
+    const fake = fakeSocketFactory();
+    const events: UserDataEvent[] = [];
+    const baselines: AccountUpdateEvent[] = [];
+    let fail = true;
+    active = await createLighterUserStream(
+      {
+        profile: 'testnet',
+        accountIndex: ACCOUNT,
+        apiKeyIndex: API_KEY,
+        getAuthToken: async () => tokenAt(Date.now() + 6 * HOUR, 1),
+        markets,
+        http: async (url: string) => {
+          if (fail) throw new Error('ECONNRESET');
+          return url.includes('/account?')
+            ? { code: 200, accounts: [{ index: ACCOUNT, collateral: '5', positions: [restPosition(BTC, 'BTC', '0.01000', '97000.0')] }] }
+            : { code: 200, orders: [] };
+        },
+        wsFactory: fake.factory,
+        onAlert: () => {},
+        fillJoinWaitMs: 0,
+      },
+      { onEvent: (event) => events.push(event), onBaseline: (snapshot) => baselines.push(snapshot) }
+    );
+    expect(baselines).toEqual([]);
+    fail = false;
+    const socket = connect(fake.last());
+    ack(socket, { positions: [wsPosition(BTC, '0.01000', '97000.0')] });
+    await settle();
+    expect(baselines).toHaveLength(1);
+    expect(baselines[0].a.m).toBe('BASELINE');
+    expect(baselines[0].a.B).toEqual([]);
+    expect(positionsOf(baselines[0])).toEqual({ BTCUSDT: '0.01' });
+    expect(events).toEqual([]);
+    socket.serverSend(positionsFrame('subscribed', [wsPosition(BTC, '0.01000', '97000.0')]));
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(baselines).toHaveLength(1);
+    expect(accountUpdates(events).map(event => event.a.B?.[0]?.wb)).toEqual(['5']);
+  });
+
+  it('a throwing onBaseline does not break the stream', async () => {
+    const markets = await loadMarkets();
+    const fake = fakeSocketFactory();
+    const http = createHttp(restState({ positions: [restPosition(BTC, 'BTC', '0.01000', '97000.0')] }));
+    const events: UserDataEvent[] = [];
+    active = await createLighterUserStream(
+      {
+        profile: 'testnet',
+        accountIndex: ACCOUNT,
+        apiKeyIndex: API_KEY,
+        getAuthToken: async () => tokenAt(Date.now() + 6 * HOUR, 1),
+        markets,
+        http: http.get,
+        wsFactory: fake.factory,
+        fillJoinWaitMs: 0,
+      },
+      { onEvent: (event) => events.push(event), onBaseline: () => { throw new Error('consumer bug'); } }
+    );
+    const socket = connect(fake.last());
+    ack(socket, { positions: [wsPosition(BTC, '0.01000', '97000.0')] });
+    await settle();
+    socket.serverSend(positionsFrame('update', [wsPosition(BTC, '0.02000', '97100.0')]));
+    expect(accountUpdates(events).map(positionsOf)).toEqual([{ BTCUSDT: '0.02' }]);
+  });
+});

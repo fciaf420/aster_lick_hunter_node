@@ -7,6 +7,7 @@ import { InternalAxiosRequestConfig } from 'axios';
 import { Hunter } from '../../src/lib/bot/hunter';
 import { createExchangeAdapter } from '../../src/lib/exchange/registry';
 import { LighterTxUnknownError, LighterTxRejectedError } from '../../src/lib/exchange/lighter/nonce';
+import { lighterHedgeHarness } from '../lib/lighter/fakeLighterHedge';
 import {
   TestSummary,
   logSection,
@@ -144,6 +145,29 @@ async function testFallback() {
     const hunter = new Hunter(config, false, adapter);
     await placeEntry(hunter);
     assertEqual(placed.join(','), 'LIMIT,MARKET', 'Rejected LIMIT, then the MARKET fallback');
+  });
+
+  await summary.run('A refusal the venue repeats (Lighter hedge mode, wrong-direction position) gets no fallback', async () => {
+    // The real refusal: the long account holds a short, so the composite refuses every long entry until it is closed
+    const hedge = lighterHedgeHarness({ credentials: true, symbols: ['BTCUSDT'] });
+    hedge.exchange.long.setPosition(1, '-0.01000');
+    const refusal = await hedge.adapter.placeOrder({ symbol: 'BTCUSDT', side: 'BUY', type: 'LIMIT', quantity: 0.001, price: 49000, timeInForce: 'GTC', positionSide: 'LONG' })
+      .catch((error: unknown) => error);
+    assert(refusal instanceof Error && /holds a short BTCUSDT position/.test(refusal.message), 'The composite refused the entry');
+    hedge.adapter.close();
+
+    const config = limitConfig();
+    const adapter = createExchangeAdapter(config);
+    const placed: string[] = [];
+    adapter.placeOrder = async (request) => {
+      placed.push(request.type);
+      throw refusal;
+    };
+    const hunter = new Hunter(config, false, adapter);
+    hunter.setPositionTracker(noPositions);
+    await placeEntry(hunter);
+    assertEqual(placed.join(','), 'LIMIT', 'No MARKET fallback: it would be refused the same way');
+    assertEqual(pendingFor(hunter, 'BTCUSDT').length, 0, 'Nothing was placed: the symbol is not blocked');
   });
 
   await summary.run('A presumed (not proven) rejection gets no fallback', async () => {
