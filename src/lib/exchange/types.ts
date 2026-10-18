@@ -4,7 +4,7 @@ import type { AccountUpdate } from '../api/userDataStream';
 import type { DailyPnL, IncomeHistoryParams, IncomeRecord, SymbolPnL } from '../api/income';
 
 // Trading venues the bot knows about. Only venues marked 'available' in the catalog have an adapter.
-export const VENUE_IDS = ['aster', 'hyperliquid', 'lighter', 'phoenix'] as const;
+export const VENUE_IDS = ['aster', 'hyperliquid', 'lighter', 'phoenix', 'bulk'] as const;
 export type VenueId = typeof VENUE_IDS[number];
 
 // Where liquidation signals come from (can differ from the trading venue)

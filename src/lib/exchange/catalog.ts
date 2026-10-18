@@ -84,6 +84,19 @@ export const VENUE_CATALOG: VenueCatalogEntry[] = [
     ],
     supportsHedgeMode: false,
   },
+  {
+    id: 'bulk',
+    name: 'Bulk',
+    chain: 'Solana',
+    status: 'coming_soon',
+    description: 'Solana perps with matching built into the validator. No public liquidation feed, so it needs another liquidation source.',
+    signupUrl: 'https://bulk.trade',
+    credentialFields: [
+      { key: 'walletAddress', label: 'Wallet Address', secret: false },
+      { key: 'privateKey', label: 'Signing Key (Ed25519)', secret: true },
+    ],
+    supportsHedgeMode: false,
+  },
 ];
 
 export const LIQUIDATION_SOURCE_CATALOG: LiquidationSourceCatalogEntry[] = [
