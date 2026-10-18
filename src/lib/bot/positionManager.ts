@@ -1355,6 +1355,12 @@ logWarnWithTimestamp(`PositionManager: No config for symbol ${symbol}`);
     const isLong = posAmt > 0;
     const key = this.getPositionKey(symbol, position.positionSide, posAmt);
 
+    // SL/TP prices are derived from the entry price; without a valid one, skip and let the next sync retry
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+logWarnWithTimestamp(`PositionManager: Invalid entry price (${position.entryPrice}) for ${symbol}, skipping SL/TP placement until the next sync`);
+      return;
+    }
+
     // Get or create order tracking
     if (!this.positionOrders.has(key)) {
       this.positionOrders.set(key, {});
@@ -1480,13 +1486,6 @@ logWithTimestamp(`PositionManager: Position ${symbol} is underwater. Adjusting S
           : currentPrice <= rawTpPrice;
 
         if (pastTP) {
-          // Validate entry price before calculating PnL
-          if (!entryPrice || entryPrice <= 0) {
-logWithTimestamp(`PositionManager: WARNING - Invalid entry price (${entryPrice}) for ${symbol}, cannot calculate PnL accurately`);
-logWithTimestamp(`PositionManager: Skipping auto-close due to data issue`);
-            return; // Skip auto-close and continue with normal TP order placement
-          }
-
           const pnlPercent = isLong
             ? ((currentPrice - entryPrice) / entryPrice) * 100
             : ((entryPrice - currentPrice) / entryPrice) * 100;
@@ -1764,13 +1763,6 @@ logWithTimestamp(`PositionManager: Placed SL (STOP_MARKET) for ${symbol} at ${sl
           : currentPrice <= rawTpPrice;
 
         if (pastTP) {
-          // Validate entry price before calculating PnL
-          if (!entryPrice || entryPrice <= 0) {
-logWithTimestamp(`PositionManager: WARNING - Invalid entry price (${entryPrice}) for ${symbol}, cannot calculate PnL accurately`);
-logWithTimestamp(`PositionManager: Skipping auto-close due to data issue`);
-            return; // Skip auto-close and continue with normal TP order placement
-          }
-
           // Calculate current PnL percentage
           const pnlPercent = isLong
             ? ((currentPrice - entryPrice) / entryPrice) * 100

@@ -52,6 +52,12 @@ async function main() {
     { file: 'tests/core/rate-limit.test.ts', name: 'Rate Limit' },
     { file: 'tests/core/websocket.test.ts', name: 'WebSocket' },
     { file: 'tests/core/error-logging.test.ts', name: 'Error Logging' },
+    { file: 'tests/core/hunter-pending-orders.test.ts', name: 'Hunter Pending Orders' },
+    { file: 'tests/core/test-pending-order-fix.ts', name: 'Pending Order Fix' },
+    { file: 'tests/core/position-mode-retry.test.ts', name: 'Position Mode Retry' },
+    { file: 'tests/core/position-mode-sync.test.ts', name: 'Position Mode Sync' },
+    { file: 'tests/core/cross-symbol-test.ts', name: 'Cross-Symbol TP/SL' },
+    { file: 'tests/core/multi-position.test.ts', name: 'Multi-Position' },
     { file: 'tests/integration/trading-flow.test.ts', name: 'Integration' }
   ];
 

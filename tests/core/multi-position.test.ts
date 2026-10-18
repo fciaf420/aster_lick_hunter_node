@@ -1,451 +1,447 @@
 #!/usr/bin/env tsx
 
+import { InternalAxiosRequestConfig } from 'axios';
 import { PositionManager } from '../../src/lib/bot/positionManager';
+import { symbolPrecision } from '../../src/lib/utils/symbolPrecision';
 import {
   TestSummary,
   logSection,
-  log,
-  colors,
   createMockConfig,
-  createMockPosition as _createMockPosition,
+  mockExchangeHttp,
+  finishTests,
   assert,
   assertEqual,
-  wait
+  assertClose
 } from '../utils/test-helpers';
 
-// Mock exchange responses
-const mockPositions: any[] = [];
-const mockOrders: any[] = [];
-let orderIdCounter = 1000;
+// ===== Mock exchange (HTTP layer) =====
 
-// Mock PositionManager methods for testing
-class TestablePositionManager extends PositionManager {
-  public currentPositions = new Map();
-  public positionOrders = new Map();
-  public config: any;
-
-  constructor(symbols: any, apiConfig: any, paperMode: boolean) {
-    super(symbols, apiConfig, paperMode);
-    // Store full config structure needed by syncWithExchange
-    this.config = {
-      symbols: symbols,
-      api: apiConfig
-    };
-  }
-
-  // Override to use mock data
-  async getPositionsFromExchange(): Promise<any[]> {
-    return mockPositions;
-  }
-
-  async getOpenOrdersFromExchange(): Promise<any[]> {
-    return mockOrders;
-  }
-
-  // Mock order placement
-  async placeOrder(params: any): Promise<any> {
-    const orderId = orderIdCounter++;
-    const order = {
-      orderId,
-      symbol: params.symbol,
-      side: params.side,
-      type: params.type,
-      origQty: params.quantity.toString(),
-      reduceOnly: params.reduceOnly || false,
-      status: 'NEW'
-    };
-    mockOrders.push(order);
-    return { orderId };
-  }
-
-  // Mock batch order placement
-  async placeStopLossAndTakeProfit(params: any): Promise<any> {
-    const slOrderId = orderIdCounter++;
-    const tpOrderId = orderIdCounter++;
-
-    mockOrders.push({
-      orderId: slOrderId,
-      symbol: params.symbol,
-      side: params.side === 'BUY' ? 'SELL' : 'BUY',
-      type: 'STOP_MARKET',
-      origQty: params.quantity.toString(),
-      reduceOnly: true,
-      status: 'NEW',
-      stopPrice: params.stopPrice
-    });
-
-    mockOrders.push({
-      orderId: tpOrderId,
-      symbol: params.symbol,
-      side: params.side === 'BUY' ? 'SELL' : 'BUY',
-      type: 'TAKE_PROFIT_MARKET',
-      origQty: params.quantity.toString(),
-      reduceOnly: true,
-      status: 'NEW',
-      stopPrice: params.takeProfitPrice
-    });
-
-    return {
-      success: true,
-      orders: [
-        { orderId: slOrderId, clientOrderId: `SL_${slOrderId}` },
-        { orderId: tpOrderId, clientOrderId: `TP_${tpOrderId}` }
-      ]
-    };
-  }
-
-  // Expose sync method for testing
-  public async testSyncWithExchange(): Promise<void> {
-    await this.syncWithExchange();
-  }
-
-  // Mock cancel order
-  async cancelOrderById(symbol: string, orderId: number): Promise<void> {
-    const index = mockOrders.findIndex(o => o.orderId === orderId);
-    if (index >= 0) {
-      mockOrders.splice(index, 1);
-    }
-  }
+interface MockPosition {
+  symbol: string;
+  positionAmt: string;
+  entryPrice: string;
+  positionSide: 'BOTH' | 'LONG' | 'SHORT';
 }
+
+interface MockOrder {
+  orderId: number;
+  symbol: string;
+  side: string;
+  type: string;
+  origQty: string;
+  stopPrice: string;
+  reduceOnly: boolean;
+  positionSide: string;
+  status: string;
+  [key: string]: unknown;
+}
+
+const exchange = {
+  positions: [] as MockPosition[],
+  openOrders: [] as MockOrder[],
+  markPrices: {} as Record<string, number>,
+  nextOrderId: 1000,
+  batchRequests: 0,
+  placedOrders: [] as Record<string, string>[], // Single orders (POST /fapi/v1/order)
+  cancelledOrderIds: [] as number[],
+};
+
+function resetExchange() {
+  exchange.positions = [];
+  exchange.openOrders = [];
+  exchange.markPrices = { BTCUSDT: 50100, ETHUSDT: 2990 };
+  exchange.nextOrderId = 1000;
+  exchange.batchRequests = 0;
+  exchange.placedOrders = [];
+  exchange.cancelledOrderIds = [];
+}
+
+function createOrder(params: Record<string, string>): MockOrder {
+  const now = Date.now();
+  return {
+    orderId: exchange.nextOrderId++,
+    clientOrderId: params.newClientOrderId || `mock_${now}`,
+    symbol: params.symbol,
+    side: params.side,
+    type: params.type,
+    origType: params.type,
+    origQty: params.quantity,
+    executedQty: '0',
+    price: params.price || '0',
+    stopPrice: params.stopPrice || '0',
+    reduceOnly: params.reduceOnly === 'true',
+    positionSide: params.positionSide || 'BOTH',
+    workingType: params.workingType || 'CONTRACT_PRICE',
+    status: 'NEW',
+    time: now,
+    updateTime: now,
+  };
+}
+
+function exchangeError(code: number, msg: string): Error {
+  const error: any = new Error('Request failed with status code 400');
+  error.response = { status: 400, data: { code, msg } };
+  return error;
+}
+
+function handleRequest(config: InternalAxiosRequestConfig): unknown {
+  const url = new URL(config.url || '', config.baseURL || 'https://fapi.asterdex.com');
+  const method = (config.method || 'get').toUpperCase();
+  const form = () => Object.fromEntries(new URLSearchParams(String(config.data)));
+
+  if (method === 'GET' && url.pathname === '/fapi/v2/positionRisk') {
+    return exchange.positions.map(p => ({
+      ...p,
+      markPrice: String(exchange.markPrices[p.symbol] ?? 0),
+      unRealizedProfit: '0',
+      liquidationPrice: '0',
+      leverage: '10',
+      marginType: 'cross',
+      isolatedMargin: '0',
+      isAutoAddMargin: 'false',
+      updateTime: Date.now(),
+    }));
+  }
+  if (method === 'GET' && url.pathname === '/fapi/v1/openOrders') {
+    return exchange.openOrders.map(o => ({ ...o }));
+  }
+  if (method === 'GET' && url.pathname === '/fapi/v1/ticker/price') {
+    const symbol = url.searchParams.get('symbol')!;
+    return { symbol, price: String(exchange.markPrices[symbol]) };
+  }
+  if (method === 'GET' && url.pathname === '/fapi/v1/premiumIndex') {
+    const symbol = url.searchParams.get('symbol')!;
+    return { symbol, markPrice: String(exchange.markPrices[symbol]) };
+  }
+  if (method === 'POST' && url.pathname === '/fapi/v1/batchOrders') {
+    exchange.batchRequests++;
+    const orders: Record<string, string>[] = JSON.parse(form().batchOrders);
+    return orders.map(params => {
+      const order = createOrder(params);
+      exchange.openOrders.push(order);
+      return order;
+    });
+  }
+  if (method === 'POST' && url.pathname === '/fapi/v1/order') {
+    const params = form();
+    exchange.placedOrders.push(params);
+    const order = createOrder(params);
+    if (params.type === 'MARKET') {
+      // Market orders fill immediately; a reduce-only fill closes the position
+      if (params.reduceOnly === 'true') {
+        const position = exchange.positions.find(p => p.symbol === params.symbol);
+        if (position) position.positionAmt = '0';
+      }
+      return { ...order, status: 'FILLED', executedQty: params.quantity };
+    }
+    exchange.openOrders.push(order);
+    return order;
+  }
+  if (method === 'DELETE' && url.pathname === '/fapi/v1/order') {
+    const orderId = Number(url.searchParams.get('orderId'));
+    const index = exchange.openOrders.findIndex(o => o.orderId === orderId);
+    if (index < 0) throw exchangeError(-2011, 'Unknown order sent.');
+    const [order] = exchange.openOrders.splice(index, 1);
+    exchange.cancelledOrderIds.push(orderId);
+    return { ...order, status: 'CANCELED' };
+  }
+
+  throw new Error(`Unmocked exchange request: ${method} ${url.pathname}`);
+}
+
+// ===== Helpers =====
+
+function createManager(): PositionManager {
+  const config = createMockConfig();
+  config.global.paperMode = false;
+  config.symbols.BTCUSDT.slPercent = 1;
+  config.symbols.BTCUSDT.tpPercent = 2;
+  config.symbols.ETHUSDT = {
+    volumeThresholdUSDT: 10000,
+    tradeSize: 20,
+    leverage: 10,
+    tpPercent: 3,
+    slPercent: 2,
+    orderType: 'LIMIT'
+  };
+  return new PositionManager(config, false);
+}
+
+async function sync(manager: PositionManager) {
+  await (manager as any).syncWithExchange();
+}
+
+function tracked(manager: PositionManager, key: string): { slOrderId?: number; tpOrderId?: number } | undefined {
+  return (manager as any).positionOrders.get(key);
+}
+
+function trackedPositions(manager: PositionManager): Map<string, any> {
+  return (manager as any).currentPositions;
+}
+
+function openOrder(orderId: number | undefined): MockOrder | undefined {
+  return exchange.openOrders.find(o => o.orderId === orderId);
+}
+
+// Assert a position has exactly one live SL and TP that match its size, side and prices
+function assertProtected(
+  manager: PositionManager,
+  key: string,
+  expected: { qty: number; side: 'BUY' | 'SELL'; sl: number; tp: number }
+) {
+  const orders = tracked(manager, key);
+  assert(orders?.slOrderId !== undefined, `${key} should track an SL order`);
+  assert(orders?.tpOrderId !== undefined, `${key} should track a TP order`);
+
+  const sl = openOrder(orders!.slOrderId);
+  const tp = openOrder(orders!.tpOrderId);
+  assert(sl !== undefined, `${key} SL order ${orders!.slOrderId} should be open on the exchange`);
+  assert(tp !== undefined, `${key} TP order ${orders!.tpOrderId} should be open on the exchange`);
+
+  assertEqual(sl!.type, 'STOP_MARKET', `${key} SL type`);
+  assertEqual(tp!.type, 'TAKE_PROFIT_MARKET', `${key} TP type`);
+  assertEqual(sl!.side, expected.side, `${key} SL side`);
+  assertEqual(tp!.side, expected.side, `${key} TP side`);
+  assert(sl!.reduceOnly && tp!.reduceOnly, `${key} SL/TP should be reduce-only in one-way mode`);
+  assertClose(parseFloat(sl!.origQty), expected.qty, 1e-9, `${key} SL quantity should match the position`);
+  assertClose(parseFloat(tp!.origQty), expected.qty, 1e-9, `${key} TP quantity should match the position`);
+  assertClose(parseFloat(sl!.stopPrice), expected.sl, 1e-6, `${key} SL price`);
+  assertClose(parseFloat(tp!.stopPrice), expected.tp, 1e-6, `${key} TP price`);
+}
+
+const BTC_LONG = 'BTCUSDT_LONG_BOTH';
+const ETH_SHORT = 'ETHUSDT_SHORT_BOTH';
+
+// ===== Tests =====
 
 async function testMultiplePositions() {
   logSection('Testing Multiple Position Management');
   const summary = new TestSummary();
 
-  // Reset mock data
-  mockPositions.length = 0;
-  mockOrders.length = 0;
-  orderIdCounter = 1000;
+  resetExchange();
+  const manager = createManager();
+  let btcOrders: { slOrderId?: number; tpOrderId?: number } = {};
 
-  const config = createMockConfig();
-  const manager = new TestablePositionManager(config.symbols, config.api, true);
+  await summary.run('Detects a new position and protects it with one SL/TP batch', async () => {
+    exchange.positions.push({ symbol: 'BTCUSDT', positionAmt: '0.005', entryPrice: '50000', positionSide: 'BOTH' });
 
-  await summary.run('Create first position with TP/SL', async () => {
-    // Add first position
-    mockPositions.push({
-      symbol: 'BTCUSDT',
-      positionAmt: '0.005',
-      entryPrice: '50000',
-      markPrice: '50100',
-      unRealizedProfit: '0.5',
-      positionSide: 'BOTH'
-    });
+    await sync(manager);
 
-    // Sync to detect new position
-    await manager.testSyncWithExchange();
-
-    // Check position was added
-    assertEqual(manager.currentPositions.size, 1, 'Should have 1 position');
-
-    // Check TP/SL orders were created
-    const orders = mockOrders.filter(o => o.symbol === 'BTCUSDT' && o.reduceOnly);
-    assert(orders.length >= 2, 'Should have at least SL and TP orders');
-
-    const slOrder = orders.find(o => o.type === 'STOP_MARKET');
-    const tpOrder = orders.find(o => o.type === 'TAKE_PROFIT_MARKET');
-    assert(slOrder !== undefined, 'Should have SL order');
-    assert(tpOrder !== undefined, 'Should have TP order');
-
-    log(`  Position 1: BTCUSDT LONG 0.005`, colors.gray);
-    log(`  SL Order: ${slOrder?.orderId}, TP Order: ${tpOrder?.orderId}`, colors.gray);
+    assertEqual(trackedPositions(manager).size, 1, 'Should track 1 position');
+    assertEqual(exchange.batchRequests, 1, 'Should place SL and TP in a single batch request');
+    assertProtected(manager, BTC_LONG, { qty: 0.005, side: 'SELL', sl: 49500, tp: 51000 });
+    btcOrders = { ...tracked(manager, BTC_LONG) };
   });
 
-  await summary.run('Add second position - preserve first position TP/SL', async () => {
-    const firstPositionKey = Array.from(manager.currentPositions.keys())[0];
-    const firstPositionOrders = manager.positionOrders.get(firstPositionKey);
-    const initialSlOrderId = firstPositionOrders?.slOrderId;
-    const initialTpOrderId = firstPositionOrders?.tpOrderId;
+  await summary.run('Second symbol (short) is protected without touching the first position', async () => {
+    exchange.positions.push({ symbol: 'ETHUSDT', positionAmt: '-0.5', entryPrice: '3000', positionSide: 'BOTH' });
 
-    log(`  First position orders before: SL=${initialSlOrderId}, TP=${initialTpOrderId}`, colors.gray);
+    await sync(manager);
 
-    // Add second position
-    mockPositions.push({
-      symbol: 'BTCUSDT',
-      positionAmt: '0.003',
-      entryPrice: '50500',
-      markPrice: '50600',
-      unRealizedProfit: '0.3',
-      positionSide: 'BOTH'
-    });
+    assertEqual(trackedPositions(manager).size, 2, 'Should track 2 positions');
+    assertEqual(exchange.batchRequests, 2, 'Only the new position should get a batch');
+    assertEqual(tracked(manager, BTC_LONG)?.slOrderId, btcOrders.slOrderId, 'BTC should keep its SL order');
+    assertEqual(tracked(manager, BTC_LONG)?.tpOrderId, btcOrders.tpOrderId, 'BTC should keep its TP order');
+    assertProtected(manager, ETH_SHORT, { qty: 0.5, side: 'BUY', sl: 3060, tp: 2910 });
 
-    // Sync to detect second position
-    await manager.testSyncWithExchange();
-
-    // Check both positions exist
-    assertEqual(manager.currentPositions.size, 2, 'Should have 2 positions');
-
-    // Check first position still has its orders
-    const firstPositionOrdersAfter = manager.positionOrders.get(firstPositionKey);
-    assertEqual(firstPositionOrdersAfter?.slOrderId, initialSlOrderId, 'First position should keep its SL order');
-    assertEqual(firstPositionOrdersAfter?.tpOrderId, initialTpOrderId, 'First position should keep its TP order');
-
-    // Check second position has orders
-    const secondPositionKey = Array.from(manager.currentPositions.keys()).find(k => k !== firstPositionKey);
-    const secondPositionOrders = manager.positionOrders.get(secondPositionKey!);
-    assert(secondPositionOrders?.slOrderId !== undefined, 'Second position should have SL order');
-    assert(secondPositionOrders?.tpOrderId !== undefined, 'Second position should have TP order');
-    assert(secondPositionOrders?.slOrderId !== initialSlOrderId, 'Second position should have different SL order');
-    assert(secondPositionOrders?.tpOrderId !== initialTpOrderId, 'Second position should have different TP order');
-
-    log(`  Position 2: BTCUSDT LONG 0.003`, colors.gray);
-    log(`  Position 2 orders: SL=${secondPositionOrders?.slOrderId}, TP=${secondPositionOrders?.tpOrderId}`, colors.gray);
+    const ids = new Set([btcOrders.slOrderId, btcOrders.tpOrderId, tracked(manager, ETH_SHORT)?.slOrderId, tracked(manager, ETH_SHORT)?.tpOrderId]);
+    assertEqual(ids.size, 4, 'Every SL/TP order ID should be unique');
   });
 
-  await summary.run('Verify order quantity matching', async () => {
-    // Check that orders match their position quantities
-    for (const [key, position] of manager.currentPositions.entries()) {
-      const posAmt = Math.abs(parseFloat(position.positionAmt));
-      const orders = manager.positionOrders.get(key);
+  await summary.run('Resync without changes places and cancels nothing', async () => {
+    const before = { batches: exchange.batchRequests, orders: exchange.placedOrders.length, cancels: exchange.cancelledOrderIds.length };
+    const ethBefore = { ...tracked(manager, ETH_SHORT) };
 
-      if (orders?.slOrderId) {
-        const slOrder = mockOrders.find(o => o.orderId === orders.slOrderId);
-        const _slQty = parseFloat(slOrder?.origQty || '0');
-        assert(Math.abs(slQty - posAmt) < 0.00000001, `SL order quantity should match position for ${key}`);
-        log(`  ${key}: Position=${posAmt}, SL Qty=${slQty}`, colors.gray);
-      }
+    await sync(manager);
 
-      if (orders?.tpOrderId) {
-        const tpOrder = mockOrders.find(o => o.orderId === orders.tpOrderId);
-        const tpQty = parseFloat(tpOrder?.origQty || '0');
-        assert(Math.abs(tpQty - posAmt) < 0.00000001, `TP order quantity should match position for ${key}`);
-      }
-    }
+    assertEqual(exchange.batchRequests, before.batches, 'No new batch orders');
+    assertEqual(exchange.placedOrders.length, before.orders, 'No new single orders');
+    assertEqual(exchange.cancelledOrderIds.length, before.cancels, 'No cancellations');
+    assertEqual(tracked(manager, BTC_LONG)?.slOrderId, btcOrders.slOrderId, 'BTC SL preserved');
+    assertEqual(tracked(manager, BTC_LONG)?.tpOrderId, btcOrders.tpOrderId, 'BTC TP preserved');
+    assertEqual(tracked(manager, ETH_SHORT)?.slOrderId, ethBefore.slOrderId, 'ETH SL preserved');
+    assertEqual(tracked(manager, ETH_SHORT)?.tpOrderId, ethBefore.tpOrderId, 'ETH TP preserved');
   });
 
-  await summary.run('Handle position size change - adjust orders', async () => {
-    // Change first position size
-    mockPositions[0].positionAmt = '0.008'; // Increased from 0.005
+  await summary.run('Position size increase replaces SL/TP with the new quantity', async () => {
+    exchange.positions[0].positionAmt = '0.008';
+    const ethBefore = { ...tracked(manager, ETH_SHORT) };
 
-    await manager.testSyncWithExchange();
+    await sync(manager);
 
-    // Orders should be adjusted for the changed position
-    const firstPositionKey = Array.from(manager.currentPositions.keys())[0];
-    const firstPosition = manager.currentPositions.get(firstPositionKey);
-    const posAmt = Math.abs(parseFloat(firstPosition!.positionAmt));
-
-    const orders = manager.positionOrders.get(firstPositionKey);
-    if (orders?.slOrderId) {
-      const slOrder = mockOrders.find(o => o.orderId === orders.slOrderId);
-      const _slQty = parseFloat(slOrder?.origQty || '0');
-      // Note: In real implementation, orders would be cancelled and replaced
-      // For this test, we just verify the detection
-      log(`  Position size changed to ${posAmt}, order adjustment would be triggered`, colors.gray);
-    }
+    assert(exchange.cancelledOrderIds.includes(btcOrders.slOrderId!), 'Old BTC SL should be cancelled');
+    assert(exchange.cancelledOrderIds.includes(btcOrders.tpOrderId!), 'Old BTC TP should be cancelled');
+    assert(tracked(manager, BTC_LONG)?.slOrderId !== btcOrders.slOrderId, 'BTC should track a new SL order');
+    assert(tracked(manager, BTC_LONG)?.tpOrderId !== btcOrders.tpOrderId, 'BTC should track a new TP order');
+    assertProtected(manager, BTC_LONG, { qty: 0.008, side: 'SELL', sl: 49500, tp: 51000 });
+    assertEqual(tracked(manager, ETH_SHORT)?.slOrderId, ethBefore.slOrderId, 'ETH SL untouched');
+    assertEqual(tracked(manager, ETH_SHORT)?.tpOrderId, ethBefore.tpOrderId, 'ETH TP untouched');
+    btcOrders = { ...tracked(manager, BTC_LONG) };
   });
 
-  await summary.run('Close one position - preserve other position orders', async () => {
-    const secondPositionKey = Array.from(manager.currentPositions.keys())[1];
-    const secondPositionOrders = manager.positionOrders.get(secondPositionKey);
-    const _secondSlOrderId = secondPositionOrders?.slOrderId;
-    const _secondTpOrderId = secondPositionOrders?.tpOrderId;
+  await summary.run('Closing one position drops its tracking and keeps the other', async () => {
+    exchange.positions[1].positionAmt = '0';
+    const before = { batches: exchange.batchRequests, orders: exchange.placedOrders.length };
 
-    // Close first position
-    mockPositions[0].positionAmt = '0';
+    await sync(manager);
 
-    await manager.testSyncWithExchange();
-
-    // Should have only 1 position now
-    assertEqual(manager.currentPositions.size, 1, 'Should have 1 position after closing');
-
-    // Second position should still have its orders
-    const remainingPositionKey = Array.from(manager.currentPositions.keys())[0];
-    const remainingOrders = manager.positionOrders.get(remainingPositionKey);
-
-    // Verify the remaining position still has valid orders
-    assert(remainingOrders?.slOrderId !== undefined, 'Remaining position should still have SL order');
-    assert(remainingOrders?.tpOrderId !== undefined, 'Remaining position should still have TP order');
-
-    log(`  Closed first position, second position orders preserved`, colors.gray);
-    log(`  Remaining orders: SL=${remainingOrders?.slOrderId}, TP=${remainingOrders?.tpOrderId}`, colors.gray);
-  });
-
-  await summary.run('Handle mixed long/short positions', async () => {
-    // Reset and create mixed positions
-    mockPositions.length = 0;
-    mockOrders.length = 0;
-    manager.currentPositions.clear();
-    manager.positionOrders.clear();
-
-    // Add long position
-    mockPositions.push({
-      symbol: 'ETHUSDT',
-      positionAmt: '0.1',  // Long
-      entryPrice: '3000',
-      markPrice: '3010',
-      unRealizedProfit: '1.0',
-      positionSide: 'BOTH'
-    });
-
-    // Add short position
-    mockPositions.push({
-      symbol: 'ETHUSDT',
-      positionAmt: '-0.05',  // Short
-      entryPrice: '3020',
-      markPrice: '3010',
-      unRealizedProfit: '0.5',
-      positionSide: 'BOTH'
-    });
-
-    await manager.testSyncWithExchange();
-
-    assertEqual(manager.currentPositions.size, 2, 'Should have 2 positions (long and short)');
-
-    // Check each position has unique orders
-    const orderIds = new Set<number>();
-    for (const [key, orders] of manager.positionOrders.entries()) {
-      const position = manager.currentPositions.get(key);
-      const isLong = parseFloat(position!.positionAmt) > 0;
-
-      if (orders.slOrderId) {
-        assert(!orderIds.has(orders.slOrderId), 'Each SL order ID should be unique');
-        orderIds.add(orders.slOrderId);
-
-        const slOrder = mockOrders.find(o => o.orderId === orders.slOrderId);
-        // Long position should have SELL SL, short should have BUY SL
-        const expectedSide = isLong ? 'SELL' : 'BUY';
-        assertEqual(slOrder?.side, expectedSide, `SL order side should be ${expectedSide} for ${isLong ? 'long' : 'short'}`);
-      }
-
-      if (orders.tpOrderId) {
-        assert(!orderIds.has(orders.tpOrderId), 'Each TP order ID should be unique');
-        orderIds.add(orders.tpOrderId);
-      }
-
-      log(`  ${key}: ${isLong ? 'LONG' : 'SHORT'} position with orders SL=${orders.slOrderId}, TP=${orders.tpOrderId}`, colors.gray);
-    }
+    assertEqual(trackedPositions(manager).size, 1, 'Should track 1 position after ETH closed');
+    assert(!trackedPositions(manager).has(ETH_SHORT), 'ETH position should no longer be tracked');
+    assert(tracked(manager, ETH_SHORT) === undefined, 'ETH order tracking should be removed');
+    assertEqual(tracked(manager, BTC_LONG)?.slOrderId, btcOrders.slOrderId, 'BTC SL preserved');
+    assertEqual(tracked(manager, BTC_LONG)?.tpOrderId, btcOrders.tpOrderId, 'BTC TP preserved');
+    assertEqual(exchange.batchRequests, before.batches, 'No new batch orders');
+    assertEqual(exchange.placedOrders.length, before.orders, 'No new single orders');
   });
 
   summary.print();
 }
 
-async function testOrderPreservationDuringSync() {
-  logSection('Testing Order Preservation During Sync');
+async function testExistingAndEdgeCases() {
+  logSection('Testing Existing Orders and Price Edge Cases');
   const summary = new TestSummary();
 
-  // Reset mock data
-  mockPositions.length = 0;
-  mockOrders.length = 0;
-  orderIdCounter = 2000;
+  await summary.run('Adopts existing exchange SL/TP instead of placing duplicates', async () => {
+    resetExchange();
+    exchange.positions.push({ symbol: 'BTCUSDT', positionAmt: '0.004', entryPrice: '50000', positionSide: 'BOTH' });
+    const sl = createOrder({ symbol: 'BTCUSDT', side: 'SELL', type: 'STOP_MARKET', quantity: '0.004', stopPrice: '49500', reduceOnly: 'true' });
+    const tp = createOrder({ symbol: 'BTCUSDT', side: 'SELL', type: 'TAKE_PROFIT_MARKET', quantity: '0.004', stopPrice: '51000', reduceOnly: 'true' });
+    exchange.openOrders.push(sl, tp);
 
-  const config = createMockConfig();
-  const manager = new TestablePositionManager(config.symbols, config.api, true);
+    const manager = createManager();
+    await sync(manager);
 
-  await summary.run('Initial setup with positions and orders', async () => {
-    // Setup multiple positions
-    mockPositions.push(
-      {
-        symbol: 'BTCUSDT',
-        positionAmt: '0.002',
-        entryPrice: '50000',
-        markPrice: '50100',
-        unRealizedProfit: '0.2',
-        positionSide: 'BOTH'
-      },
-      {
-        symbol: 'BTCUSDT',
-        positionAmt: '0.004',
-        entryPrice: '49800',
-        markPrice: '50100',
-        unRealizedProfit: '1.2',
-        positionSide: 'BOTH'
-      }
-    );
-
-    await manager.testSyncWithExchange();
-
-    // Verify initial state
-    assertEqual(manager.currentPositions.size, 2, 'Should have 2 positions');
-
-    let orderCount = 0;
-    for (const [_, orders] of manager.positionOrders.entries()) {
-      if (orders.slOrderId) orderCount++;
-      if (orders.tpOrderId) orderCount++;
-    }
-    assert(orderCount >= 4, 'Should have at least 4 orders (2 SL + 2 TP)');
+    assertEqual(exchange.batchRequests, 0, 'Should not place a batch');
+    assertEqual(exchange.placedOrders.length, 0, 'Should not place single orders');
+    assertEqual(tracked(manager, BTC_LONG)?.slOrderId, sl.orderId, 'Should adopt the existing SL');
+    assertEqual(tracked(manager, BTC_LONG)?.tpOrderId, tp.orderId, 'Should adopt the existing TP');
   });
 
-  await summary.run('Resync without changes - orders preserved', async () => {
-    // Store current order mappings
-    const orderMappingsBefore = new Map();
-    for (const [key, orders] of manager.positionOrders.entries()) {
-      orderMappingsBefore.set(key, { ...orders });
-    }
+  await summary.run('Underwater long gets its SL just below the current price', async () => {
+    resetExchange();
+    exchange.markPrices.BTCUSDT = 49400; // Below the 1% SL at 49500
+    exchange.positions.push({ symbol: 'BTCUSDT', positionAmt: '0.005', entryPrice: '50000', positionSide: 'BOTH' });
 
-    // Resync without any changes
-    await manager.testSyncWithExchange();
+    const manager = createManager();
+    await sync(manager);
 
-    // Verify orders are preserved
-    for (const [key, ordersBefore] of orderMappingsBefore.entries()) {
-      const ordersAfter = manager.positionOrders.get(key);
-      assertEqual(ordersAfter?.slOrderId, ordersBefore.slOrderId, `SL order should be preserved for ${key}`);
-      assertEqual(ordersAfter?.tpOrderId, ordersBefore.tpOrderId, `TP order should be preserved for ${key}`);
-    }
-
-    log(`  All order mappings preserved after resync`, colors.gray);
+    // 0.1% buffer below the current price, rounded to the 0.1 tick
+    assertProtected(manager, BTC_LONG, { qty: 0.005, side: 'SELL', sl: 49350.6, tp: 51000 });
   });
 
-  await summary.run('Add new position during sync - existing orders untouched', async () => {
-    // Store existing order mappings
-    const existingOrderIds = new Set<number>();
-    for (const [_, orders] of manager.positionOrders.entries()) {
-      if (orders.slOrderId) existingOrderIds.add(orders.slOrderId);
-      if (orders.tpOrderId) existingOrderIds.add(orders.tpOrderId);
-    }
+  await summary.run('Long already past TP is closed at market instead of placing SL/TP', async () => {
+    resetExchange();
+    exchange.markPrices.BTCUSDT = 51200; // Above the 2% TP at 51000
+    exchange.positions.push({ symbol: 'BTCUSDT', positionAmt: '0.005', entryPrice: '50000', positionSide: 'BOTH' });
 
-    // Add a new position
-    mockPositions.push({
-      symbol: 'ETHUSDT',
-      positionAmt: '0.05',
-      entryPrice: '3000',
-      markPrice: '3010',
-      unRealizedProfit: '0.5',
-      positionSide: 'BOTH'
-    });
+    const manager = createManager();
+    await sync(manager);
 
-    await manager.testSyncWithExchange();
+    assertEqual(exchange.batchRequests, 0, 'Should not place an SL/TP batch');
+    assertEqual(exchange.placedOrders.length, 1, 'Should place one market close order');
+    const close = exchange.placedOrders[0];
+    assertEqual(close.type, 'MARKET', 'Close should be a MARKET order');
+    assertEqual(close.side, 'SELL', 'Closing a long sells');
+    assertEqual(close.reduceOnly, 'true', 'Close should be reduce-only');
+    assertEqual(close.positionSide, 'BOTH', 'One-way close uses positionSide BOTH');
+    assertClose(parseFloat(close.quantity), 0.005, 1e-9, 'Close quantity should equal the position');
+    assertEqual(exchange.positions[0].positionAmt, '0', 'Position should be closed');
+  });
 
-    // Verify existing orders weren't changed
-    for (const [key, orders] of manager.positionOrders.entries()) {
-      if (key.startsWith('BTCUSDT')) {
-        if (orders.slOrderId) {
-          assert(existingOrderIds.has(orders.slOrderId), 'Existing SL order should be preserved');
-        }
-        if (orders.tpOrderId) {
-          assert(existingOrderIds.has(orders.tpOrderId), 'Existing TP order should be preserved');
-        }
-      }
-    }
+  await summary.run('Short already past TP is closed at market with a BUY', async () => {
+    resetExchange();
+    exchange.markPrices.ETHUSDT = 2900; // Below the 3% TP at 2910
+    exchange.positions.push({ symbol: 'ETHUSDT', positionAmt: '-0.5', entryPrice: '3000', positionSide: 'BOTH' });
 
-    // Verify new position has new orders
-    const ethPositionKey = Array.from(manager.currentPositions.keys()).find(k => k.startsWith('ETHUSDT'));
-    const ethOrders = manager.positionOrders.get(ethPositionKey!);
-    assert(ethOrders?.slOrderId !== undefined, 'New position should have SL order');
-    assert(ethOrders?.tpOrderId !== undefined, 'New position should have TP order');
-    assert(!existingOrderIds.has(ethOrders.slOrderId!), 'New SL order should be different');
-    assert(!existingOrderIds.has(ethOrders.tpOrderId!), 'New TP order should be different');
+    const manager = createManager();
+    await sync(manager);
 
-    log(`  Existing BTCUSDT orders preserved, new ETHUSDT orders created`, colors.gray);
+    assertEqual(exchange.batchRequests, 0, 'Should not place an SL/TP batch');
+    assertEqual(exchange.placedOrders.length, 1, 'Should place one market close order');
+    assertEqual(exchange.placedOrders[0].side, 'BUY', 'Closing a short buys');
+    assertEqual(exchange.placedOrders[0].reduceOnly, 'true', 'Close should be reduce-only');
+  });
+
+  summary.print();
+}
+
+async function testPeriodicCheck() {
+  logSection('Testing Periodic Order Check');
+  const summary = new TestSummary();
+
+  await summary.run('Periodic check syncs and protects a position it was not tracking', async () => {
+    resetExchange();
+    const manager = createManager();
+
+    // Position opened while the bot wasn't tracking it (e.g. missed by a partial ACCOUNT_UPDATE)
+    exchange.positions.push({ symbol: 'ETHUSDT', positionAmt: '-0.5', entryPrice: '3000', positionSide: 'BOTH' });
+
+    await (manager as any).checkAndAdjustOrders();
+
+    assertEqual(trackedPositions(manager).size, 1, 'Position should now be tracked');
+    assertEqual(exchange.batchRequests, 1, 'Should place exactly one SL/TP batch (no duplicates)');
+    assertProtected(manager, ETH_SHORT, { qty: 0.5, side: 'BUY', sl: 3060, tp: 2910 });
+  });
+
+  await summary.run('A second periodic check leaves a protected position alone', async () => {
+    const before = { batches: exchange.batchRequests, orders: exchange.placedOrders.length, cancels: exchange.cancelledOrderIds.length };
+    const manager = createManager();
+
+    await (manager as any).checkAndAdjustOrders();
+
+    assertEqual(exchange.batchRequests, before.batches, 'No new batch orders');
+    assertEqual(exchange.placedOrders.length, before.orders, 'No new single orders');
+    assertEqual(exchange.cancelledOrderIds.length, before.cancels, 'No cancellations');
+    assertEqual(trackedPositions(manager).size, 1, 'Position should be tracked');
   });
 
   summary.print();
 }
 
 async function main() {
-  log(colors.cyan + colors.bold + '🧪 MULTI-POSITION MANAGEMENT TEST SUITE' + colors.reset);
-  log(colors.cyan + '============================================================' + colors.reset);
+  logSection('🧪 MULTI-POSITION TEST SUITE');
 
-  await testMultiplePositions();
-  await wait(100);
-  await testOrderPreservationDuringSync();
+  // Route all exchange HTTP calls to the mock before anything is constructed
+  mockExchangeHttp(handleRequest);
 
-  log(colors.cyan + '============================================================' + colors.reset);
-  log(colors.cyan + colors.bold + '✨ All Multi-Position Tests Complete' + colors.reset);
-  log(colors.cyan + '============================================================' + colors.reset);
+  symbolPrecision.parseExchangeInfo({
+    symbols: [
+      {
+        symbol: 'BTCUSDT',
+        filters: [
+          { filterType: 'PRICE_FILTER', tickSize: '0.1' },
+          { filterType: 'LOT_SIZE', stepSize: '0.001', minQty: '0.001', maxQty: '1000' },
+          { filterType: 'MIN_NOTIONAL', notional: '5' }
+        ]
+      },
+      {
+        symbol: 'ETHUSDT',
+        filters: [
+          { filterType: 'PRICE_FILTER', tickSize: '0.01' },
+          { filterType: 'LOT_SIZE', stepSize: '0.001', minQty: '0.001', maxQty: '10000' },
+          { filterType: 'MIN_NOTIONAL', notional: '5' }
+        ]
+      }
+    ]
+  });
+
+  try {
+    await testMultiplePositions();
+    await testExistingAndEdgeCases();
+    await testPeriodicCheck();
+
+    logSection('✨ All Multi-Position Tests Complete');
+    finishTests();
+  } catch (error) {
+    logSection('❌ Test Suite Failed');
+    console.error(error);
+    process.exit(1);
+  }
 }
 
-// Run tests if executed directly
 if (require.main === module) {
-  main().catch(console.error);
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
 }
-
-export { testMultiplePositions, testOrderPreservationDuringSync };
