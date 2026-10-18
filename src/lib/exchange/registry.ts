@@ -14,6 +14,7 @@ import {
   LighterLiquidationFeed,
   MarkGuardedLiquidationSource,
   createLighterAdapter,
+  createLighterVenueAdapter,
   createLighterVenueGuard,
   lighterStreamUrlFor,
   type LighterLiquidationFeedOptions,
@@ -71,7 +72,8 @@ export function createExchangeAdapter(
     case 'aster':
       return new AsterAdapter(getCredentials ?? config.api ?? { apiKey: '', secretKey: '' });
     case 'lighter':
-      return createLighterAdapter(
+      // One-way: the plain adapter. Hedge mode (two sub-accounts) when the config turns it on.
+      return createLighterVenueAdapter(
         { symbols: config.symbols ?? {}, venues: config.venues, global: config.global },
         { getConfig: options.getConfig, allowSigning: options.allowSigning }
       );

@@ -76,6 +76,21 @@ export interface GlobalConfig {
   rateLimit?: RateLimitConfig; // Rate limit configuration
 }
 
+// Second sub-account of the same master that holds the shorts in hedge mode (its own API key)
+export interface LighterHedgeAccountConfig {
+  accountIndex?: number;
+  apiKeyIndex?: number;            // 0..254
+  apiKeyPrivateKey?: string;       // 40 bytes hex
+  apiKeyPublicKey?: string;
+}
+
+// Hedge mode emulation: longs on the main account, shorts on shortAccount (Lighter nets one position per
+// market per account). Only on with enabled=true and position mode HEDGE.
+export interface LighterHedgeConfig {
+  enabled?: boolean;
+  shortAccount?: LighterHedgeAccountConfig;
+}
+
 // Lighter settings and credentials (config.venues.lighter; validated by lighterVenueConfigSchema)
 export interface LighterVenueConfig {
   profile?: LighterProfileName;    // Network (default 'testnet'); Robinhood profiles are gated
@@ -87,6 +102,7 @@ export interface LighterVenueConfig {
   sltpSlippagePct?: number;        // SL/TP worst-price slippage after trigger, percent (default 1)
   sendTxPerMin?: number;           // Client-side sendTx limit (default 60)
   symbolOverrides?: Record<string, string | { market: string; multiplier?: number }>;
+  hedge?: LighterHedgeConfig;      // Hedge mode via a second sub-account for the shorts (off by default)
 }
 
 export type VenueSettings = Partial<Record<Exclude<VenueId, 'lighter'>, Record<string, string>>> & {

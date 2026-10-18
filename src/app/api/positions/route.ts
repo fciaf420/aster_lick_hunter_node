@@ -90,6 +90,9 @@ export const GET = withAuth(async (request: NextRequest, _user) => {
           liquidationPrice: pos.liquidationPrice ? parseFloat(pos.liquidationPrice) : undefined,
           hasStopLoss,
           hasTakeProfit,
+          // Lighter hedge mode lists the long and the short account of a symbol side by side (LONG / SHORT);
+          // Aster rows stay as they were
+          ...(exchange.id === 'lighter' ? { positionSide: pos.positionSide } : {}),
         };
       });
 

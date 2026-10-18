@@ -13,6 +13,14 @@ export function isDefinitelyNotPlaced(error: unknown): boolean {
   return !orderMayExist(error);
 }
 
+// An error with refusalRepeats === true is a definite refusal (nothing was placed) that the venue repeats for any
+// order of the same entry until the user acts, e.g. Lighter hedge mode refusing every entry on an account that holds a
+// position of the wrong direction. A fallback order (LIMIT -> MARKET) would only be refused again.
+export function orderRefusalRepeats(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { refusalRepeats?: unknown }).refusalRepeats === true &&
+    !orderMayExist(error);
+}
+
 // For an order that may exist: the time (ms) after which it can no longer execute, when the venue knows it
 // (e.g. a signed tx's expiry plus grace). Null when unknown.
 export function orderMayExistUntil(error: unknown): number | null {

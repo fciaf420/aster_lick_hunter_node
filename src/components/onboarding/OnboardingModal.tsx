@@ -16,6 +16,7 @@ import type { Config, SymbolConfig } from '@/lib/types';
 import type { VenueId } from '@/lib/exchange/types';
 import { getVenueEntry } from '@/lib/exchange/catalog';
 import { hasLighterCredentials } from '@/components/LighterSettings';
+import { lighterHedgeState } from '@/lib/config/types';
 import { WelcomeStep } from './steps/WelcomeStep';
 import { PasswordSetup } from './steps/PasswordSetup';
 import { ApiKeyStep, type VenueStepSettings } from './steps/ApiKeyStep';
@@ -155,10 +156,16 @@ export function OnboardingModal() {
 
     // Update config with API keys
     if (config) {
+      const venues = lighter ? { ...config.venues, lighter: { ...config.venues?.lighter, ...lighter } } : config.venues;
+      // Lighter keeps HEDGE only when hedge mode over two sub-accounts is set up (config page)
+      const keepsHedge = lighterHedgeState({
+        global: { exchange: venue, positionMode: config.global?.positionMode },
+        venues,
+      }).mode === 'on';
       const updatedConfig: Config = {
         ...config,
         api: { apiKey, secretKey },
-        ...(lighter ? { venues: { ...config.venues, lighter: { ...config.venues?.lighter, ...lighter } } } : {}),
+        ...(lighter ? { venues } : {}),
         global: {
           ...config.global,
           paperMode,
@@ -166,8 +173,8 @@ export function OnboardingModal() {
           liquidationSource: config.global?.liquidationSource ?? 'aster',
           // Ensure all required global config properties are present
           riskPercent: config.global?.riskPercent ?? 2,
-          // Venues without hedge mode (Lighter) only run one-way positions
-          positionMode: getVenueEntry(venue).supportsHedgeMode ? (config.global?.positionMode ?? 'ONE_WAY') : 'ONE_WAY',
+          // Venues without hedge mode (Lighter) only run one-way positions, unless Lighter hedge mode is set up
+          positionMode: getVenueEntry(venue).supportsHedgeMode || keepsHedge ? (config.global?.positionMode ?? 'ONE_WAY') : 'ONE_WAY',
           maxOpenPositions: config.global?.maxOpenPositions ?? 10,
           useThresholdSystem: config.global?.useThresholdSystem ?? false,
           server: {

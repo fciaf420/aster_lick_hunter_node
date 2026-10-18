@@ -13,8 +13,9 @@ import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { VenueSelector } from '@/components/VenueSelector';
-import { LighterSettings } from '@/components/LighterSettings';
+import { LighterSettings, type LighterPositionMode } from '@/components/LighterSettings';
 import { getVenueEntry } from '@/lib/exchange/catalog';
+import { lighterShortAccountProblems } from '@/lib/config/types';
 import type { LighterVenueConfig } from '@/lib/types';
 import type { LiquidationSourceId, VenueId } from '@/lib/exchange/types';
 import {
@@ -36,6 +37,19 @@ import { toast } from 'sonner';
 interface SymbolConfigFormProps {
   onSave: (config: Config) => void;
   currentConfig?: Config;
+}
+
+// Lighter has no native hedge mode; it is emulated with a second sub-account for the shorts once that is set up
+export function lighterHedgeConfigured(config: Pick<Config, 'global' | 'venues'>): boolean {
+  const lighter = config.venues?.lighter;
+  return getVenueEntry(config.global?.exchange).id === 'lighter' &&
+    lighter?.hedge?.enabled === true &&
+    lighterShortAccountProblems(lighter).length === 0;
+}
+
+// Whether position mode HEDGE can be chosen for the selected trading venue
+export function hedgePositionModeAvailable(config: Pick<Config, 'global' | 'venues'>): boolean {
+  return getVenueEntry(config.global?.exchange).supportsHedgeMode || lighterHedgeConfigured(config);
 }
 
 export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfigFormProps) {
@@ -167,28 +181,40 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
   };
 
   const handleVenueChange = (venue: VenueId) => {
-    const entry = getVenueEntry(venue);
-    setConfig({
-      ...config,
-      global: {
-        ...config.global,
-        exchange: venue,
-        // Venues without hedge mode can only run one-way positions
-        positionMode: !entry.supportsHedgeMode && config.global.positionMode === 'HEDGE'
-          ? 'ONE_WAY'
-          : config.global.positionMode,
-      },
+    setConfig(prev => {
+      const next: Config = { ...prev, global: { ...prev.global, exchange: venue } };
+      return {
+        ...next,
+        global: {
+          ...next.global,
+          // Venues without hedge mode can only run one-way positions (Lighter: unless hedge mode is set up)
+          positionMode: !hedgePositionModeAvailable(next) && prev.global.positionMode === 'HEDGE'
+            ? 'ONE_WAY'
+            : prev.global.positionMode,
+        },
+      };
     });
   };
 
+  // Functional updates: the Lighter hedge switch changes the venue settings and the position mode in one tick
   const handleLighterChange = (lighter: LighterVenueConfig) => {
-    setConfig({
-      ...config,
+    setConfig(prev => ({
+      ...prev,
       venues: {
-        ...config.venues,
+        ...prev.venues,
         lighter,
       },
-    });
+    }));
+  };
+
+  const handlePositionModeChange = (positionMode: LighterPositionMode) => {
+    setConfig(prev => ({
+      ...prev,
+      global: {
+        ...prev.global,
+        positionMode,
+      },
+    }));
   };
 
   const handleApiChange = (field: string, value: string) => {
@@ -375,6 +401,8 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
   };
 
   const venueEntry = getVenueEntry(config.global.exchange);
+  const hedgeAvailable = hedgePositionModeAvailable(config);
+  const lighterHedge = !venueEntry.supportsHedgeMode && lighterHedgeConfigured(config);
 
   return (
     <div className="space-y-6">
@@ -497,6 +525,9 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                   onChange={handleLighterChange}
                   showCredentials
                   showLiquidationFeed={config.global.liquidationSource === 'lighter'}
+                  showHedge
+                  positionMode={config.global.positionMode}
+                  onPositionModeChange={handlePositionModeChange}
                 />
               </CardContent>
             </Card>
@@ -600,16 +631,25 @@ export default function SymbolConfigForm({ onSave, currentConfig }: SymbolConfig
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <option value="ONE_WAY">One-way Mode (BOTH)</option>
-                  <option value="HEDGE" disabled={!venueEntry.supportsHedgeMode}>
-                    Hedge Mode (LONG/SHORT){venueEntry.supportsHedgeMode ? '' : ` - not supported on ${venueEntry.name}`}
+                  <option value="HEDGE" disabled={!hedgeAvailable}>
+                    Hedge Mode (LONG/SHORT){hedgeAvailable
+                      ? ''
+                      : venueEntry.id === 'lighter'
+                        ? ' - set up hedge mode in the Lighter settings first'
+                        : ` - not supported on ${venueEntry.name}`}
                   </option>
                 </select>
                 <p className="text-xs text-muted-foreground">
                   One-way: All positions use BOTH | Hedge: Separate LONG and SHORT positions
                 </p>
-                {!venueEntry.supportsHedgeMode && (
+                {lighterHedge ? (
+                  <p className="text-xs text-blue-600 dark:text-blue-400">
+                    Lighter: hedge mode uses two sub-accounts (see Hedge mode in the Lighter settings)
+                  </p>
+                ) : !venueEntry.supportsHedgeMode && (
                   <p className="text-xs text-yellow-600 dark:text-yellow-500">
                     {venueEntry.name} only supports one-way positions
+                    {venueEntry.id === 'lighter' && ' on one account; hedge mode needs a second sub-account (see Hedge mode in the Lighter settings)'}
                   </p>
                 )}
               </div>

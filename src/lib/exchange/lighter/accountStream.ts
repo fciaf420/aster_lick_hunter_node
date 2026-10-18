@@ -1807,13 +1807,23 @@ export class LighterUserStream implements UserDataSubscription {
     ]);
   }
 
-  // The seeded state counts as already known to the bot (it synced through REST itself)
+  // The seeded state counts as already known to the bot (it synced through REST itself). It is handed to
+  // onBaseline once (never to onEvent), so a consumer that merges accounts knows this account's full state.
   private markBaseline(): void {
     const { list, open } = this.currentPositions();
     const balance = this.balance();
     this.lastEmitted = open;
     this.lastSignature = this.signature(list, balance);
     this.lastWb = this.collateral;
+    if (this.closed) return;
+    const now = this.now();
+    const snapshot: AccountUpdateEvent = {
+      e: 'ACCOUNT_UPDATE',
+      E: now,
+      T: now,
+      a: { m: 'BASELINE', B: balance ? [{ ...balance, bc: '0' }] : [], P: list },
+    };
+    this.safely(() => this.handlers.onBaseline?.(snapshot));
   }
 
   private emitAccountUpdate(): void {

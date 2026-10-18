@@ -57,6 +57,7 @@ import {
   LighterTxUnknownError,
   MemoryLighterTxJournal,
   SqliteLighterTxJournal,
+  type LighterClientOrderIndexRange,
   type LighterLateOutcome,
   type LighterOrderRole,
   type LighterTxJournal,
@@ -278,10 +279,16 @@ function trimDecimal(text: string): string {
   return text.includes('.') ? text.replace(/\.?0+$/, '') || '0' : text;
 }
 
-function sumMicro(values: Array<string | undefined>): bigint {
+function sumMicro(values: Array<string | undefined | null>): bigint {
   let total = BigInt(0);
   for (const value of values) total += toMicro(value) ?? BigInt(0);
   return total;
+}
+
+// Exact sum of decimal strings at 6 decimals (USDC), e.g. the balances of two sub-accounts. Digits past the 6th are
+// truncated; missing or unreadable values count as 0.
+export function sumLighterDecimals(values: Array<string | undefined | null>): string {
+  return microToString(sumMicro(values));
 }
 
 function signedPositionAmount(position: LighterAccountPosition): string {
@@ -350,6 +357,9 @@ export interface LighterAdapterOptions {
   confirmTimeoutMs?: number;
   pollIntervalMs?: number;
   marketStats?: (marketId: number) => LighterMarketStatsSnapshot | null | undefined;
+  // Hedge mode (two sub-accounts): this account's client order index range (LIGHTER_HEDGE_COI_RANGES). Unset: the
+  // plain one-way indexes.
+  clientOrderIndexRange?: LighterClientOrderIndexRange;
   txWatcher?: LighterTxWatcher;
   createUserStream?: CreateLighterUserStream;  // Default: createLighterUserStream (accountStream.ts)
   wsFactory?: LighterSocketFactory;
@@ -414,6 +424,7 @@ export class LighterAdapter implements ExchangeAdapter {
   readonly profile: LighterProfile;
   readonly markets: LighterMarketCache;
   readonly http: LighterHttpClient;
+  readonly clientOrderIndexRange: LighterClientOrderIndexRange | null;
 
   private readonly options: LighterAdapterOptions;
   private readonly now: () => number;
@@ -440,7 +451,10 @@ export class LighterAdapter implements ExchangeAdapter {
     this.markets = options.markets;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
-    this.coi = new LighterClientOrderIndexGenerator(this.now);
+    this.clientOrderIndexRange = options.clientOrderIndexRange
+      ? Object.freeze({ offset: options.clientOrderIndexRange.offset, span: options.clientOrderIndexRange.span })
+      : null;
+    this.coi = new LighterClientOrderIndexGenerator(this.now, this.clientOrderIndexRange ?? undefined);
     this.http = options.http ?? new LighterHttpClient({ profile: this.profile, transport: options.transport, auth: this.authProxy });
     if (this.http.profile.name !== this.profile.name) {
       throw new Error(`Lighter adapter (${this.profile.name}) was given an HTTP client for ${this.http.profile.name}`);
@@ -468,6 +482,28 @@ export class LighterAdapter implements ExchangeAdapter {
 
   hasCredentials(): boolean {
     return this.readCredentials().credentials !== null;
+  }
+
+  private rawCredentials(): Record<string, unknown> {
+    try {
+      const source = this.options.credentials;
+      const value = typeof source === 'function' ? source() : source;
+      return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  // The configured account index, even when other credential fields are missing (no network, never throws)
+  configuredAccountIndex(): number | null {
+    const index = readIndex(this.rawCredentials().accountIndex);
+    return index !== null && index >= 1 ? index : null;
+  }
+
+  // The configured API key index (no network, never throws)
+  configuredApiKeyIndex(): number | null {
+    const index = readIndex(this.rawCredentials().apiKeyIndex);
+    return index !== null && index <= 254 ? index : null;
   }
 
   private requireCredentials(): LighterCredentials {
@@ -1102,6 +1138,15 @@ export class LighterAdapter implements ExchangeAdapter {
         crossAssetValue: account.cross_asset_value ?? null,
       },
     };
+  }
+
+  // The account's L1 (master) address from the public GET /account: sub-accounts of one master share it. Works on a
+  // read-only adapter. l1Address is null when the exchange leaves it out.
+  async getAccountIdentity(): Promise<{ accountIndex: number; l1Address: string | null }> {
+    const accountIndex = this.accountIndex();
+    const account = await this.http.getAccount(accountIndex, { activeOnly: false });
+    const l1Address = typeof account.l1_address === 'string' && account.l1_address.trim() !== '' ? account.l1_address.trim() : null;
+    return { accountIndex, l1Address };
   }
 
   // One netted position per market
